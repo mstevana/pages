@@ -1,0 +1,16 @@
+{
+  "name": "synd",
+  "version": "0.1.0",
+  "private": true,
+  "description": "SYND - a mobile isometric cyberpunk squad game in the style of Bullfrog's Syndicate",
+  "scripts": {
+    "build": "esbuild src/main.ts --bundle --format=iife --target=es2020 --outfile=dist/synd.js --minify",
+    "build:dev": "esbuild src/main.ts --bundle --format=iife --target=es2020 --outfile=dist/synd.js --sourcemap",
+    "typecheck": "tsc --noEmit",
+    "serve": "npx esbuild src/main.ts --bundle --format=iife --target=es2020 --outfile=dist/synd.js --sourcemap --watch --servedir=."
+  },
+  "devDependencies": {
+    "esbuild": "^0.27.3",
+    "typescript": "^5.9.3"
+  }
+}
