@@ -835,9 +835,9 @@ export class World {
   // stretch short of the target counts: someone level with the muzzle, behind
   // it, or standing beside the mark is not being fired through, and treating
   // them as if they were would leave every gun in the sector silent - the
-  // escortee spends the mission at an agent's shoulder. A stray can still
-  // find them - this governs where a gun is willing to point, not what a
-  // round in flight is allowed to hit.
+  // escortee spends the mission at an agent's shoulder. This governs only the
+  // shots a gun chooses for itself: a stray can still find them, and so can an
+  // order from the player.
   private wardInLine(shooter: Ped, tx: number, ty: number): boolean {
     const w = this.wardPed;
     if (!w || w === shooter) return false;
@@ -1240,10 +1240,11 @@ export class World {
       }
     }
 
-    // manual fire order
+    // Manual fire order. An order is an order: it is carried out wherever it
+    // points, the escortee included. The care taken of them governs the shots
+    // an agent chooses for itself, not the ones it is given.
     if (p.fireAt && weapon && wdef && wdef.weapon && weapon.charge > 0) {
-      // an order to shoot is still refused if it would rake the escortee
-      if (p.fireCd <= 0 && !this.wardInLine(p, p.fireAt.x, p.fireAt.y)) {
+      if (p.fireCd <= 0) {
         this.fireWeapon(p, weapon, weapon.type, p.fireAt.x, p.fireAt.y);
         if (!p.path) p.dir = this.dirOf(p.fireAt.x - p.x, p.fireAt.y - p.y);
       }
