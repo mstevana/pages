@@ -8,6 +8,7 @@ import { PeopleAtlas, FW, FH } from "../sprites/people";
 import { TileArt } from "../sprites/tiles";
 import { Car, Ped, World } from "../game/world";
 import { ITEMS } from "../game/items";
+import { ICON_SIZE, itemIcons } from "../sprites/icons";
 
 export interface Camera {
   x: number; y: number; // tile coords at viewport center
@@ -417,36 +418,41 @@ export class Renderer {
 
     // ---- loot beacons: drawn over everything so drops behind buildings
     // stay visible (and taps hit-test by world distance, so they stay usable)
+    const icons = itemIcons();
     for (const d of world.drops) {
       if (d.x < x0 || d.x > x1 || d.y < y0 || d.y > y1) continue;
       const sx = SX(d.x, d.y), sy = SY(d.x, d.y);
       const def = ITEMS[d.item.type];
       const bob = Math.sin(time * 3 + d.x) * 1.5 * z;
       const pulse = 0.55 + 0.45 * Math.sin(time * 4 + d.y);
-      // light pillar
+      const icon = icons[d.item.type];
+      const isz = ICON_SIZE * 0.95 * z;
+      const iconTop = sy - isz - 1.5 * z + bob;
+      // halo behind the icon so it separates from the ground
       g.globalCompositeOperation = "lighter";
-      const beamH = 34 * z;
-      const grad = g.createLinearGradient(sx, sy, sx, sy - beamH);
+      let gr = g.createRadialGradient(sx, iconTop + isz / 2, 0, sx, iconTop + isz / 2, isz * 0.7);
+      gr.addColorStop(0, def.color);
+      gr.addColorStop(1, "rgba(0,0,0,0)");
+      g.globalAlpha = 0.28 * pulse;
+      g.fillStyle = gr;
+      g.fillRect(sx - isz, iconTop - isz * 0.2, isz * 2, isz * 1.4);
+      // light pillar, rising from the top of the icon so it never covers it
+      const beamH = 16 * z;
+      const beamBase = iconTop - 1 * z;
+      const grad = g.createLinearGradient(sx, beamBase, sx, beamBase - beamH);
       grad.addColorStop(0, def.color);
       grad.addColorStop(1, "rgba(0,0,0,0)");
-      g.globalAlpha = 0.6 * pulse;
+      g.globalAlpha = 0.55 * pulse;
       g.fillStyle = grad;
-      g.fillRect(sx - 2 * z, sy - beamH, 4 * z, beamH);
+      g.fillRect(sx - 1.6 * z, beamBase - beamH, 3.2 * z, beamH);
       g.globalAlpha = 1;
       g.globalCompositeOperation = "source-over";
-      // ground shadow + item box (dark outer + light inner outline for contrast)
+      // ground shadow, then the item's own icon hovering just above it
       g.fillStyle = "rgba(0,0,0,0.4)";
       g.beginPath(); g.ellipse(sx, sy, 5 * z, 2 * z, 0, 0, Math.PI * 2); g.fill();
-      g.strokeStyle = "rgba(0,0,0,0.8)";
-      g.lineWidth = 3;
-      g.strokeRect(sx - 3 * z, sy - 6 * z + bob, 6 * z, 4 * z);
-      g.fillStyle = def.color;
-      g.fillRect(sx - 3 * z, sy - 6 * z + bob, 6 * z, 4 * z);
-      g.strokeStyle = "rgba(255,255,255,0.9)";
-      g.lineWidth = 1;
-      g.strokeRect(sx - 3 * z, sy - 6 * z + bob, 6 * z, 4 * z);
+      g.drawImage(icon, sx - isz / 2, iconTop, isz, isz);
       // bouncing chevron above the beam
-      const chy = sy - beamH - 2 * z + bob;
+      const chy = beamBase - beamH - 1 * z;
       g.fillStyle = "#fff";
       g.beginPath();
       g.moveTo(sx, chy + 4 * z);

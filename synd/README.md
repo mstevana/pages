@@ -45,6 +45,10 @@ offline after the first load.
       about three quarters of a second to draw a bead on a target, and shoot
       15% shorter and 15% wider than you do — open fire first and you win
       the exchange.
+- **Loot**: dropped items lie on the street as their own pixel icon — a
+  pistol, an uzi, a shotgun, a minigun barrel cluster, a laser emitter, a
+  coiled gauss rifle, a shield crest, a red-cross medkit, a persuadertron
+  dish — each under a pulsing beacon so it stays visible behind buildings.
 - **Cars**: shoot a passing car to force it to stop — its pilot bails out and
   flees. Board it with your squad, then tap anywhere on the road network to
   drive there. Every lane is strictly one-way: traffic turns and U-turns only at the
