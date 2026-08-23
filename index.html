@@ -2,70 +2,14 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
-<meta name="mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="theme-color" content="#05060a">
-<title>SYND</title>
-<link rel="manifest" href="manifest.webmanifest">
-<link rel="icon" href="icon-192.png">
-<link rel="apple-touch-icon" href="icon-192.png">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pages</title>
 <style>
-  html, body {
-    margin: 0; padding: 0; width: 100%; height: 100%;
-    background: #05060a; overflow: hidden;
-    touch-action: none; -webkit-user-select: none; user-select: none;
-    font-family: "Courier New", monospace;
-  }
-  #game {
-    position: fixed; inset: 0; width: 100%; height: 100%;
-    display: block; image-rendering: pixelated;
-  }
-  #ui { position: fixed; inset: 0; pointer-events: none; }
-  #ui .screen {
-    position: absolute; inset: 0; pointer-events: auto;
-    display: flex; flex-direction: column; align-items: center; justify-content: center;
-    background: rgba(3, 4, 8, 0.92); color: #9fe8ff; text-align: center;
-    padding: 4vmin; box-sizing: border-box; overflow-y: auto;
-  }
-  #ui h1 {
-    font-size: clamp(40px, 12vmin, 110px); letter-spacing: 0.35em; margin: 0 0 2vmin 0;
-    color: #ff9b2f; text-shadow: 0 0 18px #ff5e00, 0 0 45px #ff2fa0;
-  }
-  #ui h2 { color: #ff9b2f; letter-spacing: 0.2em; margin: 1vmin 0; text-shadow: 0 0 12px #ff5e00; }
-  #ui p  { max-width: 60ch; line-height: 1.5; margin: 0.8vmin 0; }
-  #ui .dim { color: #5f7d8c; font-size: 0.85em; }
-  #ui button {
-    pointer-events: auto; cursor: pointer;
-    font-family: inherit; font-size: clamp(14px, 2.6vmin, 22px); letter-spacing: 0.15em;
-    color: #0a0c10; background: #ff9b2f; border: 2px solid #ffd9a0;
-    padding: 1.4vmin 4vmin; margin: 1vmin; border-radius: 3px;
-    text-transform: uppercase;
-  }
-  #ui button.ghost { background: transparent; color: #9fe8ff; border-color: #2f6f86; }
-  #ui button:disabled { opacity: 0.35; cursor: default; }
-  #ui table { border-collapse: collapse; margin: 1vmin auto; color: #cfeeff; font-size: clamp(11px, 2vmin, 16px); }
-  #ui td, #ui th { border: 1px solid #1d3d4d; padding: 0.6vmin 1.4vmin; text-align: left; }
-  #rotate {
-    position: fixed; inset: 0; z-index: 50; display: none;
-    background: #05060a; color: #ff9b2f; text-align: center;
-    flex-direction: column; align-items: center; justify-content: center;
-    font-size: 5vmin; letter-spacing: 0.2em;
-  }
-  @media (orientation: portrait) { #rotate { display: flex; } }
-  .hidden { display: none !important; }
+  body { background:#05060a; color:#9fe8ff; font-family:"Courier New",monospace;
+         display:flex; align-items:center; justify-content:center; height:100vh; margin:0; }
+  a { color:#ff9b2f; text-decoration:none; font-size:1.4em; letter-spacing:0.2em; }
+  a:hover { text-shadow:0 0 12px #ff5e00; }
 </style>
 </head>
-<body>
-<canvas id="game"></canvas>
-<div id="ui"></div>
-<div id="rotate">&#8635;<br>ROTATE DEVICE<br><span style="font-size:2.4vmin;color:#5f7d8c">SYND REQUIRES LANDSCAPE</span></div>
-<script src="dist/synd.js"></script>
-<script>
-if ("serviceWorker" in navigator && location.protocol === "https:") {
-  addEventListener("load", () => navigator.serviceWorker.register("sw.js").catch(() => {}));
-}
-</script>
-</body>
+<body><a href="synd/">&#9654; SYND</a></body>
 </html>
