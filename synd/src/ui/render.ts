@@ -218,6 +218,20 @@ export class Renderer {
       }
     }
 
+    // ---- cutaway targets: living agents (and their car) the camera must
+    // be able to see - occluding buildings render floors above the first
+    // at low alpha ----
+    const cutTargets: { ax: number; ay: number; s: number }[] = [];
+    for (const a of world.agents) {
+      if (a.hp <= 0 || a.carId !== null) continue;
+      cutTargets.push({ ax: SX(a.x, a.y), ay: SY(a.x, a.y), s: Math.floor(a.x) + Math.floor(a.y) });
+    }
+    for (const c of world.cars) {
+      if (c.state === "player" && c.occupants.length > 0) {
+        cutTargets.push({ ax: SX(c.x, c.y), ay: SY(c.x, c.y), s: Math.floor(c.x) + Math.floor(c.y) });
+      }
+    }
+
     // ---- pass 2: blocks + entities in depth order ----
     const adFrame = Math.floor(time * 2.2);
     for (let s = x0 + y0; s <= x1 + y1; s++) {
@@ -232,9 +246,31 @@ export class Renderer {
         const sx = SX(tx, ty) - tw / 2;
         const syTop = SY(tx, ty) - stories * STORY_H * z;
         if (sx > vx + vw || sx + tw < vx || syTop > vy + vh || syTop + th + stories * STORY_H * z < vy) continue;
-        g.drawImage(block, sx, syTop, tw, th + stories * STORY_H * z);
+        // does this column stand in front of an agent?
+        let cut = false;
+        if (stories > 1) {
+          const baseBottom = syTop + stories * STORY_H * z + th;
+          const colCx = sx + tw / 2;
+          for (const ct of cutTargets) {
+            if (s > ct.s && Math.abs(colCx - ct.ax) < tw * 0.8 && ct.ay - 32 * z < baseBottom && ct.ay > syTop) {
+              cut = true;
+              break;
+            }
+          }
+        }
+        if (cut) {
+          // ground floor stays opaque; everything above goes translucent
+          const cutSrcY = TILE_H / 2 + (stories - 1) * STORY_H + 4;
+          g.globalAlpha = 0.2;
+          g.drawImage(block, 0, 0, TILE_W, cutSrcY, sx, syTop, tw, cutSrcY * z);
+          g.globalAlpha = 1;
+          const rest = block.height - cutSrcY;
+          g.drawImage(block, 0, cutSrcY, TILE_W, rest, sx, syTop + cutSrcY * z, tw, rest * z);
+        } else {
+          g.drawImage(block, sx, syTop, tw, th + stories * STORY_H * z);
+        }
         // sparse roof furniture (interior roof tiles only, so it never tiles)
-        if (t === T_BUILDING) {
+        if (t === T_BUILDING && !cut) {
           const h = (((tx * 73856093) ^ (ty * 19349663)) >>> 0) % 89;
           const rcx = sx + tw / 2, rcy = syTop + th / 2;
           if (h < 3) { // antenna mast + aircraft light
@@ -268,6 +304,7 @@ export class Renderer {
               this.drawDoor(g, d, sx, groundY, tw, z, art);
               continue;
             }
+            if (cut) g.globalAlpha = 0.2;
             const level = Math.min(d.level, stories - 1);
             const img = d.kind === "videowall"
               ? art.ads[d.variant % art.ads.length][(adFrame + d.variant) % 4]
@@ -286,7 +323,7 @@ export class Renderer {
               g.transform(z * sxAd, -0.5 * z * sxAd, 0, z * syAd, ax, ay);
             }
             g.drawImage(img, 0, 0);
-            if (d.kind === "videowall" && isNight(art.weather)) {
+            if (d.kind === "videowall" && isNight(art.weather) && !cut) {
               g.globalCompositeOperation = "lighter";
               g.globalAlpha = 0.25;
               g.drawImage(img, -1, -1, img.width + 2, img.height + 2);
@@ -294,6 +331,7 @@ export class Renderer {
               g.globalCompositeOperation = "source-over";
             }
             g.restore();
+            g.globalAlpha = 1;
           }
         }
       }
@@ -649,28 +687,69 @@ export class Renderer {
     g: CanvasRenderingContext2D, t: TrainSeg, art: TileArt,
     SX: (x: number, y: number) => number, SY: (x: number, y: number) => number, z: number
   ): void {
-    const sx = SX(t.wx, t.wy), sy = SY(t.wx, t.wy) - TRAIN_ELEV * z;
-    g.save();
-    g.transform(
-      (TILE_W / 2) * z, (TILE_H / 2) * z,
-      -(TILE_W / 2) * z, (TILE_H / 2) * z,
-      sx, sy - 4 * z
-    );
-    g.rotate(t.angle);
-    const L = 0.9, W = 0.3;
-    g.fillStyle = art.night ? "#3a4552" : "#6a7480";
-    g.fillRect(-L, -W, L * 2, W * 2);
-    // lit window band
-    g.fillStyle = art.night ? "#9fe8ff" : "#c8dae2";
-    g.fillRect(-L * 0.85, -W * 0.55, L * 1.7, W * 1.1);
-    g.fillStyle = art.night ? "#3a4552" : "#6a7480";
-    for (let wx = -L * 0.8; wx < L * 0.8; wx += 0.24) g.fillRect(wx, -W * 0.55, 0.06, W * 1.1);
-    if (t.head) {
-      g.fillStyle = "#fff8c8";
-      g.fillRect(L * 0.9, -W * 0.5, 0.1, W);
+    const night = art.night;
+    const fx = Math.cos(t.angle), fy = Math.sin(t.angle);
+    const rx = -fy, ry = fx;
+    const px = (df: number, dr: number, lift: number): [number, number] => {
+      const wx = t.wx + fx * df + rx * dr, wy = t.wy + fy * df + ry * dr;
+      return [SX(wx, wy), SY(wx, wy) - lift];
+    };
+    const quad = (pts: [number, number][], col: string) => {
+      g.fillStyle = col;
+      g.beginPath();
+      g.moveTo(pts[0][0], pts[0][1]);
+      for (let i = 1; i < pts.length; i++) g.lineTo(pts[i][0], pts[i][1]);
+      g.closePath();
+      g.fill();
+    };
+    const shade = (hex: string, f: number): string => {
+      const n = parseInt(hex.slice(1), 16);
+      const r = Math.min(255, (((n >> 16) & 255) * f) | 0);
+      const gg = Math.min(255, (((n >> 8) & 255) * f) | 0);
+      const b = Math.min(255, ((n & 255) * f) | 0);
+      return `rgb(${r},${gg},${b})`;
+    };
+
+    const L = 0.86, W = 0.3;
+    const elev = TRAIN_ELEV * z;
+    const h0 = elev + 2.5 * z;   // maglev gap above the deck
+    const h1 = elev + 13 * z;    // roof
+    const body = night ? "#46525e" : "#828c98";
+
+    // shadow cast onto the deck
+    quad([px(L, W * 1.15, elev + 0.5 * z), px(L, -W * 1.15, elev + 0.5 * z), px(-L, -W * 1.15, elev + 0.5 * z), px(-L, W * 1.15, elev + 0.5 * z)], "rgba(0,0,0,0.3)");
+
+    // body box: back-to-front side faces, then the roof
+    const base: [number, number][] = [px(L, W, h0), px(L, -W, h0), px(-L, -W, h0), px(-L, W, h0)];
+    const top: [number, number][] = [px(L, W, h1), px(L, -W, h1), px(-L, -W, h1), px(-L, W, h1)];
+    const centerY = (base[0][1] + base[2][1]) / 2;
+    const edges = [[0, 1], [1, 2], [2, 3], [3, 0]]
+      .map((e) => ({ e, midY: (base[e[0]][1] + base[e[1]][1]) / 2 }))
+      .sort((a, b) => a.midY - b.midY);
+    for (const { e, midY } of edges) {
+      quad([base[e[0]], base[e[1]], top[e[1]], top[e[0]]], shade(body, midY > centerY ? 0.85 : 0.55));
     }
-    g.restore();
-    if (art.night) {
+    quad(top, shade(body, 1.15));
+    // roof spine
+    quad([px(L * 0.8, W * 0.35, h1 + 0.1), px(L * 0.8, -W * 0.35, h1 + 0.1), px(-L * 0.8, -W * 0.35, h1 + 0.1), px(-L * 0.8, W * 0.35, h1 + 0.1)], shade(body, 0.9));
+
+    // lit window band on the camera-facing long sides
+    const winCol = night ? "#9fe8ff" : "#d5e6ee";
+    const sepCol = shade(body, 0.6);
+    for (const dr of [W, -W]) {
+      const midY = px(0, dr, h0)[1];
+      if (midY <= centerY) continue; // back side, hidden
+      quad([px(L * 0.8, dr, h0 + 4 * z), px(-L * 0.8, dr, h0 + 4 * z), px(-L * 0.8, dr, h0 + 8.5 * z), px(L * 0.8, dr, h0 + 8.5 * z)], winCol);
+      for (let f = -L * 0.72; f < L * 0.75; f += 0.3) {
+        quad([px(f, dr, h0 + 4 * z), px(f + 0.06, dr, h0 + 4 * z), px(f + 0.06, dr, h0 + 8.5 * z), px(f, dr, h0 + 8.5 * z)], sepCol);
+      }
+    }
+    // nose light on the lead car
+    if (t.head) {
+      quad([px(L, W * 0.4, h0 + 3 * z), px(L, -W * 0.4, h0 + 3 * z), px(L, -W * 0.4, h0 + 6 * z), px(L, W * 0.4, h0 + 6 * z)], "#fff8c8");
+    }
+    if (night) {
+      const sx = SX(t.wx, t.wy), sy = SY(t.wx, t.wy) - elev;
       g.globalCompositeOperation = "lighter";
       const gr = g.createRadialGradient(sx, sy, 0, sx, sy, 20 * z);
       gr.addColorStop(0, "rgba(120,200,255,0.12)");
