@@ -340,24 +340,54 @@ export function buildTileArt(seed: number, weather: Weather): TileArt {
     g.closePath(); g.fill();
   }
 
-  // ---- street lamp ----
-  const lamp = makeCanvas(16, 40);
+  // ---- street lamp (arm reaches right; renderer mirrors it toward the road) ----
+  const lamp = makeCanvas(20, 42);
   {
     const g = ctx2d(lamp);
-    g.fillStyle = tint("#3a3a44", ambient + 0.2, blue);
-    g.fillRect(7, 8, 2, 30);
-    g.fillRect(7, 6, 8, 2);
+    const metal = tint("#3a3a44", ambient + 0.2, blue);
+    const metalLight = tint("#55555f", ambient + 0.2, blue);
+    // base pedestal
+    g.fillStyle = metal;
+    g.fillRect(5, 38, 6, 2);
+    // pole with a lit edge
+    g.fillStyle = metal;
+    g.fillRect(7, 6, 2, 33);
+    g.fillStyle = metalLight;
+    g.fillRect(7, 6, 1, 33);
+    // arm curving out over the street
+    g.fillStyle = metal;
+    g.fillRect(8, 4, 6, 2);
+    g.fillRect(13, 5, 2, 2);
+    // hanging lamp head: shade on top, lens pointing DOWN
+    g.fillStyle = tint("#2c2c34", ambient + 0.25, blue);
+    g.fillRect(12, 6, 5, 2);
     if (night) {
       g.fillStyle = "#ffe9a8";
-      g.fillRect(13, 8, 3, 2);
-      const grad = g.createRadialGradient(14, 9, 1, 14, 9, 9);
-      grad.addColorStop(0, "rgba(255,230,160,0.5)");
+      g.fillRect(13, 8, 3, 2); // lens
+      // downward cone of light onto the pavement
+      const cone = g.createLinearGradient(0, 9, 0, 40);
+      cone.addColorStop(0, "rgba(255,230,160,0.34)");
+      cone.addColorStop(1, "rgba(255,230,160,0.02)");
+      g.fillStyle = cone;
+      g.beginPath();
+      g.moveTo(13, 9); g.lineTo(16, 9);
+      g.lineTo(20, 38); g.lineTo(9, 38);
+      g.closePath();
+      g.fill();
+      // pool of light on the ground under the head
+      g.fillStyle = "rgba(255,230,160,0.22)";
+      g.beginPath();
+      g.ellipse(14.5, 38.5, 5.5, 2.2, 0, 0, Math.PI * 2);
+      g.fill();
+      // halo around the lens
+      const grad = g.createRadialGradient(14.5, 9, 1, 14.5, 9, 7);
+      grad.addColorStop(0, "rgba(255,230,160,0.55)");
       grad.addColorStop(1, "rgba(255,230,160,0)");
       g.fillStyle = grad;
-      g.fillRect(5, 0, 18, 18);
+      g.fillRect(7, 2, 15, 15);
     } else {
       g.fillStyle = "#c8c8d0";
-      g.fillRect(13, 8, 3, 2);
+      g.fillRect(13, 8, 3, 2); // unlit lens still points down
     }
   }
 

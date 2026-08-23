@@ -2,7 +2,7 @@
 // blocks correctly occlude people and cars behind them. Also draws the static
 // street furniture (fences, doors, pit rails) and the elevated skytrain.
 
-import { City, Deco, T_BUILDING, T_GROUND, T_ISLAND, T_PARK, T_PIT, T_ROAD, T_SIDEWALK, T_WALL, D_S, D_W, idx, inGrid } from "../city/citygen";
+import { City, Deco, T_BUILDING, T_GROUND, T_ISLAND, T_PARK, T_PIT, T_ROAD, T_SIDEWALK, T_WALL, D_S, D_W, idx, inGrid, isRoad } from "../city/citygen";
 import { GRID, STORY_H, TILE_H, TILE_W, isNight, isRain, isoX, isoY } from "../engine/util";
 import { PeopleAtlas, FW, FH } from "../sprites/people";
 import { TileArt } from "../sprites/tiles";
@@ -553,7 +553,19 @@ export class Renderer {
   ): void {
     if (e.kind === "lamp") {
       const sx = SX(e.x, e.y), sy = SY(e.x, e.y);
-      g.drawImage(art.lamp, sx - 4 * z, sy - 38 * z, 16 * z, 40 * z);
+      // mirror the lamp so its arm reaches over the street it lights
+      const gx = Math.floor(e.x), gy = Math.floor(e.y);
+      const roadRight = isRoad(this.city, gx + 1, gy) || isRoad(this.city, gx, gy - 1);
+      const roadLeft = isRoad(this.city, gx - 1, gy) || isRoad(this.city, gx, gy + 1);
+      if (roadLeft && !roadRight) {
+        g.save();
+        g.translate(sx * 2, 0);
+        g.scale(-1, 1);
+        g.drawImage(art.lamp, sx - 8 * z, sy - 40 * z, 20 * z, 42 * z);
+        g.restore();
+      } else {
+        g.drawImage(art.lamp, sx - 8 * z, sy - 40 * z, 20 * z, 42 * z);
+      }
       return;
     }
     if (e.kind === "fence" && e.fence) {
