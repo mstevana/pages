@@ -18,6 +18,8 @@ export interface Camera {
 }
 
 const TRAIN_ELEV = 64;   // px above ground at zoom 1
+const SECTION_LIP = 5;   // px of wall left standing above a sectioned floor
+const TRAIN_LEVEL = TRAIN_ELEV / STORY_H;  // the elevated line, in storeys
 const PED_SCALE = 1.2;   // people vs the 30px story: roughly one story tall
 
 interface Entity {
@@ -49,6 +51,7 @@ export class Renderer {
   private fences: FenceEdge[] = [];
   private decks: DeckTile[] = [];
   private buildingId: Int32Array; // connected-component label per WALL/BUILDING tile
+  readonly maxStories: number;    // ceiling of the tallest building in the sector
   // emissive sources gathered while drawing, blended additively later
   private lampGlows: { x: number; y: number; gy: number; phase: number }[] = [];
   private emissives: { x: number; y: number; r: number; col: [number, number, number]; i: number }[] = [];
@@ -80,6 +83,12 @@ export class Renderer {
       nextId++;
     }
     this.buildingId = bid;
+    // the section slider runs from the ground plane to this
+    let top = 1;
+    for (let i = 0; i < city.height.length; i++) {
+      if ((t[i] === T_WALL || t[i] === T_BUILDING) && city.height[i] > top) top = city.height[i];
+    }
+    this.maxStories = top;
 
     for (const d of city.decos) {
       const k = idx(d.x, d.y);
@@ -145,7 +154,8 @@ export class Renderer {
     people: PeopleAtlas,
     cam: Camera,
     vx: number, vy: number, vw: number, vh: number,
-    time: number
+    time: number,
+    section: number = Infinity
   ): void {
     const z = cam.zoom;
     const cx = vx + vw / 2, cy = vy + vh / 2;
@@ -163,6 +173,10 @@ export class Renderer {
     g.fillStyle = isNight(art.weather) ? "#040508" : "#101216";
     g.fillRect(vx, vy, vw, vh);
     g.imageSmoothingEnabled = false;
+
+    // A section plane below the tallest roof slices the city open; at or above
+    // it the city stands whole and nothing is cut.
+    const sectioned = section < this.maxStories;
 
     // visible tile bounds (margin for tall buildings + elevated track)
     const maxRise = 8 * STORY_H * z;
@@ -246,12 +260,13 @@ export class Renderer {
       push({ s: f.x + f.y, pri: 1, kind: "fence", fence: f, x: f.x + 0.5, y: f.y + 0.5 });
     }
     for (const d of this.decks) {
+      if (sectioned && TRAIN_LEVEL >= section) break;   // the line is above the plane
       if (d.x < x0 - 1 || d.x > x1 || d.y < y0 - 1 || d.y > y1) continue;
       if (d.pylon) push({ s: d.x + d.y, pri: 0, kind: "pylon", x: d.x + 1, y: d.y + 1, deckAxis: d.axis });
       push({ s: d.x + d.y, pri: 0, kind: "deck", x: d.x + 1, y: d.y + (d.axis === "v" ? 0.5 : 1), deckAxis: d.axis });
     }
     // trains: two per line, opposite directions, deterministic from time
-    for (const line of this.city.skytrains) {
+    for (const line of (sectioned && TRAIN_LEVEL >= section ? [] : this.city.skytrains)) {
       const segLen = 1.9, nSeg = 4, span = GRID + nSeg * segLen + 8;
       for (let tr = 0; tr < 2; tr++) {
         const speed = 14 + tr * 3;
@@ -285,7 +300,7 @@ export class Renderer {
 
     // which whole buildings occlude an agent? (they cut away above floor 1)
     const cutIds = new Set<number>();
-    if (cutTargets.length > 0) {
+    if (cutTargets.length > 0 && !sectioned) {
       for (let ty = y0; ty <= y1; ty++) {
         for (let tx = x0; tx <= x1; tx++) {
           const i = idx(tx, ty);
@@ -337,6 +352,38 @@ export class Renderer {
           g.lineTo(sx, dy + th / 2);
           g.closePath();
         };
+        if (sectioned && stories > section) {
+          // Horizontal cross-section: keep the storeys under the plane, take
+          // everything above it away. The plane sits a hair above the floor it
+          // exposes, so the floor slab reads and the walls stand as a low kerb
+          // around it - and every surface the cut passes through is black.
+          const floorY = gy - section * STORY_H * z;
+          if (section > 0) {
+            const below = art.block(section, packed & 15, packed >> 4, (tx * 31 + ty * 17) % 3);
+            g.drawImage(below, sx, floorY, tw, th + section * STORY_H * z);
+          }
+          if (t === T_WALL) {
+            const capY = floorY - SECTION_LIP * z;
+            g.fillStyle = "#000";                     // the sliced wall itself
+            diamond(capY);
+            g.fill();
+            g.fillStyle = "#0a0a0c";                  // its short exposed flank
+            g.beginPath();
+            g.moveTo(sx, capY + th / 2);
+            g.lineTo(sx + tw / 2, capY + th);
+            g.lineTo(sx + tw, capY + th / 2);
+            g.lineTo(sx + tw, capY + th / 2 + SECTION_LIP * z);
+            g.lineTo(sx + tw / 2, capY + th + SECTION_LIP * z);
+            g.lineTo(sx, capY + th / 2 + SECTION_LIP * z);
+            g.closePath();
+            g.fill();
+          } else {
+            g.fillStyle = art.cutFloor;               // the room's own floor
+            diamond(floorY);
+            g.fill();
+          }
+          continue;
+        }
         if (cut) {
           // every column of the building - walls and interior alike - becomes a
           // solid one-storey mass, so the slice exposes fill rather than a void
@@ -354,7 +401,7 @@ export class Renderer {
           g.drawImage(block, sx, syTop, tw, th + stories * STORY_H * z);
         }
         // sparse roof furniture (interior roof tiles only, so it never tiles)
-        if (t === T_BUILDING && !cut) {
+        if (t === T_BUILDING && !cut && !(sectioned && stories > section)) {
           const h = (((tx * 73856093) ^ (ty * 19349663)) >>> 0) % 89;
           const rcx = sx + tw / 2, rcy = syTop + th / 2;
           if (h < 3) { // antenna mast + aircraft light
@@ -389,6 +436,7 @@ export class Renderer {
               continue;
             }
             if (cut && d.level > 0) continue; // that storey was cut away
+            if (sectioned && d.level >= section) continue; // above the plane
             const level = Math.min(d.level, stories - 1);
             const img = d.kind === "videowall"
               ? art.ads[d.variant % art.ads.length][(adFrame + d.variant) % 4]

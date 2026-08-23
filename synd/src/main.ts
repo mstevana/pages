@@ -8,6 +8,7 @@ import { SaveData, clearSave, loadSave, newCampaign, writeSave } from "./game/sa
 import { MissionResult, ObjectiveKind, World } from "./game/world";
 import { Panel } from "./ui/panel";
 import { Renderer } from "./ui/render";
+import { SectionSlider } from "./ui/slider";
 import * as screens from "./ui/screens";
 import { PeopleAtlas, buildPeople } from "./sprites/people";
 import { TileArt, buildTileArt } from "./sprites/tiles";
@@ -30,6 +31,8 @@ let world: World | null = null;
 let art: TileArt | null = null;
 let people: PeopleAtlas | null = null;
 let renderer: Renderer | null = null;
+let slider: SectionSlider | null = null;
+let sectionLevel = Infinity;   // Infinity = whole city, no cross-section
 let panel: Panel | null = null;
 let mapBase: HTMLCanvasElement | null = null;
 let endTimer = 0;
@@ -109,6 +112,8 @@ function buildMission(): void {
   world = new World(city, p.weather, save, audio, p.kind, save.mission);
   world.notify = (msg) => notices.push({ text: msg, t: 4 });
   renderer = new Renderer(city);
+  slider = new SectionSlider(renderer.maxStories);
+  sectionLevel = renderer.maxStories;
   panel = new Panel(panelW, H);
   mapBase = buildMapBase(city);
   cam.x = world.camX; cam.y = world.camY;
@@ -176,7 +181,7 @@ function endMission(result: MissionResult): void {
   if (result.success) save.mission++;
   const wiped = !save.agents.some((a) => a.alive) && save.credits < 1200;
   writeSave(save);
-  world = null; city = null; renderer = null; mapBase = null;
+  world = null; city = null; renderer = null; slider = null; mapBase = null;
   if (wiped) {
     state = "gameover";
     screens.showGameOver(save, () => {
@@ -202,6 +207,7 @@ interface PointerInfo {
   x: number; y: number;
   startX: number; startY: number;
   panel: boolean;
+  slider: boolean;    // press started on the section slider
   slot: number;       // inventory slot index if the press started there
   moved: boolean;
   camStart: { x: number; y: number };
@@ -217,9 +223,17 @@ canvas.addEventListener("pointerdown", (ev) => {
   const p: PointerInfo = {
     id: ev.pointerId, x: ev.clientX, y: ev.clientY,
     startX: ev.clientX, startY: ev.clientY,
-    panel: ev.clientX < panelW, slot: -1, moved: false,
+    panel: ev.clientX < panelW, slot: -1, moved: false, slider: false,
     camStart: { x: cam.x, y: cam.y },
   };
+  if (!p.panel && slider) {
+    const gm = slider.geom(panelW, 0, canvas.clientWidth - panelW, canvas.clientHeight);
+    if (slider.hit(ev.clientX, ev.clientY, gm)) {
+      p.slider = true;
+      sectionLevel = slider.levelAt(ev.clientY, gm);
+      audio.click();
+    }
+  }
   if (p.panel) {
     const hit = panel.hit(ev.clientX, ev.clientY);
     if (hit.type === "slot") p.slot = hit.i;
@@ -238,6 +252,11 @@ canvas.addEventListener("pointermove", (ev) => {
   if (!p || state !== "mission" || !world) return;
   p.x = ev.clientX; p.y = ev.clientY;
   if (Math.hypot(p.x - p.startX, p.y - p.startY) > 12) p.moved = true;
+
+  if (p.slider && slider) {
+    sectionLevel = slider.levelAt(p.y, slider.geom(panelW, 0, canvas.clientWidth - panelW, canvas.clientHeight));
+    return;
+  }
 
   if (pointers.size === 2) {
     const [a, b] = [...pointers.values()];
@@ -271,6 +290,8 @@ function pointerEnd(ev: PointerEvent): void {
   if (pointers.size === 0 && wasPinch) { wasPinch = false; dragGhost = null; return; }
   if (!p || state !== "mission" || !world || !panel) { dragGhost = null; return; }
   const w = world;
+
+  if (p.slider) { dragGhost = null; return; }
 
   // finish an inventory drag: out to the world drops it, onto a doll gives it
   if (p.slot >= 0 && p.moved) {
@@ -418,8 +439,9 @@ function frame(now: number): void {
     }
     world.camX = cam.x; world.camY = cam.y;
 
-    renderer.draw(g, world, art, people, cam, panelW, 0, vw, vh, world.time);
+    renderer.draw(g, world, art, people, cam, panelW, 0, vw, vh, world.time, sectionLevel);
     panel.draw(g, world, people, mapBase, mode, audio.muted, world.time, save.mission, dragGhost ? dragGhost.overDoll : -1);
+    if (slider) slider.draw(g, slider.geom(panelW, 0, vw, vh), sectionLevel);
 
     // notices
     let ny = 8;
@@ -477,6 +499,7 @@ requestAnimationFrame(frame);
   get panel() { return panel; },
   setFollow(v: boolean) { followCam = v; },
   screenToWorld,
+  get section() { return sectionLevel; },
 };
 
 // ---------- boot ----------
