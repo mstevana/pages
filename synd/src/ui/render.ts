@@ -20,6 +20,7 @@ const PED_SCALE = 1.2;   // people vs the 30px story: roughly one story tall
 
 interface Entity {
   s: number;    // depth key = tx + ty
+  pri: number;  // within-bucket order: 0 elevated structure, 1 ground, 2 trains
   kind: "ped" | "car" | "drop" | "lamp" | "fence" | "pylon" | "deck" | "train";
   ped?: Ped;
   car?: Car;
@@ -220,24 +221,24 @@ export class Renderer {
     };
     for (const p of world.peds) {
       if (p.carId !== null || p.x < x0 || p.x > x1 || p.y < y0 || p.y > y1) continue;
-      push({ s: Math.floor(p.x) + Math.floor(p.y), kind: "ped", ped: p, x: p.x, y: p.y });
+      push({ s: Math.floor(p.x) + Math.floor(p.y), pri: 1, kind: "ped", ped: p, x: p.x, y: p.y });
     }
     for (const c of world.cars) {
       if (c.x < x0 || c.x > x1 || c.y < y0 || c.y > y1) continue;
-      push({ s: Math.floor(c.x) + Math.floor(c.y), kind: "car", car: c, x: c.x, y: c.y });
+      push({ s: Math.floor(c.x) + Math.floor(c.y), pri: 1, kind: "car", car: c, x: c.x, y: c.y });
     }
     for (const l of this.city.lamps) {
       if (l.x < x0 || l.x > x1 || l.y < y0 || l.y > y1) continue;
-      push({ s: l.x + l.y, kind: "lamp", x: l.x + 0.5, y: l.y + 0.5 });
+      push({ s: l.x + l.y, pri: 1, kind: "lamp", x: l.x + 0.5, y: l.y + 0.5 });
     }
     for (const f of this.fences) {
       if (f.x < x0 || f.x > x1 || f.y < y0 || f.y > y1) continue;
-      push({ s: f.x + f.y, kind: "fence", fence: f, x: f.x + 0.5, y: f.y + 0.5 });
+      push({ s: f.x + f.y, pri: 1, kind: "fence", fence: f, x: f.x + 0.5, y: f.y + 0.5 });
     }
     for (const d of this.decks) {
       if (d.x < x0 - 1 || d.x > x1 || d.y < y0 - 1 || d.y > y1) continue;
-      if (d.pylon) push({ s: d.x + d.y + 1, kind: "pylon", x: d.x + 1, y: d.y + 1, deckAxis: d.axis });
-      push({ s: d.x + d.y + 1, kind: "deck", x: d.x + 1, y: d.y + (d.axis === "v" ? 0.5 : 1), deckAxis: d.axis });
+      if (d.pylon) push({ s: d.x + d.y, pri: 0, kind: "pylon", x: d.x + 1, y: d.y + 1, deckAxis: d.axis });
+      push({ s: d.x + d.y, pri: 0, kind: "deck", x: d.x + 1, y: d.y + (d.axis === "v" ? 0.5 : 1), deckAxis: d.axis });
     }
     // trains: two per line, opposite directions, deterministic from time
     for (const line of this.city.skytrains) {
@@ -253,7 +254,7 @@ export class Renderer {
           const wy = line.axis === "v" ? u : line.pos + 1;
           if (wx < x0 || wx > x1 || wy < y0 || wy > y1) continue;
           const angle = line.axis === "v" ? Math.atan2(dirSign, 0) : Math.atan2(0, dirSign);
-          push({ s: Math.floor(wx) + Math.floor(wy), kind: "train", x: wx, y: wy, train: { wx, wy, angle, head: k === 0 } });
+          push({ s: Math.floor(wx) + Math.floor(wy), pri: 2, kind: "train", x: wx, y: wy, train: { wx, wy, angle, head: k === 0 } });
         }
       }
     }
@@ -403,7 +404,7 @@ export class Renderer {
       }
       const b = buckets.get(s);
       if (b) {
-        b.sort((a, bb) => (a.x + a.y) - (bb.x + bb.y));
+        b.sort((a, bb) => (a.pri - bb.pri) || ((a.x + a.y) - (bb.x + bb.y)));
         for (const e of b) this.drawEntity(g, e, world, art, people, SX, SY, z, time);
       }
     }
