@@ -27,9 +27,15 @@ export const DBIT = [D_N, D_E, D_S, D_W];
 export interface Deco {
   x: number; y: number;      // wall tile carrying the deco
   face: 0 | 1;               // 0 = SW face (south neighbor open), 1 = SE face (east neighbor open)
-  kind: "videowall" | "neon" | "door";
+  kind: "videowall" | "neon" | "door" | "billboard" | "shopwin";
   variant: number;           // which ad / sign / door design
   level: number;             // story on the wall (0-based)
+}
+
+export interface Prop {
+  x: number; y: number;      // tile the prop stands on
+  kind: "tree" | "bench" | "stall";
+  variant: number;
 }
 
 export interface Skytrain {
@@ -44,6 +50,8 @@ export interface City {
   bstyle: Uint8Array;        // low nibble: facade style, high nibble: hue variant
   laneDir: Uint8Array;       // bitmask of allowed exits for cars
   decos: Deco[];
+  props: Prop[];             // trees, benches, food stalls
+  crossing: Uint8Array;      // 0 none, 1 stripes along y, 2 stripes along x
   lamps: { x: number; y: number }[];
   roundabouts: { x: number; y: number }[]; // centers
   vRoads: number[];          // x of left lane of each vertical avenue
@@ -69,6 +77,7 @@ export function generateCity(seed: number): City {
   const height = new Uint8Array(GRID * GRID);
   const bstyle = new Uint8Array(GRID * GRID);
   const laneDir = new Uint8Array(GRID * GRID);
+  const crossing = new Uint8Array(GRID * GRID);
 
   // ---- 1. Avenue grid (full-length roads guarantee connectivity) ----
   const vRoads: number[] = [];
@@ -133,6 +142,16 @@ export function generateCity(seed: number): City {
     // surrounding sidewalk
     for (let y = ry0 - 1; y <= ry1 + 1; y++) for (let x = rx0 - 1; x <= rx1 + 1; x++) {
       if (inGrid(x, y) && tiles[idx(x, y)] === T_GROUND) tiles[idx(x, y)] = T_SIDEWALK;
+    }
+    // zebra crossings on each approach, one tile clear of the ring
+    const stripe = (sx: number, sy: number, axis: number) => {
+      if (inGrid(sx, sy) && tiles[idx(sx, sy)] === T_ROAD) crossing[idx(sx, sy)] = axis;
+    };
+    for (const dy of [ry0 - 2, ry1 + 2]) {           // north and south approaches
+      for (let x = rx0; x <= rx1; x++) stripe(x, dy, 1);
+    }
+    for (const dx of [rx0 - 2, rx1 + 2]) {           // west and east approaches
+      for (let y = ry0; y <= ry1; y++) stripe(dx, y, 2);
     }
     if (register) roundabouts.push({ x: rx0 + 1, y: ry0 + 1 });
   };
@@ -222,37 +241,68 @@ export function generateCity(seed: number): City {
     }
   }
 
-  // ---- 4. Decorations: videowalls and neon on street-facing walls ----
+  // ---- 4. Facade decoration: one upper feature and one ground feature per
+  // wall face, so signs, billboards, shops and doors never stack ----
   const decos: Deco[] = [];
-  for (let y = 2; y < GRID - 2; y++) {
-    for (let x = 2; x < GRID - 2; x++) {
-      const i = idx(x, y);
-      if (tiles[i] !== T_WALL || height[i] < 2) continue;
-      // SW face visible if the tile south is open; SE face if east is open
-      const southOpen = tiles[idx(x, y + 1)] <= T_ROAD || tiles[idx(x, y + 1)] === T_PARK;
-      const eastOpen = tiles[idx(x + 1, y)] <= T_ROAD || tiles[idx(x + 1, y)] === T_PARK;
-      const nearRoadS = southOpen && (tiles[idx(x, y + 2)] === T_ROAD || tiles[idx(x, y + 1)] === T_SIDEWALK);
-      const nearRoadE = eastOpen && (tiles[idx(x + 2, y)] === T_ROAD || tiles[idx(x + 1, y)] === T_SIDEWALK);
-      if (nearRoadS && rng.chance(0.06)) {
-        decos.push({ x, y, face: 0, kind: rng.chance(0.45) ? "videowall" : "neon", variant: rng.int(0, 7), level: rng.int(1, Math.max(1, height[i] - 1)) });
-      } else if (nearRoadE && rng.chance(0.06)) {
-        decos.push({ x, y, face: 1, kind: rng.chance(0.45) ? "videowall" : "neon", variant: rng.int(0, 7), level: rng.int(1, Math.max(1, height[i] - 1)) });
-      }
-    }
-  }
-  // entrance doors with stoop steps on ground-level street-facing walls
+  const upperTaken = new Set<number>();
+  const groundTaken = new Set<number>();
+  const openish = (t: number) => t === T_GROUND || t === T_SIDEWALK || t === T_ROAD || t === T_PARK;
   for (let y = 2; y < GRID - 2; y++) {
     for (let x = 2; x < GRID - 2; x++) {
       const i = idx(x, y);
       if (tiles[i] !== T_WALL) continue;
-      const ts = tiles[idx(x, y + 1)], te = tiles[idx(x + 1, y)];
-      const openS = ts === T_SIDEWALK || ts === T_GROUND || ts === T_PARK;
-      const openE = te === T_SIDEWALK || te === T_GROUND || te === T_PARK;
-      // spaced out so doors don't stack on adjacent tiles
-      if (openS && (x * 3 + y * 5) % 4 === 0 && rng.chance(0.35)) {
-        decos.push({ x, y, face: 0, kind: "door", variant: rng.int(0, 3), level: 0 });
-      } else if (openE && (x * 5 + y * 3) % 4 === 0 && rng.chance(0.35)) {
-        decos.push({ x, y, face: 1, kind: "door", variant: rng.int(0, 3), level: 0 });
+      const hgt = height[i];
+      for (let face = 0 as 0 | 1; face <= 1; face = (face + 1) as 0 | 1) {
+        const nx = face === 0 ? x : x + 1;
+        const ny = face === 0 ? y + 1 : y;
+        if (!openish(tiles[idx(nx, ny)])) continue;
+        // does this face look onto a street?
+        const onStreet = tiles[idx(nx, ny)] === T_SIDEWALK
+          || tiles[idx(face === 0 ? x : x + 2, face === 0 ? y + 2 : y)] === T_ROAD;
+        const key = i * 2 + face;
+
+        // upper storeys: a big billboard, a videowall, or a neon sign
+        if (onStreet && !upperTaken.has(key)) {
+          if (hgt >= 3 && rng.chance(0.035)) {
+            decos.push({ x, y, face, kind: "billboard", variant: rng.int(0, 7), level: rng.int(1, hgt - 2) });
+            upperTaken.add(key);
+          } else if (hgt >= 2 && rng.chance(0.06)) {
+            decos.push({ x, y, face, kind: rng.chance(0.45) ? "videowall" : "neon", variant: rng.int(0, 7), level: rng.int(1, Math.max(1, hgt - 1)) });
+            upperTaken.add(key);
+          }
+        }
+        // street level: a lit shop window, otherwise an entrance
+        if (!groundTaken.has(key)) {
+          if (onStreet && rng.chance(0.22)) {
+            decos.push({ x, y, face, kind: "shopwin", variant: rng.int(0, 7), level: 0 });
+            groundTaken.add(key);
+          } else if (((x * 3 + y * 5) % 4 === 0) && rng.chance(0.35)) {
+            decos.push({ x, y, face, kind: "door", variant: rng.int(0, 3), level: 0 });
+            groundTaken.add(key);
+          }
+        }
+      }
+    }
+  }
+
+  // ---- 4b. Street furniture: trees and benches in parks, food stalls on
+  // busy pavements ----
+  const props: Prop[] = [];
+  for (let y = 1; y < GRID - 1; y++) {
+    for (let x = 1; x < GRID - 1; x++) {
+      const t = tiles[idx(x, y)];
+      if (t === T_PARK) {
+        // leave the rim beside a pit clear so the railing stays readable
+        let nearPit = false;
+        for (let d = 0; d < 4 && !nearPit; d++) if (tiles[idx(x + DX[d], y + DY[d])] === T_PIT) nearPit = true;
+        if (nearPit) continue;
+        if (rng.chance(0.2)) props.push({ x, y, kind: "tree", variant: rng.int(0, 11) });
+        else if (rng.chance(0.05)) props.push({ x, y, kind: "bench", variant: rng.int(0, 1) });
+      } else if (t === T_SIDEWALK && rng.chance(0.012)) {
+        // a stall needs a road in front of it and room to stand
+        let byRoad = false;
+        for (let d = 0; d < 4 && !byRoad; d++) if (tiles[idx(x + DX[d], y + DY[d])] === T_ROAD) byRoad = true;
+        if (byRoad) props.push({ x, y, kind: "stall", variant: rng.int(0, 3) });
       }
     }
   }
@@ -261,7 +311,8 @@ export function generateCity(seed: number): City {
   const lamps: { x: number; y: number }[] = [];
   for (const x of vRoads) for (const y of hRoads) {
     for (const [lx, ly] of [[x - 2, y - 2], [x + 3, y - 2], [x - 2, y + 3], [x + 3, y + 3]] as const) {
-      if (inGrid(lx, ly) && tiles[idx(lx, ly)] === T_SIDEWALK && rng.chance(0.8)) lamps.push({ x: lx, y: ly });
+      if (inGrid(lx, ly) && tiles[idx(lx, ly)] === T_SIDEWALK && rng.chance(0.8)
+          && !props.some((p) => p.x === lx && p.y === ly)) lamps.push({ x: lx, y: ly });
     }
   }
 
@@ -270,7 +321,7 @@ export function generateCity(seed: number): City {
   if (vRoads.length > 2) skytrains.push({ axis: "v", pos: vRoads[rng.int(1, vRoads.length - 2)] });
   if (hRoads.length > 2 && rng.chance(0.75)) skytrains.push({ axis: "h", pos: hRoads[rng.int(1, hRoads.length - 2)] });
 
-  return { seed, tiles, height, bstyle, laneDir, decos, lamps, roundabouts, vRoads, hRoads, skytrains };
+  return { seed, tiles, height, bstyle, laneDir, decos, props, crossing, lamps, roundabouts, vRoads, hRoads, skytrains };
 }
 
 // Recursively split a block into lots separated by 4-tile alleys, then raise

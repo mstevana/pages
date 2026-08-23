@@ -2,6 +2,7 @@
 // animated ad videowalls and neon signs. Everything is baked per-weather.
 
 import { Rng } from "../engine/rng";
+import { buildBenchArt, buildStallArt, buildTreeArt } from "./props";
 import { STORY_H, TILE_H, TILE_W, Weather, ctx2d, isNight, isRain, makeCanvas } from "../engine/util";
 
 export interface TileArt {
@@ -22,6 +23,13 @@ export interface TileArt {
   lamp: HTMLCanvasElement;
   ads: HTMLCanvasElement[][];    // [variant][frame]
   neons: HTMLCanvasElement[];
+  billboards: HTMLCanvasElement[];
+  shops: HTMLCanvasElement[];
+  trees: HTMLCanvasElement[];
+  benches: HTMLCanvasElement[];
+  stalls: HTMLCanvasElement[];
+  crossV: HTMLCanvasElement;     // zebra stripes on a north-south road
+  crossH: HTMLCanvasElement;     // zebra stripes on an east-west road
   adColors: string[];            // dominant color per ad variant (neon = variant+3)
   ambient: number;               // 0..1 light level
   night: boolean;
@@ -472,9 +480,125 @@ export function buildTileArt(seed: number, weather: Weather): TileArt {
     neons.push(c);
   }
 
+  // ---- zebra crossings: bars run parallel to the traffic they interrupt ----
+  const mkCross = (alongY: boolean): HTMLCanvasElement => {
+    const c = makeCanvas(TILE_W, TILE_H);
+    const g = ctx2d(c);
+    g.drawImage(road, 0, 0);
+    g.save();
+    // unit tile space -> the iso diamond
+    g.transform(TILE_W / 2, TILE_H / 2, -TILE_W / 2, TILE_H / 2, TILE_W / 2, 0);
+    g.fillStyle = tint("#d8d8cc", ambient, blue);
+    for (const s of [0.08, 0.33, 0.58, 0.83]) {
+      if (alongY) g.fillRect(s, 0, 0.13, 1);
+      else g.fillRect(0, s, 1, 0.13);
+    }
+    g.restore();
+    return c;
+  };
+  const crossV = mkCross(true);
+  const crossH = mkCross(false);
+
+  // ---- big facade billboards (24 x 26, spans two storeys) ----
+  const BB_W = 24, BB_H = 26;
+  const bbTexts = ["EUROCORP", "ZEN-X", "NEW YOU", "SYNTH", "OBEY", "V-COLA", "ARM+", "DREAM"];
+  const billboards: HTMLCanvasElement[] = [];
+  for (let v = 0; v < 8; v++) {
+    const c = makeCanvas(BB_W, BB_H);
+    const g = ctx2d(c);
+    const a1 = adCols[v % adCols.length];
+    const a2 = adCols[(v + 3) % adCols.length];
+    g.fillStyle = "#0a0b10";
+    g.fillRect(0, 0, BB_W, BB_H);
+    switch (v % 4) {
+      case 0: // colour field with a headline
+        g.fillStyle = a1; g.fillRect(1, 1, BB_W - 2, BB_H - 2);
+        g.fillStyle = "#0a0b10"; g.fillRect(2, BB_H - 11, BB_W - 4, 9);
+        g.fillStyle = a1; g.font = "bold 6px monospace"; g.textAlign = "center";
+        g.fillText(bbTexts[v], BB_W / 2, BB_H - 4);
+        break;
+      case 1: { // portrait silhouette
+        g.fillStyle = a2; g.fillRect(1, 1, BB_W - 2, BB_H - 2);
+        g.fillStyle = "#0a0b10";
+        g.beginPath(); g.arc(BB_W / 2, 11, 6, 0, Math.PI * 2); g.fill();
+        g.beginPath(); g.ellipse(BB_W / 2, 25, 10, 8, 0, Math.PI, 0); g.fill();
+        g.fillStyle = "#0a0b10"; g.fillRect(1, BB_H - 8, BB_W - 2, 7);
+        g.fillStyle = a1; g.font = "bold 5px monospace"; g.textAlign = "center";
+        g.fillText(bbTexts[v], BB_W / 2, BB_H - 2.5);
+        break;
+      }
+      case 2: // diagonal split
+        g.fillStyle = a1; g.fillRect(1, 1, BB_W - 2, BB_H - 2);
+        g.fillStyle = a2;
+        g.beginPath(); g.moveTo(1, BB_H - 1); g.lineTo(BB_W - 1, 1); g.lineTo(BB_W - 1, BB_H - 1); g.closePath(); g.fill();
+        g.fillStyle = "#0a0b10"; g.font = "bold 6px monospace"; g.textAlign = "center";
+        g.fillText(bbTexts[v], BB_W / 2, BB_H / 2 + 2);
+        break;
+      default: { // product block with a data grid
+        g.fillStyle = a2; g.fillRect(1, 1, BB_W - 2, BB_H - 2);
+        g.fillStyle = "#0a0b10";
+        for (let gy = 0; gy < 4; gy++) for (let gx = 0; gx < 5; gx++) {
+          if ((gx + gy + v) % 3 === 0) g.fillRect(3 + gx * 4, 3 + gy * 4, 3, 3);
+        }
+        g.fillStyle = "#0a0b10"; g.fillRect(1, BB_H - 9, BB_W - 2, 8);
+        g.fillStyle = a1; g.font = "bold 6px monospace"; g.textAlign = "center";
+        g.fillText(bbTexts[v], BB_W / 2, BB_H - 3);
+        break;
+      }
+    }
+    g.textAlign = "left";
+    g.strokeStyle = "rgba(0,0,0,0.6)";
+    g.strokeRect(0.5, 0.5, BB_W - 1, BB_H - 1);
+    if (!night) { g.fillStyle = "rgba(0,0,0,0.12)"; g.fillRect(0, 0, BB_W, BB_H); }
+    billboards.push(c);
+  }
+
+  // ---- shop windows: lit display plus a neon sign above (24 x 22) ----
+  const SH_W = 24, SH_H = 22;
+  const shopNames = ["RAMEN", "TECH", "AMMO", "MEDS", "BAR", "CHIP", "WEAR", "CASH"];
+  const shops: HTMLCanvasElement[] = [];
+  for (let v = 0; v < 8; v++) {
+    const c = makeCanvas(SH_W, SH_H);
+    const g = ctx2d(c);
+    const sign = adCols[(v + 5) % adCols.length];
+    // neon sign board
+    g.shadowColor = sign;
+    g.shadowBlur = night ? 4 : 0;
+    g.strokeStyle = sign;
+    g.lineWidth = 1;
+    g.strokeRect(1.5, 1.5, SH_W - 3, 7);
+    g.fillStyle = sign;
+    g.font = "bold 5px monospace";
+    g.textAlign = "center";
+    g.fillText(shopNames[v], SH_W / 2, 7);
+    g.textAlign = "left";
+    g.shadowBlur = 0;
+    // display window
+    const glow = night ? "#ffe9b0" : "#cfe4ee";
+    g.fillStyle = tint("#20242c", ambient, blue);
+    g.fillRect(0, 10, SH_W, SH_H - 10);
+    g.fillStyle = glow;
+    g.fillRect(2, 12, SH_W - 4, SH_H - 15);
+    // goods on show
+    g.fillStyle = "rgba(20,22,30,0.85)";
+    for (let k = 0; k < 3; k++) {
+      const gw = 3 + ((v + k) % 3);
+      g.fillRect(4 + k * 6, SH_H - 6 - gw, gw, gw);
+    }
+    g.fillStyle = tint("#3a3f47", ambient, blue);
+    g.fillRect(SH_W / 2 - 1, 12, 1, SH_H - 15); // mullion
+    g.fillRect(0, SH_H - 3, SH_W, 3);           // sill
+    shops.push(c);
+  }
+
+  const trees = buildTreeArt(seed, ambient, blue, night);
+  const benches = buildBenchArt(ambient, blue);
+  const stalls = buildStallArt(ambient, blue, night);
+
   return {
     weather, ground, sidewalk, road, roadDashV, roadDashH, roadPuddle,
     park, island, block, pitFloor, pitWallNW, pitWallNE, lamp, ads, neons,
+    billboards, shops, trees, benches, stalls, crossV, crossH,
     adColors: adCols, ambient, night,
   };
 }

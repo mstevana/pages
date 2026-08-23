@@ -47,6 +47,12 @@ offline after the first load.
       about three quarters of a second to draw a bead on a target, and shoot
       15% shorter and 15% wider than you do — open fire first and you win
       the exchange.
+- **Streets**: parks are planted with twelve kinds of tree — broadleaf,
+  conifer, palm, willow, cypress, blossom, bare, bushes, twin-trunk,
+  neon-augmented and bio-engineered caps — plus benches; pavements carry
+  neon-lit food stalls; facades carry big billboards, animated videowalls,
+  neon signs and lit shop windows; and zebra crossings stripe every
+  roundabout approach.
 - **Loot**: dropped items lie on the street as their own pixel icon — a
   pistol, an uzi, a shotgun, a minigun barrel cluster, a laser emitter, a
   coiled gauss rifle, a shield crest, a red-cross medkit, a persuadertron

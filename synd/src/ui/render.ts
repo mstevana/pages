@@ -2,9 +2,10 @@
 // blocks correctly occlude people and cars behind them. Also draws the static
 // street furniture (fences, doors, pit rails) and the elevated skytrain.
 
-import { City, Deco, T_BUILDING, T_GROUND, T_ISLAND, T_PARK, T_PIT, T_ROAD, T_SIDEWALK, T_WALL, D_S, D_W, idx, inGrid, isRoad } from "../city/citygen";
+import { City, Deco, Prop, T_BUILDING, T_GROUND, T_ISLAND, T_PARK, T_PIT, T_ROAD, T_SIDEWALK, T_WALL, D_S, D_W, idx, inGrid, isRoad } from "../city/citygen";
 import { GRID, STORY_H, TILE_H, TILE_W, isNight, isRain, isoX, isoY } from "../engine/util";
 import { PeopleAtlas, FW, FH } from "../sprites/people";
+import { BENCH_H, BENCH_W, STALL_H, STALL_W, TREE_H, TREE_W } from "../sprites/props";
 import { TileArt } from "../sprites/tiles";
 import { Car, Ped, World } from "../game/world";
 import { ITEMS } from "../game/items";
@@ -21,12 +22,13 @@ const PED_SCALE = 1.2;   // people vs the 30px story: roughly one story tall
 interface Entity {
   s: number;    // depth key = tx + ty
   pri: number;  // within-bucket order: 0 elevated structure, 1 ground, 2 trains
-  kind: "ped" | "car" | "drop" | "lamp" | "fence" | "pylon" | "deck" | "train";
+  kind: "ped" | "car" | "drop" | "lamp" | "fence" | "pylon" | "deck" | "train" | "prop";
   ped?: Ped;
   car?: Car;
   drop?: { x: number; y: number; item: { type: string } };
   fence?: FenceEdge;
   train?: TrainSeg;
+  prop?: Prop;
   deckAxis?: "v" | "h";
   x: number; y: number;
 }
@@ -196,8 +198,11 @@ export class Renderer {
         let img: HTMLCanvasElement;
         switch (t) {
           case T_ROAD: {
+            const cross = this.city.crossing[idx(tx, ty)];
             const bits = lane[idx(tx, ty)];
-            if (isRain(art.weather) && ((tx * 7 + ty * 13) % 11 === 0)) img = art.roadPuddle;
+            if (cross === 1) img = art.crossV;
+            else if (cross === 2) img = art.crossH;
+            else if (isRain(art.weather) && ((tx * 7 + ty * 13) % 11 === 0)) img = art.roadPuddle;
             else if (bits === D_S) img = art.roadDashV;
             else if (bits === D_W) img = art.roadDashH;
             else img = art.road;
@@ -230,6 +235,10 @@ export class Renderer {
     for (const l of this.city.lamps) {
       if (l.x < x0 || l.x > x1 || l.y < y0 || l.y > y1) continue;
       push({ s: l.x + l.y, pri: 1, kind: "lamp", x: l.x + 0.5, y: l.y + 0.5 });
+    }
+    for (const p of this.city.props) {
+      if (p.x < x0 || p.x > x1 || p.y < y0 || p.y > y1) continue;
+      push({ s: p.x + p.y, pri: 1, kind: "prop", prop: p, x: p.x + 0.5, y: p.y + 0.5 });
     }
     for (const f of this.fences) {
       if (f.x < x0 || f.x > x1 || f.y < y0 || f.y > y1) continue;
@@ -363,9 +372,12 @@ export class Renderer {
             const level = Math.min(d.level, stories - 1);
             const img = d.kind === "videowall"
               ? art.ads[d.variant % art.ads.length][(adFrame + d.variant) % 4]
+              : d.kind === "billboard" ? art.billboards[d.variant % art.billboards.length]
+              : d.kind === "shopwin" ? art.shops[d.variant % art.shops.length]
               : art.neons[d.variant % art.neons.length];
-            const sxAd = d.kind === "videowall" ? 1.2 : 1.1;
-            const syAd = d.kind === "videowall" ? 1.7 : 1.5;
+            const sxAd = d.kind === "videowall" ? 1.2 : d.kind === "neon" ? 1.1 : 1.0;
+            const syAd = d.kind === "videowall" ? 1.7 : d.kind === "neon" ? 1.5
+              : d.kind === "billboard" ? 2.0 : 1.2;
             const inset = 2;
             g.save();
             if (d.face === 0) {
@@ -390,6 +402,10 @@ export class Renderer {
               const cyAd = anchY + (img.width / 2) * (d.face === 0 ? 0.5 : -0.5) * sxAd * z + (img.height / 2) * syAd * z;
               if (d.kind === "videowall") {
                 this.glow(cxAd, cyAd, img.width * sxAd * z * 1.15, art.adColors[d.variant % art.adColors.length], art.night ? 0.2 : 0.07);
+              } else if (d.kind === "billboard") {
+                this.glow(cxAd, cyAd, img.width * sxAd * z * 1.1, art.adColors[d.variant % art.adColors.length], art.night ? 0.14 : 0.05);
+              } else if (d.kind === "shopwin") {
+                this.glow(cxAd, cyAd, 22 * z, art.adColors[(d.variant + 5) % art.adColors.length], art.night ? 0.3 : 0.08);
               } else {
                 // neon signs buzz: a few of them flicker hard
                 const phase = d.x * 2.7 + d.y * 5.3;
@@ -731,6 +747,22 @@ export class Renderer {
           gy: sy - 1 * z,
           phase: gx * 3.1 + gy * 7.7,
         });
+      }
+      return;
+    }
+    if (e.kind === "prop" && e.prop) {
+      const sx = SX(e.x, e.y), sy = SY(e.x, e.y);
+      const p = e.prop;
+      if (p.kind === "tree") {
+        const img = art.trees[p.variant % art.trees.length];
+        g.drawImage(img, sx - (TREE_W / 2) * z, sy - (TREE_H - 2) * z, TREE_W * z, TREE_H * z);
+      } else if (p.kind === "bench") {
+        const img = art.benches[p.variant % art.benches.length];
+        g.drawImage(img, sx - (BENCH_W / 2) * z, sy - (BENCH_H - 2) * z, BENCH_W * z, BENCH_H * z);
+      } else {
+        const img = art.stalls[p.variant % art.stalls.length];
+        g.drawImage(img, sx - (STALL_W / 2) * z, sy - (STALL_H - 2) * z, STALL_W * z, STALL_H * z);
+        if (art.night) this.glow(sx, sy - 30 * z, 14 * z, "#ff9b2f", 0.3);
       }
       return;
     }
