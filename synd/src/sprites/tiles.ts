@@ -375,13 +375,13 @@ export function buildTileArt(seed: number, weather: Weather): TileArt {
       g.closePath();
       g.fill();
       // pool of light on the ground under the head
-      g.fillStyle = "rgba(255,230,160,0.22)";
+      g.fillStyle = "rgba(255,230,160,0.12)";
       g.beginPath();
       g.ellipse(14.5, 38.5, 5.5, 2.2, 0, 0, Math.PI * 2);
       g.fill();
       // halo around the lens
       const grad = g.createRadialGradient(14.5, 9, 1, 14.5, 9, 7);
-      grad.addColorStop(0, "rgba(255,230,160,0.55)");
+      grad.addColorStop(0, "rgba(255,230,160,0.25)"); // most glow now comes from the emissive pass
       grad.addColorStop(1, "rgba(255,230,160,0)");
       g.fillStyle = grad;
       g.fillRect(7, 2, 15, 15);

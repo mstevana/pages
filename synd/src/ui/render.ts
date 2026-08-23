@@ -43,6 +43,8 @@ export class Renderer {
   private decoIndex = new Map<number, Deco[]>();
   private fences: FenceEdge[] = [];
   private decks: DeckTile[] = [];
+  // emissive sources gathered while drawing entities, blended additively later
+  private lampGlows: { x: number; y: number; gy: number; phase: number }[] = [];
   rainDrops: { x: number; y: number; v: number }[] = [];
 
   constructor(private city: City) {
@@ -112,6 +114,7 @@ export class Renderer {
     const SX = (tx: number, ty: number) => cx + (isoX(tx, ty) - camPX) * z;
     const SY = (tx: number, ty: number) => cy + (isoY(tx, ty) - camPY) * z;
 
+    this.lampGlows.length = 0;
     g.save();
     g.beginPath();
     g.rect(vx, vy, vw, vh);
@@ -429,6 +432,41 @@ export class Renderer {
     }
     g.globalAlpha = 1;
 
+    // ---- emissive pass: additive bloom for the street lamps ----
+    if (this.lampGlows.length > 0) {
+      g.globalCompositeOperation = "lighter";
+      for (const lm of this.lampGlows) {
+        // most lamps breathe gently; a few are faulty and strobe
+        const faulty = ((lm.phase * 13.7) | 0) % 11 === 0;
+        const flicker = faulty
+          ? (Math.sin(time * 13 + lm.phase) > 0.1 ? 1 : 0.12)
+          : 0.9 + 0.1 * Math.sin(time * 6 + lm.phase) * Math.sin(time * 2.3 + lm.phase * 1.7);
+        // hot core on the lens
+        let gr = g.createRadialGradient(lm.x, lm.y, 0, lm.x, lm.y, 8 * z);
+        gr.addColorStop(0, `rgba(255,236,180,${0.6 * flicker})`);
+        gr.addColorStop(1, "rgba(255,236,180,0)");
+        g.fillStyle = gr;
+        g.fillRect(lm.x - 8 * z, lm.y - 8 * z, 16 * z, 16 * z);
+        // wide soft halo
+        gr = g.createRadialGradient(lm.x, lm.y, 0, lm.x, lm.y, 24 * z);
+        gr.addColorStop(0, `rgba(255,214,130,${0.12 * flicker})`);
+        gr.addColorStop(1, "rgba(255,214,130,0)");
+        g.fillStyle = gr;
+        g.fillRect(lm.x - 24 * z, lm.y - 24 * z, 48 * z, 48 * z);
+        // pool of light on the pavement (flattened to the iso ground plane)
+        g.save();
+        g.translate(lm.x, lm.gy);
+        g.scale(1, 0.45);
+        gr = g.createRadialGradient(0, 0, 0, 0, 0, 14 * z);
+        gr.addColorStop(0, `rgba(255,224,150,${0.24 * flicker})`);
+        gr.addColorStop(1, "rgba(255,224,150,0)");
+        g.fillStyle = gr;
+        g.fillRect(-14 * z, -14 * z, 28 * z, 28 * z);
+        g.restore();
+      }
+      g.globalCompositeOperation = "source-over";
+    }
+
     // roundabout holo-beacons
     for (const rb of this.city.roundabouts) {
       if (rb.x + 0.5 < x0 || rb.x > x1 || rb.y + 0.5 < y0 || rb.y > y1) continue;
@@ -557,7 +595,8 @@ export class Renderer {
       const gx = Math.floor(e.x), gy = Math.floor(e.y);
       const roadRight = isRoad(this.city, gx + 1, gy) || isRoad(this.city, gx, gy - 1);
       const roadLeft = isRoad(this.city, gx - 1, gy) || isRoad(this.city, gx, gy + 1);
-      if (roadLeft && !roadRight) {
+      const flip = roadLeft && !roadRight;
+      if (flip) {
         g.save();
         g.translate(sx * 2, 0);
         g.scale(-1, 1);
@@ -565,6 +604,14 @@ export class Renderer {
         g.restore();
       } else {
         g.drawImage(art.lamp, sx - 8 * z, sy - 40 * z, 20 * z, 42 * z);
+      }
+      if (art.night) {
+        this.lampGlows.push({
+          x: flip ? sx - 6.5 * z : sx + 6.5 * z,
+          y: sy - 31 * z,
+          gy: sy - 1 * z,
+          phase: gx * 3.1 + gy * 7.7,
+        });
       }
       return;
     }
