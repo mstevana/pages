@@ -129,6 +129,9 @@ export class World {
   heat = 0;                        // police alert level
   kills = 0;
   creditsEarned = 0;
+  // the sector's police force is finite: officers killed never come back
+  policeTotal = 0;
+  policeLost = 0;
   camX: number; camY: number;      // camera focus in tile coords (set by main)
   uiSelected: boolean[] = [true, true, true, true]; // which agents the UI has selected
   agentNames: string[] = [];
@@ -165,6 +168,10 @@ export class World {
       this.agents.push(p);
       this.peds.push(p);
     }
+
+    // a fixed roster of officers patrols this sector - heavier for contracts
+    // that put the police on our backs from the outset
+    this.policeTotal = Math.min(24, kind === "assassinate" ? 14 + missionNo : 8 + Math.floor(missionNo / 2));
 
     this.mission = this.setupMission(kind, start);
     // persuade missions: issue a persuadertron to the first living agent
@@ -331,7 +338,9 @@ export class World {
       const s = this.ringSpawn(cx, cy, 15, 40);
       if (s) this.spawnCiv(s.x, s.y);
     }
-    const copTarget = Math.min(COP_LIMIT, 2 + Math.floor(this.heat / 4));
+    // never field more officers than the roster still holds
+    const forceLeft = Math.max(0, this.policeTotal - this.policeLost);
+    const copTarget = Math.min(COP_LIMIT, 2 + Math.floor(this.heat / 4), forceLeft);
     for (let i = nCop; i < copTarget; i++) {
       const s = this.ringSpawn(cx, cy, 16, 38);
       if (s) this.spawnCop(s.x, s.y);
@@ -617,6 +626,10 @@ export class World {
       if (p.team === "enemy") this.creditsEarned += 150;
       else if (p.team === "cop") { this.creditsEarned += 40; this.heat = Math.max(this.heat, 8); }
       else if (p.team === "civ" && !p.vip) { this.creditsEarned -= 25; this.heat += 1.5; }
+    }
+    if (p.team === "cop") {
+      this.policeLost++;
+      if (this.policeLost >= this.policeTotal) this.notify("SECTOR POLICE ELIMINATED");
     }
     // loot drops
     if (p.team === "cop") {

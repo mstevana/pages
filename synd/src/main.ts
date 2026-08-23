@@ -361,6 +361,7 @@ function handlePanelTap(hit: ReturnType<Panel["hit"]>): void {
       else if (m.kind === "persuade") status = w.peds.find((q) => q.id === m.targetId)?.persuaded ? "TARGET PERSUADED - REACH EXTRACTION" : "TARGET NOT YET PERSUADED";
       else if (m.kind === "escort") status = m.phase === 1 ? "VIP SECURED - RETURN TO INSERTION POINT" : "VIP NOT YET REACHED";
       else status = "TARGET AT LARGE";
+      status += `<br>POLICE IN SECTOR: ${Math.max(0, w.policeTotal - w.policeLost)} / ${w.policeTotal}`;
       screens.showObjectives(save.mission, m.kind, m.text, status, () => {
         screens.clearScreens();
         state = "mission";

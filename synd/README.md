@@ -65,6 +65,11 @@ offline after the first load.
 | **Escort** | Reach a VIP on the far side of the map and bring them back to the insertion point under attack. |
 | **Purge sector** | 30 rival syndicate agents are hunting you. Kill them all. |
 
+Each sector has a **finite police force** — a fixed roster of officers
+(larger on assassination contracts). Officers you kill are gone for good, and
+once the roster is empty no more arrive. The objectives screen tracks how many
+are left.
+
 ## Campaign
 
 Progress persists in `localStorage`: your agents, their gear, credits and the
