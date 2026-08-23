@@ -30,7 +30,9 @@ offline after the first load.
     (highlighted orange); every weapon shows its remaining charge as a bar —
     an empty weapon is useless. Tapping a **medkit** heals; tapping the
     **shield belt** toggles it. **Drag a slot into the world** to have the
-    agent walk there and drop the item.
+    agent walk there and drop the item, or **drag it onto another agent's
+    doll** to hand it over (they'll walk to each other if apart; the doll
+    lights up green when it can receive).
   - **Minimap**: the surrounding area. The current objective is the white dot
     with radar pings.
   - **WALK / SHOOT** toggles (mutually exclusive):

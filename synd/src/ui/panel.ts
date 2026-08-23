@@ -136,7 +136,8 @@ export class Panel {
     mode: "walk" | "shoot",
     muted: boolean,
     time: number,
-    missionNo: number
+    missionNo: number,
+    giveTarget = -1  // doll index hovered while dragging an item, -1 none
   ): void {
     const L = this.layout;
     // panel body
@@ -157,14 +158,18 @@ export class Panel {
     this.smallBtn(g, L.pauseBtn, "II", false);
 
     // dolls
+    const invOwner = this.invAgent(world);
     for (let i = 0; i < 4; i++) {
       const r = L.dolls[i];
       const a = world.agents[i];
       const sel = world.uiSelected[i];
+      const canReceive = giveTarget === i && a && a.hp > 0 && a !== invOwner && a.inv.length < 8 && a.carId === null;
       g.fillStyle = sel ? "#232633" : "#14161d";
+      if (canReceive) g.fillStyle = "#1c3328";
       g.fillRect(r.x, r.y, r.w, r.h);
       g.strokeStyle = sel ? ORANGE : "#33364a";
       g.lineWidth = sel ? 2 : 1;
+      if (canReceive) { g.strokeStyle = "#4fdc6a"; g.lineWidth = 2; }
       g.strokeRect(r.x + 0.5, r.y + 0.5, r.w - 1, r.h - 1);
       if (!a || a.hp <= 0) {
         g.fillStyle = "#3a2028";

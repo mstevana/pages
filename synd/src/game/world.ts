@@ -41,6 +41,7 @@ export interface Ped {
   fireAt: { x: number; y: number; until: number } | null;
   dropOrder: { invIdx: number; x: number; y: number } | null;
   pickOrder: number | null; // drop id
+  giveOrder: { invIdx: number; targetId: number } | null; // hand item to a squadmate
   carId: number | null;     // inside car
   boardOrder: number | null;
   // vip / persuasion
@@ -265,7 +266,7 @@ export class World {
       speed: 2.2, animT: 0, deadT: 0, thinkT: this.rng.float(0, 2),
       fleeFrom: null, fireCd: 0, weapon: null,
       agentIdx: -1, inv: [], sel: -1, shieldOn: false, shield: 0,
-      fireAt: null, dropOrder: null, pickOrder: null, carId: null, boardOrder: null,
+      fireAt: null, dropOrder: null, pickOrder: null, giveOrder: null, carId: null, boardOrder: null,
       vip: false, persuaded: false, followId: null, hostileCop: false,
     };
   }
@@ -378,7 +379,7 @@ export class World {
     const group = this.selectedAgents(sel);
     let n = 0;
     for (const a of group) {
-      a.fireAt = null; a.dropOrder = null; a.pickOrder = null; a.boardOrder = null;
+      a.fireAt = null; a.dropOrder = null; a.pickOrder = null; a.giveOrder = null; a.boardOrder = null;
       if (a.carId !== null) {
         const car = this.cars.find((c) => c.id === a.carId);
         if (car && car.state === "player" && car.occupants[0] === a.id) {
@@ -405,7 +406,7 @@ export class World {
     const a = this.selectedAgents(sel)[0];
     if (!a || a.carId !== null || invIdx < 0 || invIdx >= a.inv.length) return;
     a.dropOrder = { invIdx, x: tx, y: ty };
-    a.pickOrder = null; a.boardOrder = null;
+    a.pickOrder = null; a.boardOrder = null; a.giveOrder = null;
     const p = this.pf.walkPath(a.x, a.y, tx, ty);
     if (p) { a.path = p; a.pathIdx = 0; a.state = "walk"; }
   }
@@ -414,9 +415,43 @@ export class World {
     const a = this.selectedAgents(sel)[0];
     const d = this.drops.find((dd) => dd.id === dropId);
     if (!a || !d || a.carId !== null) return;
-    a.pickOrder = dropId; a.dropOrder = null; a.boardOrder = null;
+    a.pickOrder = dropId; a.dropOrder = null; a.boardOrder = null; a.giveOrder = null;
     const p = this.pf.walkPath(a.x, a.y, d.x, d.y);
     if (p) { a.path = p; a.pathIdx = 0; a.state = "walk"; }
+  }
+
+  // drag an item onto a squadmate's doll: hand it over (walking up first if needed)
+  cmdGiveItem(sel: boolean[], invIdx: number, targetAgentIdx: number): void {
+    const src = this.selectedAgents(sel)[0];
+    const target = this.agents[targetAgentIdx];
+    if (!src || !target || target === src) return;
+    if (src.carId !== null || target.hp <= 0 || target.carId !== null) return;
+    if (invIdx < 0 || invIdx >= src.inv.length) return;
+    if (target.inv.length >= 8) {
+      this.notify(`${this.agentNames[targetAgentIdx] ?? "AGENT"}: INVENTORY FULL`);
+      return;
+    }
+    if (dist2(src.x, src.y, target.x, target.y) < 2.5 * 2.5) {
+      this.transferItem(src, invIdx, target);
+      return;
+    }
+    src.giveOrder = { invIdx, targetId: target.id };
+    src.dropOrder = null; src.pickOrder = null; src.boardOrder = null;
+    const p = this.pf.walkPath(src.x, src.y, target.x, target.y);
+    if (p) { src.path = p; src.pathIdx = 0; src.state = "walk"; }
+  }
+
+  private transferItem(src: Ped, invIdx: number, target: Ped): void {
+    if (invIdx >= src.inv.length || target.inv.length >= 8 || target.hp <= 0) return;
+    const [it] = src.inv.splice(invIdx, 1);
+    target.inv.push(it);
+    if (src.sel === invIdx) src.sel = src.inv.findIndex((s) => ITEMS[s.type].weapon && s.charge > 0);
+    else if (src.sel > invIdx) src.sel--;
+    if (src.sel >= src.inv.length) src.sel = src.inv.length - 1;
+    if (target.sel < 0) target.sel = target.inv.length - 1;
+    this.audio.pickup();
+    const tName = this.agentNames[target.agentIdx] ?? "AGENT";
+    this.notify(`${ITEMS[it.type].name} \u2192 ${tName}`);
   }
 
   cmdBoardCar(sel: boolean[], carId: number): void {
@@ -424,7 +459,7 @@ export class World {
     if (!car || !(car.state === "parked" || car.state === "player")) return;
     for (const a of this.selectedAgents(sel)) {
       if (a.carId !== null) continue;
-      a.boardOrder = carId; a.dropOrder = null; a.pickOrder = null;
+      a.boardOrder = carId; a.dropOrder = null; a.pickOrder = null; a.giveOrder = null;
       const p = this.pf.walkPath(a.x, a.y, car.x, car.y);
       if (p) { a.path = p; a.pathIdx = 0; a.state = "walk"; }
     }
@@ -782,6 +817,21 @@ export class World {
         if (p.sel < 0) p.sel = p.inv.length - 1;
         this.audio.pickup();
         this.notify(`${ITEMS[d.item.type].name} ACQUIRED`);
+      }
+    }
+    if (p.giveOrder) {
+      const o = p.giveOrder;
+      const target = this.peds.find((q) => q.id === o.targetId);
+      if (!target || target.state === "dead" || target.carId !== null || o.invIdx >= p.inv.length) {
+        p.giveOrder = null;
+      } else if (dist2(p.x, p.y, target.x, target.y) < 2.5 * 2.5) {
+        p.giveOrder = null;
+        this.transferItem(p, o.invIdx, target);
+      } else {
+        // target wandered off - keep following
+        const path = this.pf.walkPath(p.x, p.y, target.x, target.y);
+        if (path) { p.path = path; p.pathIdx = 0; p.state = "walk"; }
+        else p.giveOrder = null;
       }
     }
     if (p.boardOrder !== null) {

@@ -208,7 +208,7 @@ interface PointerInfo {
 }
 const pointers = new Map<number, PointerInfo>();
 let pinchDist = 0, pinchZoom = 1, wasPinch = false;
-let dragGhost: { slot: number; x: number; y: number } | null = null;
+let dragGhost: { slot: number; x: number; y: number; overDoll: number } | null = null;
 
 canvas.addEventListener("pointerdown", (ev) => {
   audio.unlock();
@@ -246,7 +246,14 @@ canvas.addEventListener("pointermove", (ev) => {
     return;
   }
   if (p.slot >= 0) {
-    if (p.moved) dragGhost = { slot: p.slot, x: p.x, y: p.y };
+    if (p.moved) {
+      let overDoll = -1;
+      if (p.x < panelW && panel) {
+        const hit = panel.hit(p.x, p.y);
+        if (hit.type === "doll") overDoll = hit.i;
+      }
+      dragGhost = { slot: p.slot, x: p.x, y: p.y, overDoll };
+    }
     return;
   }
   if (!p.panel && p.moved) {
@@ -265,13 +272,19 @@ function pointerEnd(ev: PointerEvent): void {
   if (!p || state !== "mission" || !world || !panel) { dragGhost = null; return; }
   const w = world;
 
-  // finish an inventory drag-out
+  // finish an inventory drag: out to the world drops it, onto a doll gives it
   if (p.slot >= 0 && p.moved) {
     dragGhost = null;
     if (p.x >= panelW) {
       const t = screenToWorld(p.x, p.y);
       w.cmdDropItem(w.uiSelected, p.slot, t.x, t.y);
       audio.click();
+    } else {
+      const hit = panel.hit(p.x, p.y);
+      if (hit.type === "doll") {
+        w.cmdGiveItem(w.uiSelected, p.slot, hit.i);
+        audio.click();
+      }
     }
     return;
   }
@@ -405,7 +418,7 @@ function frame(now: number): void {
     world.camX = cam.x; world.camY = cam.y;
 
     renderer.draw(g, world, art, people, cam, panelW, 0, vw, vh, world.time);
-    panel.draw(g, world, people, mapBase, mode, audio.muted, world.time, save.mission);
+    panel.draw(g, world, people, mapBase, mode, audio.muted, world.time, save.mission, dragGhost ? dragGhost.overDoll : -1);
 
     // notices
     let ny = 8;
@@ -460,6 +473,7 @@ requestAnimationFrame(frame);
   cam,
   get world() { return world; },
   get city() { return city; },
+  get panel() { return panel; },
   setFollow(v: boolean) { followCam = v; },
 };
 
