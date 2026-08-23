@@ -114,6 +114,7 @@ export interface MissionResult {
 const AGENT_HP = 100;
 const CIV_LIMIT = 90;
 const CAR_LIMIT = 7;
+const BLAST_R = 3.5;      // a wrecked car hurts everyone inside this radius
 const COP_LIMIT = 4;
 const NPC_FIRE_MULT = 2.1;        // NPCs shoot slower than player agents
 const NPC_RANGE_MULT = 0.85;      // hostiles engage 15% closer than the weapon's reach
@@ -735,6 +736,24 @@ export class World {
     return near;
   }
 
+  // Would this shot go through a car? A car standing between the shooter and
+  // the target eats the burst, and a car that brews up takes everyone inside
+  // BLAST_R with it - so anything close gets a wider berth than the rest.
+  private carInLine(shooter: Ped, tx: number, ty: number): boolean {
+    const dx = tx - shooter.x, dy = ty - shooter.y;
+    const td = Math.hypot(dx, dy);
+    if (td < 0.01) return false;
+    for (const c of this.cars) {
+      if (c.state === "wreck") continue;
+      if (c.occupants.includes(shooter.id)) continue;   // our own ride
+      const along = ((c.x - shooter.x) * dx + (c.y - shooter.y) * dy) / td;
+      if (along <= 0 || along >= td) continue;          // behind us, or past the target
+      const margin = along < BLAST_R + 1 ? 1.8 : 1.1;   // shy of anything near enough to hurt
+      if (this.pointSegDist(c.x, c.y, shooter.x, shooter.y, tx, ty) < margin) return true;
+    }
+    return false;
+  }
+
   // anyone on foot standing in this car's path (NPC traffic yields to them)
   private pedAhead(c: Car, range: number): Ped | null {
     const fx = Math.cos(c.angle), fy = Math.sin(c.angle);
@@ -836,7 +855,7 @@ export class World {
     for (const p of this.peds) {
       if (p.state === "dead") continue;
       const d = dist(p.x, p.y, x, y);
-      if (d < 3.5) this.damagePed(p, (1 - d / 3.5) * 250, from);
+      if (d < BLAST_R) this.damagePed(p, (1 - d / BLAST_R) * 250, from);
     }
     this.alertArea(x, y, 18, from);
   }
@@ -1143,7 +1162,9 @@ export class World {
         const hostile = t.team === "enemy" || (t.team === "cop" && (t.hostileCop || this.mission.kind === "assassinate"));
         if (!hostile) continue;
         const d2 = dist2(t.x, t.y, p.x, p.y);
-        if (d2 < bd && this.pf.losShot(p.x, p.y, t.x, t.y)) { best = t; bd = d2; }
+        if (d2 >= bd || !this.pf.losShot(p.x, p.y, t.x, t.y)) continue;
+        if (this.carInLine(p, t.x, t.y)) continue;      // not through a car
+        best = t; bd = d2;
       }
       if (best) {
         this.fireWeapon(p, weapon, weapon.type, best.x + this.rng.float(-0.2, 0.2), best.y + this.rng.float(-0.2, 0.2));
@@ -1206,7 +1227,8 @@ export class World {
       }
       if (best) {
         const d = Math.sqrt(bd);
-        const canShoot = d < ITEMS.gun.range * NPC_RANGE_MULT && this.pf.losShot(p.x, p.y, best.x, best.y);
+        const canShoot = d < ITEMS.gun.range * NPC_RANGE_MULT && this.pf.losShot(p.x, p.y, best.x, best.y)
+          && !this.carInLine(p, best.x, best.y);
         if (!canShoot) p.aimTargetId = null; // breaking the shot forfeits the draw
         if (canShoot) {
           p.path = null; p.state = "idle";
@@ -1254,7 +1276,8 @@ export class World {
     const d = Math.sqrt(bd);
     const wdef = ITEMS[p.weapon ?? "gun"];
     const hunting = m.kind === "killall" ? d < 55 || this.rng.chance(0.001) : true;
-    const canShoot = d < wdef.range * NPC_RANGE_MULT && this.pf.losShot(p.x, p.y, best.x, best.y);
+    const canShoot = d < wdef.range * NPC_RANGE_MULT && this.pf.losShot(p.x, p.y, best.x, best.y)
+      && !this.carInLine(p, best.x, best.y);
     if (!canShoot) p.aimTargetId = null; // breaking the shot forfeits the draw
     if (canShoot) {
       p.path = null; p.state = "idle";

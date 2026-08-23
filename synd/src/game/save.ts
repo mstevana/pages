@@ -21,18 +21,30 @@ const KEY = "synd.save.v1";
 const NAMES = [
   "MARIN", "VOSS", "KYRO", "TANE", "REZA", "OKUDA", "SABLE", "DRAX",
   "NYX", "HALE", "IVANO", "CROSS", "MIRA", "JET", "KANE", "ONYX",
+  "ZHOU", "VEGA", "RASK", "KOLD", "SEVIK", "AMARI", "TOLL", "BRIX",
+  "NOVAK", "QUILL", "ASHER", "DELVE", "RIGG", "SOLAI", "VANCE", "KITE",
+  "ORLOV", "FANG", "LUCE", "MERO", "SKARN", "TREVI", "ZANE", "WREN",
+  "HOLT", "CASS", "DIEGO", "EIKO", "FARO", "GRIM", "HEX", "IRIS",
+  "JUNO", "KRAY", "LOME", "MOSS", "NAIRO", "OSEI", "PYRE", "QADIR",
+  "ROOK", "STILT", "TARU", "URSA", "VOLK", "XOLA", "YUEN", "ZEPH",
 ];
 
+// a name nobody on the roster is already using, drawn at random so two
+// campaigns rarely field the same squad
 export function newAgentName(taken: string[]): string {
-  for (const n of NAMES) if (!taken.includes(n)) return n;
-  return "AGT-" + Math.floor(Math.random() * 900 + 100);
+  const free = NAMES.filter((n) => !taken.includes(n));
+  if (free.length === 0) return "AGT-" + Math.floor(Math.random() * 900 + 100);
+  return free[Math.floor(Math.random() * free.length)];
 }
 
 export function newCampaign(): SaveData {
   const agents: SaveAgent[] = [];
+  const taken: string[] = [];
   for (let i = 0; i < 4; i++) {
+    const name = newAgentName(taken);
+    taken.push(name);
     agents.push({
-      name: NAMES[i],
+      name,
       alive: true,
       hp: 100,
       inv: [newItem("gun")],

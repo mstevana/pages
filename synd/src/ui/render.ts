@@ -1044,6 +1044,18 @@ export class Renderer {
     }
   }
 
+  // Ring stacks for the car bodywork and canopy: {h} is the fraction of the
+  // part's height, {s} the plan scale at that height. More segments than the
+  // eye can count is the point - the silhouette has to read as a curve.
+  private static readonly HULL_SEGS = 20;
+  private static readonly HULL_RINGS = [
+    { h: 0, s: 0.7 }, { h: 0.22, s: 0.93 }, { h: 0.52, s: 1 }, { h: 0.82, s: 0.93 }, { h: 1, s: 0.7 },
+  ];
+  private static readonly CAB_SEGS = 16;
+  private static readonly CAB_RINGS = [
+    { h: 0, s: 1 }, { h: 0.44, s: 0.94 }, { h: 0.78, s: 0.78 }, { h: 1, s: 0.46 },
+  ];
+
   private drawCar(
     g: CanvasRenderingContext2D, c: Car, art: TileArt,
     SX: (x: number, y: number) => number, SY: (x: number, y: number) => number, z: number
@@ -1090,6 +1102,47 @@ export class Renderer {
       }
       if (topCol) quad(top, topCol);
     };
+    // Stack rings of a plan into a solid. Each ring sits at its own height and
+    // is drawn at its own scale, so the surface curves in two directions; the
+    // segments of one column are drawn together, columns back to front, and
+    // brightness rolls both across the beam and up the ring stack. With enough
+    // segments the facets disappear and the body reads as moulded, not folded.
+    const loft = (
+      rings: { h: number; s: number }[], segs: number,
+      plan: (segs: number, sc: number) => [number, number][],
+      base: number, height: number, col: string, topCol: string | null
+    ) => {
+      const pts = rings.map((r) => plan(segs, r.s).map(([df, dr]) => px(df, dr, base + r.h * height)));
+      const foot = pts[0];
+      let minY = 1e9, maxY = -1e9;
+      for (const p of foot) { minY = Math.min(minY, p[1]); maxY = Math.max(maxY, p[1]); }
+      const span = Math.max(1, maxY - minY);
+      const order: { i: number; t: number }[] = [];
+      for (let i = 0; i < segs; i++) {
+        order.push({ i, t: ((foot[i][1] + foot[(i + 1) % segs][1]) / 2 - minY) / span });
+      }
+      order.sort((a, b) => a.t - b.t);
+      const top = pts[pts.length - 1];
+      for (const { i, t } of order) {
+        const j = (i + 1) % segs;
+        const across = 0.46 + 0.5 * t;                // 0 back .. 1 camera-facing
+        for (let b = 0; b < pts.length - 1; b++) {
+          const up = 0.78 + 0.4 * (b / Math.max(1, pts.length - 2)); // sill dark, deck bright
+          quad([pts[b][i], pts[b][j], pts[b + 1][j], pts[b + 1][i]], shade(col, across * up));
+        }
+      }
+      if (topCol) quad(top, topCol);
+      // rim light where the crown turns away: the giveaway of a curved panel
+      g.strokeStyle = shade(col, 1.5);
+      g.globalAlpha = 0.35;
+      g.lineWidth = Math.max(1, 0.6 * z);
+      g.beginPath();
+      g.moveTo(top[0][0], top[0][1]);
+      for (let i2 = 1; i2 < top.length; i2++) g.lineTo(top[i2][0], top[i2][1]);
+      g.closePath();
+      g.stroke();
+      g.globalAlpha = 1;
+    };
 
     // ---- shadow, oriented along the projected body axis ----
     const L = m.L, W = m.W;
@@ -1133,21 +1186,42 @@ export class Renderer {
 
     // hull plan: a superellipse whose squareness is the model's own, narrowed
     // toward the nose by its taper. round 0 is a slab-sided box, 1 an ellipse.
-    const tw = W * (1 - m.taper);
     const e = 2 / (4.5 - 2.5 * m.round);
-    const hull: [number, number][] = [];
-    for (let k = 0; k < 12; k++) {
-      const th = (k + 0.5) * Math.PI / 6;
-      const ca = Math.cos(th), sa = Math.sin(th);
-      const hx = L * Math.sign(ca) * Math.abs(ca) ** e;
-      const hy = W * Math.sign(sa) * Math.abs(sa) ** e;
-      hull.push([hx, hy * (1 - m.taper * Math.max(0, hx / L))]);
-    }
+    const plan = (segs: number, sc: number): [number, number][] => {
+      const out: [number, number][] = [];
+      for (let k = 0; k < segs; k++) {
+        const th = (k + 0.5) * Math.PI * 2 / segs;
+        const ca = Math.cos(th), sa = Math.sin(th);
+        const hx = L * Math.sign(ca) * Math.abs(ca) ** e;
+        const hy = W * Math.sign(sa) * Math.abs(sa) ** e;
+        out.push([hx * sc, hy * sc * (1 - m.taper * Math.max(0, hx / L))]);
+      }
+      return out;
+    };
+    const tw = W * (1 - m.taper);
     if (m.skirt) {                                   // ground-effect flare
       extrude([[L * 0.82, W * 1.16], [L * 0.82, -W * 1.16], [-L * 0.82, -W * 1.16], [-L * 0.82, W * 1.16]],
               lift - 1.4 * z, lift + 1.8 * z, shade(m.body, 0.5), null);
     }
-    extrude(hull, lift, lift + hullH, m.body, shade(m.body, 1.12));
+    // bodywork: rings stacked into a solid that tucks under at the sill and
+    // crowns at the deck, so the flanks curve instead of standing flat
+    loft(Renderer.HULL_RINGS, Renderer.HULL_SEGS, plan, lift, hullH, m.body, shade(m.body, 1.14));
+    // character line: a shadowed crease following the widest ring around the
+    // camera-facing flank, drawn only where the panel actually turns
+    {
+      const belt = plan(Renderer.HULL_SEGS, 0.99).map(([df, dr]) => px(df, dr, lift + hullH * 0.56));
+      g.strokeStyle = shade(m.body, 0.62);
+      g.lineWidth = Math.max(1, 0.5 * z);
+      g.beginPath();
+      let pen = false;
+      for (let k = 0; k <= Renderer.HULL_SEGS; k++) {
+        const q = belt[k % Renderer.HULL_SEGS];
+        if (q[1] > sy + hullH * 0.1) {
+          if (pen) g.lineTo(q[0], q[1]); else { g.moveTo(q[0], q[1]); pen = true; }
+        } else pen = false;
+      }
+      g.stroke();
+    }
     if (m.bull) {                                    // welded ram bar
       extrude([[L * 1.1, W * 0.82], [L * 1.1, -W * 0.82], [L * 0.96, -W * 0.82], [L * 0.96, W * 0.82]],
               lift + hullH * 0.15, lift + hullH * 0.95, shade(m.accent, 0.55), shade(m.accent, 0.8));
@@ -1208,16 +1282,33 @@ export class Renderer {
       g.globalAlpha = 1;
     }
 
-    // canopy
+    // canopy: a blown-glass bubble over the cabin, lofted the same way as the
+    // body so the glazing curves back into the roofline
     const cF = L * m.cabF, cB = L * m.cabB, cw = W * m.cabW;
-    const canopy: [number, number][] = [[cF, cw * 0.62], [cB + 0.12, cw], [cB, cw * 0.8], [cB, -cw * 0.8], [cB + 0.12, -cw], [cF, -cw * 0.62]];
-    extrude(canopy, lift + hullH, lift + cabTop, glass, night ? "#243038" : shade(m.glassTint, 0.78));
-    quad([
-      px(cF + 0.24, cw * 0.5, lift + hullH + 0.1), px(cF + 0.24, -cw * 0.5, lift + hullH + 0.1),
-      px(cF - 0.05, -cw * 0.58, lift + cabTop), px(cF - 0.05, cw * 0.58, lift + cabTop),
-    ], night ? "#3a505e" : shade(m.glassTint, 1.25));
-    quad([px(cF - 0.06, cw * 0.42, lift + cabTop + 0.1), px(cF - 0.06, -cw * 0.42, lift + cabTop + 0.1),
-          px(cF - 0.3, -cw * 0.5, lift + cabTop + 0.1), px(cF - 0.3, cw * 0.5, lift + cabTop + 0.1)], "rgba(230,245,255,0.35)");
+    const cMid = (cF + cB) / 2, cHalf = Math.max(0.05, (cF - cB) / 2);
+    const cabPlan = (segs: number, sc: number): [number, number][] => {
+      const out: [number, number][] = [];
+      for (let k = 0; k < segs; k++) {
+        const th = (k + 0.5) * Math.PI * 2 / segs;
+        const ca = Math.cos(th), sa = Math.sin(th);
+        const gx = Math.sign(ca) * Math.abs(ca) ** 0.8;   // slightly squared off
+        const gy = Math.sign(sa) * Math.abs(sa) ** 0.8;
+        out.push([cMid + cHalf * gx * sc, cw * gy * sc]);
+      }
+      return out;
+    };
+    loft(Renderer.CAB_RINGS, Renderer.CAB_SEGS, cabPlan, lift + hullH, cabTop - hullH,
+         glass, night ? "#243038" : shade(m.glassTint, 0.82));
+    // a soft specular sliding off the crown of the dome
+    const gl = px(cMid + cHalf * 0.3, cw * 0.2, lift + cabTop * 0.94);
+    const glr = Math.max(1.2, cHalf * TILE_W * 0.26 * z);
+    const spec = g.createRadialGradient(gl[0], gl[1], 0, gl[0], gl[1], glr);
+    spec.addColorStop(0, night ? "rgba(190,225,255,0.22)" : "rgba(255,255,255,0.34)");
+    spec.addColorStop(1, "rgba(255,255,255,0)");
+    g.fillStyle = spec;
+    g.beginPath();
+    g.ellipse(gl[0], gl[1], glr, glr * 0.5, 0, 0, Math.PI * 2);
+    g.fill();
 
     // full-width cargo box: vans, haulers and armoured wagons
     if (m.cargo > 0) {
@@ -1246,13 +1337,13 @@ export class Renderer {
     }
     if (m.bar === 1) {                               // police strobes
       const blink = Math.floor(performance.now() / 260) % 2 === 0;
-      quad([px(0.16, cw * 0.9, lift + cabTop), px(0.16, 0, lift + cabTop), px(-0.16, 0, lift + cabTop + 2.5 * z), px(-0.16, cw * 0.9, lift + cabTop + 2.5 * z)], blink ? "#ff2f4a" : "#3a1015");
-      quad([px(0.16, 0, lift + cabTop), px(0.16, -cw * 0.9, lift + cabTop), px(-0.16, -cw * 0.9, lift + cabTop + 2.5 * z), px(-0.16, 0, lift + cabTop + 2.5 * z)], blink ? "#1e2c8c" : "#2fa8ff");
+      quad([px(0.14, cw * 0.62, lift + cabTop), px(0.14, 0, lift + cabTop), px(-0.14, 0, lift + cabTop + 2.2 * z), px(-0.14, cw * 0.62, lift + cabTop + 2.2 * z)], blink ? "#ff2f4a" : "#3a1015");
+      quad([px(0.14, 0, lift + cabTop), px(0.14, -cw * 0.62, lift + cabTop), px(-0.14, -cw * 0.62, lift + cabTop + 2.2 * z), px(-0.14, 0, lift + cabTop + 2.2 * z)], blink ? "#1e2c8c" : "#2fa8ff");
       const lp = px(0, 0, lift + cabTop + 1.5 * z);
       this.glow(lp[0], lp[1], 9 * z, blink ? "#ff2f4a" : "#2fa8ff", night ? 0.5 : 0.22);
     } else if (m.bar === 2) {                        // lit hire sign
-      quad([px(0.22, cw * 0.55, lift + cabTop), px(0.22, -cw * 0.55, lift + cabTop),
-            px(-0.22, -cw * 0.55, lift + cabTop + 2.6 * z), px(-0.22, cw * 0.55, lift + cabTop + 2.6 * z)],
+      quad([px(0.15, cw * 0.4, lift + cabTop), px(0.15, -cw * 0.4, lift + cabTop),
+            px(-0.15, -cw * 0.4, lift + cabTop + 2.2 * z), px(-0.15, cw * 0.4, lift + cabTop + 2.2 * z)],
            night ? "#ffe9a8" : "#e8d890");
       const lp = px(0, 0, lift + cabTop + 1.6 * z);
       this.glow(lp[0], lp[1], 7 * z, "#ffe9a8", night ? 0.35 : 0.1);
@@ -1284,7 +1375,7 @@ export class Renderer {
     // ---- rear hover thrusters with exhaust when moving, one pair per bank ----
     const banks: [number, number][] = [];
     for (let b = 0; b < m.turbo; b++) {
-      const f0 = -L * (1 - b * 0.42);
+      const f0 = -L * (1 - b * 0.2);                  // both banks stay aft of the cabin
       banks.push([f0, 0.55], [f0, -0.55]);
     }
     for (const [df, s] of banks) {
