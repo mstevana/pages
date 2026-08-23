@@ -57,7 +57,7 @@
   .hidden { display: none !important; }
 
   /* ---- armory: compact, fits a landscape phone without scrolling ---- */
-  #ui .screen.armory { justify-content: safe center; padding: 1.2vmin 2vmin; }
+  #ui .screen.armory { justify-content: flex-start; padding: 1.2vmin 2vmin 0; }
   .arm-top { display:flex; align-items:center; gap:2vmin; width:100%; max-width:1100px; }
   .arm-top h2 { margin:0; font-size: clamp(13px, 3.2vmin, 22px); }
   .arm-funds { color:#ff9b2f; font-weight:bold; font-size: clamp(11px, 2.6vmin, 18px); }
@@ -81,15 +81,17 @@
   /* action bar: the only place a purchase actually happens, with targets
      big enough for a thumb */
   .arm-actbar {
-    display:flex; align-items:center; gap:1.5vmin; margin-top:1.4vmin;
-    width:100%; max-width:1100px; min-height: 34px;
+    /* pinned to the bottom of the screen: this is where every purchase,
+       reload and sale happens, so it never moves as the grid changes */
+    display:flex; align-items:center; gap:1.5vmin; margin-top:auto; margin-bottom:1.4vmin;
+    width:100%; max-width:1100px; min-height: 40px;
     border:1px solid #2c2f3e; background:#0e1015; border-radius:3px; padding:0.6vmin 1.4vmin;
     box-sizing:border-box;
   }
   .arm-info { flex:1; text-align:left; color:#c3ccd6; font-size: clamp(9px, 2vmin, 15px); }
   .arm-info.dim { color:#5f7d8c; letter-spacing:0.12em; }
   #ui .screen.armory .arm-actbar button {
-    min-height: 30px; padding: 0.6vmin 3vmin; font-size: clamp(10px, 2.1vmin, 16px);
+    min-height: 34px; padding: 0.8vmin 3.4vmin; font-size: clamp(11px, 2.2vmin, 17px);
   }
   #ui .screen.armory .arm-actbar button.rld { background:#ff9b2f; }
   #ui .screen.armory .arm-actbar button.sell { background:#4fdc6a; border-color:#a8f0ba; }
