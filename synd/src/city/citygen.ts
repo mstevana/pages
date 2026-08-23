@@ -12,7 +12,12 @@ export const T_WALL = 3;     // building perimeter (blocks movement, has height)
 export const T_BUILDING = 4; // building interior (roof visible, blocks movement)
 export const T_ISLAND = 5;   // roundabout center island (blocks cars, not peds)
 export const T_PARK = 6;     // small plaza/park (walkable)
-export const T_PIT = 7;      // sunken excavation/vent shaft (blocks movement, not bullets)
+export const T_PIT = 7;
+
+// The elevated deck, in storeys. 2.125 is exact in float32, so a height read
+// back out of City.structZ compares equal to it - which 64/30 would not.
+export const TRAIN_LEVEL = 2.125;
+const PLATFORM_HALF = 2;              // platform reaches this far each way      // sunken excavation/vent shaft (blocks movement, not bullets)
 
 // building facade styles
 export const NSTYLES = 6;
@@ -41,6 +46,15 @@ export interface Prop {
 export interface Skytrain {
   axis: "v" | "h";
   pos: number;               // x (axis v) or y (axis h) of the left/top lane tile
+  stops: number[];           // distance along the line of each station, in order
+}
+
+// A station: a stretch of platform beside the track with a stair down to the
+// street. `u` is its distance along the line, matching Skytrain.stops.
+export interface Station {
+  line: number;              // index into City.skytrains
+  u: number;
+  x: number; y: number;      // centre of the platform
 }
 
 export interface City {
@@ -53,11 +67,14 @@ export interface City {
   props: Prop[];             // trees, benches, food stalls
   crossing: Uint8Array;      // 0 none, 1 stripes along y, 2 stripes along x
   streetUsed: Uint8Array;    // 1 where a prop or a lamp already stands
+  stairTo: Int32Array;       // fire stairs: index of the roof tile this ground tile climbs to, else -1
+  structZ: Float32Array;     // height of the walkable surface above a tile (roof/platform), 0 = none
   lamps: { x: number; y: number }[];
   roundabouts: { x: number; y: number }[]; // centers
   vRoads: number[];          // x of left lane of each vertical avenue
   hRoads: number[];          // y of top lane of each horizontal avenue
   skytrains: Skytrain[];     // elevated rail lines running above avenues
+  stations: Station[];       // platforms on those lines, every other block
 }
 
 export function idx(x: number, y: number): number { return y * GRID + x; }
@@ -82,6 +99,29 @@ export function kerbAt(c: City, x: number, y: number): Kerb | null {
   const n = isRoad(c, x, y - 1), s = isRoad(c, x, y + 1);
   if (n || s) return { x, y, px: x + 0.5, py: y + 0.5 + (n ? BACK : -BACK), axis: 0 };
   return null;
+}
+
+// A tile carries at most two standing surfaces: the ground, and whatever roof
+// or platform is above it. Slot 0 is the street, slot 1 the structure.
+export function surfaceZ(c: City, x: number, y: number, slot: number): number {
+  if (slot === 0) return 0;
+  return inGrid(x, y) ? c.structZ[idx(x, y)] : 0;
+}
+export function walkableAt(c: City, x: number, y: number, slot: number): boolean {
+  if (!inGrid(x, y)) return false;
+  if (slot === 0) return isWalkable(c, x, y);
+  return c.structZ[idx(x, y)] > 0;
+}
+// a ground tile with a stair on it reaches the roof of the tile it returns
+export function stairRoof(c: City, x: number, y: number): number {
+  return inGrid(x, y) ? c.stairTo[idx(x, y)] : -1;
+}
+
+// street furniture already claims some pavement; a stair may not share it
+function streetUsedAt(props: Prop[], lamps: { x: number; y: number }[], x: number, y: number): boolean {
+  for (const p of props) if (p.x === x && p.y === y) return true;
+  for (const l of lamps) if (l.x === x && l.y === y) return true;
+  return false;
 }
 
 export function isRoad(c: City, x: number, y: number): boolean {
@@ -333,6 +373,49 @@ export function generateCity(seed: number): City {
     }
   }
 
+  // ---- 5b. Fire stairs: a run of external steps up the flank of some
+  // buildings, so agents can reach the roof ----
+  const stairTo = new Int32Array(GRID * GRID).fill(-1);
+  const structZ = new Float32Array(GRID * GRID);
+  {
+    // every building's roof is a surface; only some get a way up to it
+    for (let i = 0; i < GRID * GRID; i++) {
+      if (tiles[i] === T_BUILDING || tiles[i] === T_WALL) structZ[i] = height[i];
+    }
+    const seen = new Uint8Array(GRID * GRID);
+    for (let y = 1; y < GRID - 1; y++) {
+      for (let x = 1; x < GRID - 1; x++) {
+        const i = idx(x, y);
+        if (seen[i] || (tiles[i] !== T_WALL && tiles[i] !== T_BUILDING)) continue;
+        // flood the building, collecting the wall tiles that front open ground
+        const stack = [i];
+        seen[i] = 1;
+        const faces: { ground: number; wall: number }[] = [];
+        let stories = height[i];
+        while (stack.length > 0) {
+          const j = stack.pop()!;
+          const jx = j % GRID, jy = (j / GRID) | 0;
+          stories = Math.max(stories, height[j]);
+          for (let d = 0; d < 4; d++) {
+            const nx = jx + DX[d], ny = jy + DY[d];
+            if (!inGrid(nx, ny)) continue;
+            const n = idx(nx, ny);
+            const t = tiles[n];
+            if (t === T_WALL || t === T_BUILDING) {
+              if (!seen[n]) { seen[n] = 1; stack.push(n); }
+            } else if (tiles[j] === T_WALL && (t === T_GROUND || t === T_SIDEWALK) && !streetUsedAt(props, lamps, nx, ny)) {
+              faces.push({ ground: n, wall: j });
+            }
+          }
+        }
+        // a stair is worth having only where there is a climb to make
+        if (stories < 2 || faces.length === 0 || !rng.chance(0.45)) continue;
+        const f = faces[rng.int(0, faces.length - 1)];
+        stairTo[f.ground] = f.wall;
+      }
+    }
+  }
+
   // whatever the street furniture ended up occupying, so nothing else - a
   // parked car, say - tries to stand in the same place
   const streetUsed = new Uint8Array(GRID * GRID);
@@ -341,10 +424,54 @@ export function generateCity(seed: number): City {
 
   // ---- 6. Elevated skytrain lines above a couple of avenues ----
   const skytrains: Skytrain[] = [];
-  if (vRoads.length > 2) skytrains.push({ axis: "v", pos: vRoads[rng.int(1, vRoads.length - 2)] });
-  if (hRoads.length > 2 && rng.chance(0.75)) skytrains.push({ axis: "h", pos: hRoads[rng.int(1, hRoads.length - 2)] });
+  if (vRoads.length > 2) skytrains.push({ axis: "v", pos: vRoads[rng.int(1, vRoads.length - 2)], stops: [] });
+  if (hRoads.length > 2 && rng.chance(0.75)) skytrains.push({ axis: "h", pos: hRoads[rng.int(1, hRoads.length - 2)], stops: [] });
 
-  return { seed, tiles, height, bstyle, laneDir, decos, props, crossing, streetUsed, lamps, roundabouts, vRoads, hRoads, skytrains };
+  // ---- 6b. Stations every other block, with a platform over the avenue and
+  // a stair up from the pavement ----
+  const stations: Station[] = [];
+  for (let li = 0; li < skytrains.length; li++) {
+    const line = skytrains[li];
+    const cross = line.axis === "v" ? hRoads : vRoads;
+    for (let k = 0; k < cross.length; k += 2) {
+      const u = cross[k] + 1;                       // centred on the cross avenue
+      if (u < PLATFORM_HALF + 2 || u > GRID - PLATFORM_HALF - 3) continue;
+      const cx = line.axis === "v" ? line.pos + 1 : u;
+      const cy = line.axis === "v" ? u : line.pos + 1;
+      // the platform itself: a run of deck alongside the track
+      for (let d = -PLATFORM_HALF; d <= PLATFORM_HALF; d++) {
+        const px2 = line.axis === "v" ? cx : cx + d;
+        const py2 = line.axis === "v" ? cy + d : cy;
+        if (!inGrid(px2, py2)) continue;
+        structZ[idx(px2, py2)] = TRAIN_LEVEL;
+      }
+      // and a stair up to it from the nearest clear pavement
+      let stair = -1;
+      for (let r = 2; r <= 4 && stair < 0; r++) {
+        for (let d = -PLATFORM_HALF; d <= PLATFORM_HALF && stair < 0; d++) {
+          for (const sgn of [-1, 1]) {
+            const gx = line.axis === "v" ? cx + sgn * r : cx + d;
+            const gy = line.axis === "v" ? cy + d : cy + sgn * r;
+            if (!inGrid(gx, gy)) continue;
+            const gi = idx(gx, gy);
+            const t = tiles[gi];
+            if ((t !== T_GROUND && t !== T_SIDEWALK) || streetUsed[gi] || stairTo[gi] >= 0) continue;
+            // climb to the nearest platform tile
+            const tx = line.axis === "v" ? cx : gx;
+            const ty = line.axis === "v" ? gy : cy;
+            if (!inGrid(tx, ty) || structZ[idx(tx, ty)] !== TRAIN_LEVEL) continue;
+            stairTo[gi] = idx(tx, ty);
+            stair = gi;
+            break;
+          }
+        }
+      }
+      line.stops.push(u);
+      stations.push({ line: li, u, x: cx + 0.5, y: cy + 0.5 });
+    }
+  }
+
+  return { seed, tiles, height, bstyle, laneDir, decos, props, crossing, streetUsed, stairTo, structZ, lamps, roundabouts, vRoads, hRoads, skytrains, stations };
 }
 
 // Recursively split a block into lots separated by 4-tile alleys, then raise

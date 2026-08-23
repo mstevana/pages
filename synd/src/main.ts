@@ -1,8 +1,8 @@
 // SYND: bootstrap, game state machine, input, camera, and the main loop.
 
-import { City, T_BUILDING, T_ISLAND, T_PARK, T_PIT, T_ROAD, T_SIDEWALK, T_WALL, generateCity, idx } from "./city/citygen";
+import { City, TRAIN_LEVEL, T_BUILDING, T_ISLAND, T_PARK, T_PIT, T_ROAD, T_SIDEWALK, T_WALL, generateCity, idx } from "./city/citygen";
 import { AudioEngine } from "./engine/audio";
-import { GRID, PANEL_FRAC, TILE_H, TILE_W, WEATHERS, Weather, clamp, ctx2d, isRain, isoX, isoY, lerp, makeCanvas } from "./engine/util";
+import { GRID, PANEL_FRAC, STORY_H, TILE_H, TILE_W, WEATHERS, Weather, clamp, ctx2d, isRain, isoX, isoY, lerp, makeCanvas } from "./engine/util";
 import { ITEMS } from "./game/items";
 import { SaveData, clearSave, loadSave, newCampaign, writeSave } from "./game/save";
 import { MissionResult, ObjectiveKind, World } from "./game/world";
@@ -56,6 +56,28 @@ window.addEventListener("resize", resize);
 resize();
 
 // ---------- helpers ----------
+
+// Which standing surface does this tap land on? A roof at height h draws
+// h*STORY_H higher up the screen, which is the same place the ground tile
+// h*STORY_H/TILE_H further from the camera would draw - so walk the candidates
+// from the top down and take the first real roof.
+function pickSurface(sx: number, sy: number): { x: number; y: number; slot: number } {
+  const g0 = screenToWorld(sx, sy);
+  if (city && renderer) {
+    // every standing height the sector offers, tallest first
+    const levels: number[] = [];
+    for (let h = renderer.maxStories; h >= 1; h--) levels.push(h);
+    levels.push(TRAIN_LEVEL);
+    levels.sort((a, b) => b - a);
+    for (const h of levels) {
+      const k = (h * STORY_H) / TILE_H;
+      const rx = Math.floor(g0.x + k), ry = Math.floor(g0.y + k);
+      if (rx < 0 || ry < 0 || rx >= GRID || ry >= GRID) continue;
+      if (city.structZ[idx(rx, ry)] === h) return { x: rx + 0.5, y: ry + 0.5, slot: 1 };
+    }
+  }
+  return { x: g0.x, y: g0.y, slot: 0 };
+}
 
 function screenToWorld(sx: number, sy: number): { x: number; y: number } {
   const vx = panelW, vw = W - panelW;
@@ -318,7 +340,8 @@ function pointerEnd(ev: PointerEvent): void {
   // world tap
   const t = screenToWorld(p.x, p.y);
   if (mode === "shoot") {
-    w.cmdShoot(w.uiSelected, t.x, t.y);
+    const aim = pickSurface(p.x, p.y);
+    w.cmdShoot(w.uiSelected, aim.x, aim.y, aim.slot === 1 ? (city ? city.structZ[idx(aim.x | 0, aim.y | 0)] : 0) : 0);
     return;
   }
   // walk mode: pickups and cars take priority
@@ -330,6 +353,21 @@ function pointerEnd(ev: PointerEvent): void {
   if (bestDrop >= 0) { w.cmdPickup(w.uiSelected, bestDrop); followCam = true; return; }
 
   const lead = w.selectedAgents(w.uiSelected)[0];
+  // riding a train: tapping the platform gets you off, at a stop
+  if (lead && lead.trainId !== null) {
+    w.cmdExitTrain(w.uiSelected);
+    followCam = true;
+    return;
+  }
+  // a train standing at a platform can be boarded from beside it
+  for (const tr of w.trains) {
+    const at = w.trainPos(tr);
+    if ((at.x - t.x) ** 2 + (at.y - t.y) ** 2 < 3 * 3 && lead && Math.abs(lead.z - TRAIN_LEVEL) < 0.2) {
+      w.cmdBoardTrain(w.uiSelected, tr.id);
+      followCam = true;
+      return;
+    }
+  }
   for (const c of w.cars) {
     const dd = (c.x - t.x) ** 2 + (c.y - t.y) ** 2;
     if (dd < 1.6 * 1.6 && (c.state === "parked" || (c.state === "player" && lead && lead.carId === null))) {
@@ -347,7 +385,10 @@ function pointerEnd(ev: PointerEvent): void {
     followCam = true;
     return;
   }
-  w.cmdMove(w.uiSelected, t.x, t.y);
+  // a bare tap goes to whatever surface it landed on - street, or the roof
+  // of a building with a fire stair up its flank
+  const surf = pickSurface(p.x, p.y);
+  w.cmdMove(w.uiSelected, surf.x, surf.y, surf.slot);
   followCam = true;
 }
 canvas.addEventListener("pointerup", pointerEnd);
@@ -429,8 +470,16 @@ function frame(now: number): void {
         const car = world.cars.find((c) => c.id === lead.carId);
         if (car) { fx = car.x; fy = car.y; n = 1; }
       }
+      let fz = 0;
       if (n === 0) {
-        for (const a of world.selectedAgents(world.uiSelected)) { fx += a.x; fy += a.y; n++; }
+        for (const a of world.selectedAgents(world.uiSelected)) { fx += a.x; fy += a.y; fz += a.z; n++; }
+      }
+      // A squad up on a roof draws STORY_H per storey higher up the screen, so
+      // the focus point has to come the same distance toward the camera for it
+      // to stay centred.
+      if (n > 0 && fz > 0) {
+        const lift = (fz / n) * STORY_H / TILE_H;
+        fx -= lift * n; fy -= lift * n;
       }
       if (n > 0) {
         cam.x = lerp(cam.x, fx / n, Math.min(1, dt * 4));

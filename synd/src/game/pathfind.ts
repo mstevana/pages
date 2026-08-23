@@ -1,9 +1,11 @@
 // Grid pathfinding: 8-way A* for pedestrians, lane-directed A* for cars.
 
-import { City, DBIT, DX, DY, T_ROAD, idx, inGrid, isWalkable } from "../city/citygen";
+import { City, DBIT, DX, DY, T_ROAD, idx, inGrid, isWalkable, surfaceZ, walkableAt } from "../city/citygen";
 import { GRID } from "../engine/util";
 
 const MAX_EXPAND = 60000;
+const CELLS = GRID * GRID;      // one slot's worth of search space
+export interface Step { x: number; y: number; z: number }
 
 class Heap {
   keys: number[] = [];
@@ -44,6 +46,9 @@ class Heap {
 
 export class Pathfinder {
   private g = new Float32Array(GRID * GRID);
+  private g2 = new Float32Array(GRID * GRID * 2);
+  private came2 = new Int32Array(GRID * GRID * 2);
+  private stamp2 = new Int32Array(GRID * GRID * 2);
   private came = new Int32Array(GRID * GRID);
   private stamp = new Int32Array(GRID * GRID);
   private gen = 0;
@@ -110,6 +115,86 @@ export class Pathfinder {
     }
     path.reverse();
     return this.smooth(path);
+  }
+
+  // Level-aware pedestrian path. Nodes are (tile, slot): slot 0 is the street,
+  // slot 1 the roof or platform above it, and a fire stair is the rung between
+  // them. Returns waypoints carrying the height to walk them at.
+  climbPath(sx: number, sy: number, sslot: number, tx: number, ty: number, tslot: number): Step[] | null {
+    const c = this.city;
+    sx |= 0; sy |= 0; tx |= 0; ty |= 0;
+    if (!walkableAt(c, sx, sy, sslot) || !walkableAt(c, tx, ty, tslot)) return null;
+    const si = idx(sx, sy) + sslot * CELLS, ti = idx(tx, ty) + tslot * CELLS;
+    if (si === ti) return [{ x: tx + 0.5, y: ty + 0.5, z: surfaceZ(c, tx, ty, tslot) }];
+
+    this.gen++;
+    const { g2, came2, stamp2, heap } = this;
+    heap.clear();
+    g2[si] = 0; stamp2[si] = this.gen; came2[si] = -1;
+    heap.push(this.hDist(sx, sy, tx, ty), si);
+    let expanded = 0, found = false;
+    while (heap.size > 0 && expanded < MAX_EXPAND) {
+      const cur = heap.pop();
+      if (cur === ti) { found = true; break; }
+      expanded++;
+      const slot = cur >= CELLS ? 1 : 0;
+      const cell = cur - slot * CELLS;
+      const cx = cell % GRID, cy = (cell / GRID) | 0;
+      const cz = surfaceZ(c, cx, cy, slot);
+      // step across this level
+      for (let dyy = -1; dyy <= 1; dyy++) {
+        for (let dxx = -1; dxx <= 1; dxx++) {
+          if (dxx === 0 && dyy === 0) continue;
+          const nx = cx + dxx, ny = cy + dyy;
+          if (!walkableAt(c, nx, ny, slot)) continue;
+          if (surfaceZ(c, nx, ny, slot) !== cz) continue;   // no stepping between roofs
+          if (dxx !== 0 && dyy !== 0
+              && (!walkableAt(c, cx + dxx, cy, slot) || !walkableAt(c, cx, cy + dyy, slot))) continue;
+          const ni = idx(nx, ny) + slot * CELLS;
+          const step = dxx !== 0 && dyy !== 0 ? 1.4142 : 1;
+          this.relax(cur, ni, step, nx, ny, tx, ty);
+        }
+      }
+      // and the rung between them, wherever a stair stands
+      if (slot === 0) {
+        const roof = c.stairTo[cell];
+        if (roof >= 0) {
+          const rx = roof % GRID, ry = (roof / GRID) | 0;
+          this.relax(cur, roof + CELLS, 1 + c.structZ[roof] * 1.5, rx, ry, tx, ty);
+        }
+      } else {
+        for (let dyy = -1; dyy <= 1; dyy++) {
+          for (let dxx = -1; dxx <= 1; dxx++) {
+            const gx = cx + dxx, gy = cy + dyy;
+            if (!inGrid(gx, gy)) continue;
+            const gi = idx(gx, gy);
+            if (c.stairTo[gi] !== cell) continue;
+            this.relax(cur, gi, 1 + cz * 1.5, gx, gy, tx, ty);
+          }
+        }
+      }
+    }
+    if (!found && stamp2[ti] !== this.gen) return null;
+    const out: Step[] = [];
+    let cur = ti;
+    while (cur !== -1 && out.length < 4096) {
+      const slot = cur >= CELLS ? 1 : 0;
+      const cell = cur - slot * CELLS;
+      const px = cell % GRID, py = (cell / GRID) | 0;
+      out.push({ x: px + 0.5, y: py + 0.5, z: surfaceZ(c, px, py, slot) });
+      cur = came2[cur];
+      if (cur !== -1 && stamp2[cur] !== this.gen) break;
+    }
+    out.reverse();
+    return out;
+  }
+
+  private relax(cur: number, ni: number, cost: number, nx: number, ny: number, tx: number, ty: number): void {
+    const ng = this.g2[cur] + cost;
+    if (this.stamp2[ni] !== this.gen || ng < this.g2[ni]) {
+      this.stamp2[ni] = this.gen; this.g2[ni] = ng; this.came2[ni] = cur;
+      this.heap.push(ng + this.hDist(nx, ny, tx, ty), ni);
+    }
   }
 
   // Car path along lane directions. Falls back to undirected road A* if the
@@ -200,6 +285,23 @@ export class Pathfinder {
   losWalk(x0: number, y0: number, x1: number, y1: number): boolean {
     return this.los(x0, y0, x1, y1, (x, y) => isWalkable(this.city, x, y));
   }
+  // Line of sight for a shot between two heights. A building only blocks where
+  // it is taller than the shot passing over it, so an agent on a roof can fire
+  // across the ones below - and the street can fire back.
+  losShot3(x0: number, y0: number, z0: number, x1: number, y1: number, z1: number): boolean {
+    const c = this.city;
+    const steps = Math.ceil(Math.max(Math.abs(x1 - x0), Math.abs(y1 - y0)) * 2) + 1;
+    for (let i = 0; i <= steps; i++) {
+      const t = i / steps;
+      const x = Math.floor(x0 + (x1 - x0) * t), y = Math.floor(y0 + (y1 - y0) * t);
+      if (!inGrid(x, y)) return false;
+      const tt = c.tiles[idx(x, y)];
+      if (tt !== 3 && tt !== 4) continue;              // WALL / BUILDING
+      if (c.height[idx(x, y)] > z0 + (z1 - z0) * t + 0.1) return false;
+    }
+    return true;
+  }
+
   // Line of sight for bullets: blocked only by buildings/walls.
   losShot(x0: number, y0: number, x1: number, y1: number): boolean {
     const c = this.city;

@@ -2,7 +2,7 @@
 // blocks correctly occlude people and cars behind them. Also draws the static
 // street furniture (fences, doors, pit rails) and the elevated skytrain.
 
-import { City, Deco, Prop, T_BUILDING, T_GROUND, T_ISLAND, T_PARK, T_PIT, T_ROAD, T_SIDEWALK, T_WALL, D_S, D_W, idx, inGrid, isRoad } from "../city/citygen";
+import { City, Deco, Prop, Station, TRAIN_LEVEL, T_BUILDING, T_GROUND, T_ISLAND, T_PARK, T_PIT, T_ROAD, T_SIDEWALK, T_WALL, D_S, D_W, idx, inGrid, isRoad } from "../city/citygen";
 import { GRID, STORY_H, TILE_H, TILE_W, isNight, isRain, isoX, isoY } from "../engine/util";
 import { PeopleAtlas, FW, FH } from "../sprites/people";
 import { BENCH_H, BENCH_W, STALL_H, STALL_W, TREE_H, TREE_W } from "../sprites/props";
@@ -17,15 +17,16 @@ export interface Camera {
   zoom: number;
 }
 
-const TRAIN_ELEV = 64;   // px above ground at zoom 1
+const TRAIN_ELEV = TRAIN_LEVEL * STORY_H;   // px above ground at zoom 1
 const SECTION_LIP = 5;   // px of wall left standing above a sectioned floor
-const TRAIN_LEVEL = TRAIN_ELEV / STORY_H;  // the elevated line, in storeys
 const PED_SCALE = 1.2;   // people vs the 30px story: roughly one story tall
 
 interface Entity {
   s: number;    // depth key = tx + ty
   pri: number;  // within-bucket order: 0 elevated structure, 1 ground, 2 trains
-  kind: "ped" | "car" | "drop" | "lamp" | "fence" | "pylon" | "deck" | "train" | "prop";
+  kind: "ped" | "car" | "drop" | "lamp" | "fence" | "pylon" | "deck" | "train" | "prop" | "stair" | "station";
+  stair?: { x: number; y: number; rx: number; ry: number; h: number };
+  station?: Station;
   ped?: Ped;
   car?: Car;
   drop?: { x: number; y: number; item: { type: string } };
@@ -52,6 +53,7 @@ export class Renderer {
   private decks: DeckTile[] = [];
   private buildingId: Int32Array; // connected-component label per WALL/BUILDING tile
   readonly maxStories: number;    // ceiling of the tallest building in the sector
+  private stairs: { x: number; y: number; rx: number; ry: number; h: number }[] = [];
   // emissive sources gathered while drawing, blended additively later
   private lampGlows: { x: number; y: number; gy: number; phase: number }[] = [];
   private emissives: { x: number; y: number; r: number; col: [number, number, number]; i: number }[] = [];
@@ -89,6 +91,7 @@ export class Renderer {
       if ((t[i] === T_WALL || t[i] === T_BUILDING) && city.height[i] > top) top = city.height[i];
     }
     this.maxStories = top;
+    this.buildStairs();
 
     for (const d of city.decos) {
       const k = idx(d.x, d.y);
@@ -124,6 +127,19 @@ export class Renderer {
           if (walkOpen(x + 1, y) && t[idx(x + 1, y)] === T_SIDEWALK) this.fences.push({ x, y, edge: 2, hazard: false });
         }
       }
+    }
+  }
+
+  private buildStairs(): void {
+    const c = this.city;
+    for (let i = 0; i < c.stairTo.length; i++) {
+      if (c.stairTo[i] < 0) continue;
+      const r = c.stairTo[i];
+      this.stairs.push({
+        x: i % GRID, y: (i / GRID) | 0,
+        rx: r % GRID, ry: (r / GRID) | 0,
+        h: c.structZ[r],
+      });
     }
   }
 
@@ -241,11 +257,25 @@ export class Renderer {
     };
     for (const p of world.peds) {
       if (p.carId !== null || p.x < x0 || p.x > x1 || p.y < y0 || p.y > y1) continue;
+      // Height needs no depth trickery: entities flush after the columns of
+      // their own bucket, so a ped on a roof already lands on top of the
+      // building it stands on, and nearer columns still occlude it.
       push({ s: Math.floor(p.x) + Math.floor(p.y), pri: 1, kind: "ped", ped: p, x: p.x, y: p.y });
     }
     for (const c of world.cars) {
       if (c.x < x0 || c.x > x1 || c.y < y0 || c.y > y1) continue;
       push({ s: Math.floor(c.x) + Math.floor(c.y), pri: 1, kind: "car", car: c, x: c.x, y: c.y });
+    }
+    for (const st of this.city.stations) {
+      if (sectioned && TRAIN_LEVEL >= section) break;
+      if (st.x < x0 - 3 || st.x > x1 + 3 || st.y < y0 - 3 || st.y > y1 + 3) continue;
+      push({ s: Math.floor(st.x) + Math.floor(st.y), pri: 0, kind: "station", x: st.x, y: st.y, station: st });
+    }
+    for (const fs of this.stairs) {
+      if (fs.x < x0 || fs.x > x1 || fs.y < y0 || fs.y > y1) continue;
+      if (sectioned && section <= 0) continue;
+      push({ s: Math.max(fs.x + fs.y, fs.rx + fs.ry), pri: 1, kind: "stair",
+             x: fs.x + 0.5, y: fs.y + 0.5, stair: fs });
     }
     for (const l of this.city.lamps) {
       if (l.x < x0 || l.x > x1 || l.y < y0 || l.y > y1) continue;
@@ -265,21 +295,20 @@ export class Renderer {
       if (d.pylon) push({ s: d.x + d.y, pri: 0, kind: "pylon", x: d.x + 1, y: d.y + 1, deckAxis: d.axis });
       push({ s: d.x + d.y, pri: 0, kind: "deck", x: d.x + 1, y: d.y + (d.axis === "v" ? 0.5 : 1), deckAxis: d.axis });
     }
-    // trains: two per line, opposite directions, deterministic from time
-    for (const line of (sectioned && TRAIN_LEVEL >= section ? [] : this.city.skytrains)) {
-      const segLen = 1.9, nSeg = 4, span = GRID + nSeg * segLen + 8;
-      for (let tr = 0; tr < 2; tr++) {
-        const speed = 14 + tr * 3;
-        const dirSign = tr === 0 ? 1 : -1;
-        const head = ((time * speed + tr * 217) % span);
+    // trains: real ones now, running the timetable the world keeps for them
+    if (!(sectioned && TRAIN_LEVEL >= section)) {
+      const segLen = 1.9, nSeg = 4;
+      for (const t of world.trains) {
+        const line = this.city.skytrains[t.line];
         for (let k = 0; k < nSeg; k++) {
-          const u = dirSign > 0 ? head - k * segLen : GRID - (head - k * segLen);
+          const u = t.u - t.dir * k * segLen;
           if (u < -2 || u > GRID + 2) continue;
-          const wx = line.axis === "v" ? line.pos + 1 : u;
-          const wy = line.axis === "v" ? u : line.pos + 1;
+          const wx = line.axis === "v" ? line.pos + 1.5 : u + 0.5;
+          const wy = line.axis === "v" ? u + 0.5 : line.pos + 1.5;
           if (wx < x0 || wx > x1 || wy < y0 || wy > y1) continue;
-          const angle = line.axis === "v" ? Math.atan2(dirSign, 0) : Math.atan2(0, dirSign);
-          push({ s: Math.floor(wx) + Math.floor(wy), pri: 2, kind: "train", x: wx, y: wy, train: { wx, wy, angle, head: k === 0 } });
+          const angle = line.axis === "v" ? Math.atan2(t.dir, 0) : Math.atan2(0, t.dir);
+          push({ s: Math.floor(wx) + Math.floor(wy), pri: 2, kind: "train", x: wx, y: wy,
+                 train: { wx, wy, angle, head: k === 0 } });
         }
       }
     }
@@ -552,7 +581,7 @@ export class Renderer {
 
     // ---- effects ----
     for (const pr of world.projectiles) {
-      const sx = SX(pr.x, pr.y), sy = SY(pr.x, pr.y) - 6 * z;
+      const sx = SX(pr.x, pr.y), sy = SY(pr.x, pr.y) - (6 + pr.z * STORY_H) * z;
       g.fillStyle = ITEMS[pr.type]?.color ?? "#ffe";
       g.fillRect(sx - z, sy - z, 2 * z, 2 * z);
     }
@@ -564,8 +593,8 @@ export class Renderer {
       g.lineWidth = b.w * z;
       g.lineCap = "round";
       g.beginPath();
-      g.moveTo(SX(b.x0, b.y0), SY(b.x0, b.y0) - 6 * z);
-      g.lineTo(SX(b.x1, b.y1), SY(b.x1, b.y1) - 6 * z);
+      g.moveTo(SX(b.x0, b.y0), SY(b.x0, b.y0) - (6 + b.z0 * STORY_H) * z);
+      g.lineTo(SX(b.x1, b.y1), SY(b.x1, b.y1) - (6 + b.z1 * STORY_H) * z);
       g.stroke();
       g.globalAlpha = 1;
     }
@@ -844,6 +873,14 @@ export class Renderer {
     g: CanvasRenderingContext2D, e: Entity, world: World, art: TileArt, people: PeopleAtlas,
     SX: (x: number, y: number) => number, SY: (x: number, y: number) => number, z: number, time: number
   ): void {
+    if (e.kind === "station" && e.station) {
+      this.drawStation(g, e.station, SX, SY, z, art);
+      return;
+    }
+    if (e.kind === "stair" && e.stair) {
+      this.drawFireStair(g, e.stair, SX, SY, z);
+      return;
+    }
     if (e.kind === "lamp") {
       const sx = SX(e.x, e.y), sy = SY(e.x, e.y);
       // mirror the lamp so its arm reaches over the street it lights
@@ -908,6 +945,123 @@ export class Renderer {
     }
     if (e.kind === "ped" && e.ped) {
       this.drawPed(g, e.ped, world, people, SX, SY, z, time);
+    }
+  }
+
+  // A fire escape bolted to the flank: a zig-zag of landings and flights from
+  // the pavement to the parapet, drawn along the tile edge it shares with the
+  // building so it reads as attached rather than free-standing.
+  // A platform: the deck widened either side of the track, railed along both
+  // edges and lit, so a stop is legible from street level.
+  private drawStation(
+    g: CanvasRenderingContext2D, st: Station,
+    SX: (x: number, y: number) => number, SY: (x: number, y: number) => number, z: number, art: TileArt
+  ): void {
+    const line = this.city.skytrains[st.line];
+    const along = line.axis === "v" ? { x: 0, y: 1 } : { x: 1, y: 0 };
+    const half = 2.5;
+    const lift = TRAIN_ELEV * z;
+    const P = (du: number, dv: number) => {
+      const wx = st.x + along.x * du + along.y * dv;
+      const wy = st.y + along.y * du + along.x * dv;
+      return [SX(wx, wy), SY(wx, wy) - lift] as [number, number];
+    };
+    // the deck slab
+    const c1 = P(-half, -0.8), c2 = P(half, -0.8), c3 = P(half, 0.8), c4 = P(-half, 0.8);
+    g.fillStyle = art.night ? "#2b3038" : "#4a515c";
+    g.beginPath();
+    g.moveTo(c1[0], c1[1]); g.lineTo(c2[0], c2[1]); g.lineTo(c3[0], c3[1]); g.lineTo(c4[0], c4[1]);
+    g.closePath(); g.fill();
+    g.strokeStyle = art.night ? "#4d5765" : "#6d7683";
+    g.lineWidth = Math.max(1, z);
+    g.stroke();
+    // railings down both long edges
+    for (const dv of [-0.8, 0.8]) {
+      g.strokeStyle = art.night ? "#5a6472" : "#818b99";
+      g.lineWidth = Math.max(1, 0.9 * z);
+      const a = P(-half, dv), b = P(half, dv);
+      g.beginPath();
+      g.moveTo(a[0], a[1] - 7 * z); g.lineTo(b[0], b[1] - 7 * z);
+      g.stroke();
+      for (let u = -half; u <= half; u += 1.25) {
+        const q = P(u, dv);
+        g.beginPath(); g.moveTo(q[0], q[1]); g.lineTo(q[0], q[1] - 7 * z); g.stroke();
+      }
+    }
+    // a lamp at each end, and the glow it throws
+    for (const u of [-half + 0.4, half - 0.4]) {
+      const q = P(u, 0);
+      g.fillStyle = art.night ? "#ffe9a8" : "#d8d2a0";
+      g.fillRect(q[0] - 1.6 * z, q[1] - 13 * z, 3.2 * z, 2.4 * z);
+      this.glow(q[0], q[1] - 12 * z, 13 * z, "#ffe9a8", art.night ? 0.5 : 0.12);
+    }
+  }
+
+  private drawFireStair(
+    g: CanvasRenderingContext2D, fs: { x: number; y: number; rx: number; ry: number; h: number },
+    SX: (x: number, y: number) => number, SY: (x: number, y: number) => number, z: number
+  ): void {
+    // the edge the stair is bolted to, and the two ends of that edge
+    const ex = (fs.x + fs.rx) / 2 + 0.5, ey = (fs.y + fs.ry) / 2 + 0.5;
+    const ax = fs.rx - fs.x, ay = fs.ry - fs.y;        // toward the wall
+    const px = -ay * 0.45, py = ax * 0.45;             // along the wall face
+    const out = 0.16;                                  // how far it stands proud
+    const L = { x: ex + px - ax * out, y: ey + py - ay * out };
+    const R = { x: ex - px - ax * out, y: ey - py - ay * out };
+    const lx = SX(L.x, L.y), rx = SX(R.x, R.y);
+    const lyG = SY(L.x, L.y), ryG = SY(R.x, R.y);
+    const up = STORY_H * z;
+    const lw = Math.max(1.2, 1.1 * z);
+
+    // the two stringers running the full height
+    g.strokeStyle = "#20242b";
+    g.lineWidth = lw * 2.2;
+    g.beginPath();
+    g.moveTo(lx, lyG); g.lineTo(lx, lyG - fs.h * up);
+    g.moveTo(rx, ryG); g.lineTo(rx, ryG - fs.h * up);
+    g.stroke();
+    g.strokeStyle = "#6f7887";
+    g.lineWidth = lw;
+    g.beginPath();
+    g.moveTo(lx, lyG); g.lineTo(lx, lyG - fs.h * up);
+    g.moveTo(rx, ryG); g.lineTo(rx, ryG - fs.h * up);
+    g.stroke();
+
+    for (let lvl = 0; lvl < fs.h; lvl++) {
+      // a flight, reversing at every landing
+      const even = lvl % 2 === 0;
+      const x0 = even ? lx : rx, y0 = (even ? lyG : ryG) - lvl * up;
+      const x1 = even ? rx : lx, y1 = (even ? ryG : lyG) - (lvl + 1) * up;
+      g.strokeStyle = "#20242b";
+      g.lineWidth = lw * 3.4;
+      g.beginPath(); g.moveTo(x0, y0); g.lineTo(x1, y1); g.stroke();
+      g.strokeStyle = "#8d97a6";
+      g.lineWidth = lw * 2.2;
+      g.beginPath(); g.moveTo(x0, y0); g.lineTo(x1, y1); g.stroke();
+      g.strokeStyle = "#3b424d";                       // treads
+      g.lineWidth = Math.max(1, lw * 0.7);
+      g.beginPath();
+      for (let t = 0.12; t < 0.95; t += 0.16) {
+        const mx = x0 + (x1 - x0) * t, my = y0 + (y1 - y0) * t;
+        g.moveTo(mx - 2.6 * z, my); g.lineTo(mx + 2.6 * z, my);
+      }
+      g.stroke();
+      // the landing at the top of it
+      const ly = lyG - (lvl + 1) * up, ry2 = ryG - (lvl + 1) * up;
+      g.strokeStyle = "#20242b";
+      g.lineWidth = lw * 3;
+      g.beginPath(); g.moveTo(lx, ly); g.lineTo(rx, ry2); g.stroke();
+      g.strokeStyle = "#9aa4b3";
+      g.lineWidth = lw * 1.6;
+      g.beginPath(); g.moveTo(lx, ly); g.lineTo(rx, ry2); g.stroke();
+      // its handrail
+      g.strokeStyle = "#5d6675";
+      g.lineWidth = lw;
+      g.beginPath();
+      g.moveTo(lx, ly - 6 * z); g.lineTo(rx, ry2 - 6 * z);
+      g.moveTo(lx, ly); g.lineTo(lx, ly - 6 * z);
+      g.moveTo(rx, ry2); g.lineTo(rx, ry2 - 6 * z);
+      g.stroke();
     }
   }
 
@@ -1471,7 +1625,7 @@ export class Renderer {
     } else if (p.path && (p.state === "walk" || p.state === "follow")) {
       col = 1 + (Math.floor(p.animT * (2.4 * p.speed)) % 4);
     }
-    const sx = SX(p.x, p.y), sy = SY(p.x, p.y);
+    const sx = SX(p.x, p.y), sy = SY(p.x, p.y) - p.z * STORY_H * z;
     const s = PED_SCALE * z;
     if (p.state !== "dead") {
       g.fillStyle = "rgba(0,0,0,0.4)";

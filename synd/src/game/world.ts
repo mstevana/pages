@@ -1,7 +1,7 @@
 // The live mission world: pedestrians, cops, enemy agents, cars, projectiles,
 // dropped items, objectives, and all the AI that drives them.
 
-import { City, Kerb, T_ROAD, kerbAt, DBIT, DX, DY, idx, inGrid, isRoad, isWalkable } from "../city/citygen";
+import { City, Kerb, Station, TRAIN_LEVEL, T_ROAD, kerbAt, DBIT, DX, DY, idx, inGrid, isRoad, isWalkable } from "../city/citygen";
 import { AudioEngine } from "../engine/audio";
 import { Rng } from "../engine/rng";
 import { GRID, Weather, clamp, dist, dist2 } from "../engine/util";
@@ -20,10 +20,11 @@ export interface Ped {
   team: Team;
   model: number;          // civ model index; unused for cop/enemy/player
   x: number; y: number;
+  z: number;              // standing height in storeys: 0 street, >0 roof or platform
   dir: number;            // 0..7 facing
   hp: number; maxHp: number;
   state: PedState;
-  path: { x: number; y: number }[] | null;
+  path: { x: number; y: number; z?: number }[] | null;
   pathIdx: number;
   speed: number;
   animT: number;
@@ -40,11 +41,12 @@ export interface Ped {
   sel: number;             // selected inventory index, -1 none
   shieldOn: boolean;
   shield: number;          // shield charge if shieldOn
-  fireAt: { x: number; y: number; until: number } | null;
+  fireAt: { x: number; y: number; z: number; until: number } | null;
   dropOrder: { invIdx: number; x: number; y: number } | null;
   pickOrder: number | null; // drop id
   giveOrder: { invIdx: number; targetId: number } | null; // hand item to a squadmate
   carId: number | null;     // inside car
+  trainId: number | null;   // riding an elevated train
   boardOrder: number | null;
   // vip / persuasion
   vip: boolean;
@@ -71,15 +73,15 @@ export interface Car {
 }
 
 export interface Projectile {
-  x: number; y: number;
-  vx: number; vy: number;
+  x: number; y: number; z: number;
+  vx: number; vy: number; vz: number;
   dmg: number;
   team: Team;
   life: number;
   type: ItemType;
 }
 
-export interface Beam { x0: number; y0: number; x1: number; y1: number; life: number; maxLife: number; color: string; w: number; }
+export interface Beam { x0: number; y0: number; z0: number; x1: number; y1: number; z1: number; life: number; maxLife: number; color: string; w: number; }
 export interface Drop { id: number; x: number; y: number; item: ItemStack; }
 export type FxKind = "blood" | "fire" | "smoke" | "spark" | "debris";
 export interface Particle {
@@ -104,6 +106,20 @@ export interface Mission {
   failReason: string;
 }
 
+// A train on an elevated line. It runs between stations, stands for a while at
+// each, and turns round at the end of the line - it never leaves the map.
+export interface Train {
+  id: number;
+  line: number;
+  u: number;             // distance along the line, in tiles
+  dir: 1 | -1;
+  speed: number;
+  state: "run" | "dwell";
+  dwell: number;         // seconds left standing
+  stop: number;          // index into the line's stop list it is heading for
+  occupants: number[];
+}
+
 export interface MissionResult {
   success: boolean;
   reason: string;
@@ -116,6 +132,9 @@ const CIV_LIMIT = 90;
 const CAR_LIMIT = 7;
 const BLAST_R = 3.5;      // a wrecked car hurts everyone inside this radius
 const KERB_GAP = 3;       // clear length a car needs to itself at the kerb
+const TRAIN_DWELL = 5;    // seconds a train stands at each platform
+const TRAIN_CRUISE = 11;  // tiles a second at line speed
+const TRAIN_ACCEL = 6;    // tiles a second squared, braking and pulling away
 const WARD_CLEAR = 1.5;      // how wide a berth every gun gives the escorted civilian
 const WARD_STANDOFF = 0.8;   // how close to the mark he may stand and still be clear
 const COP_LIMIT = 4;
@@ -129,6 +148,7 @@ export class World {
   rng: Rng;
   peds: Ped[] = [];
   cars: Car[] = [];
+  trains: Train[] = [];
   projectiles: Projectile[] = [];
   beams: Beam[] = [];
   drops: Drop[] = [];
@@ -186,6 +206,16 @@ export class World {
     // the city into blocks, and one officer is assigned to every two of them
     const blocks = (city.vRoads.length + 1) * (city.hRoads.length + 1);
     this.policeTotal = Math.max(4, Math.round(blocks / 2));
+
+    // one train per line, standing at the first platform ready to leave
+    for (let li = 0; li < city.skytrains.length; li++) {
+      const stops = city.skytrains[li].stops;
+      if (stops.length < 2) continue;
+      this.trains.push({
+        id: nextId++, line: li, u: stops[0], dir: 1, speed: 0,
+        state: "dwell", dwell: TRAIN_DWELL, stop: 1, occupants: [],
+      });
+    }
 
     // a car or two per block starts the mission standing at the kerb, on
     // whichever stretch of pavement the block happens to offer
@@ -293,13 +323,13 @@ export class World {
 
   private makePed(team: Team, x: number, y: number): Ped {
     return {
-      id: nextId++, team, model: 0, x, y, dir: 0,
+      id: nextId++, team, model: 0, x, y, z: 0, dir: 0,
       hp: 30, maxHp: 30, state: "idle", path: null, pathIdx: 0,
       speed: 2.2, animT: 0, deadT: 0, thinkT: this.rng.float(0, 2),
       fleeFrom: null, fireCd: 0, aimT: 0, aimTargetId: null, weapon: null,
       agentIdx: -1, inv: [], sel: -1, shieldOn: false, shield: 0,
       fireAt: null, dropOrder: null, pickOrder: null, giveOrder: null, carId: null, boardOrder: null,
-      vip: false, persuaded: false, followId: null, hostileCop: false,
+      trainId: null, vip: false, persuaded: false, followId: null, hostileCop: false,
     };
   }
 
@@ -416,7 +446,10 @@ export class World {
     return this.agents.filter((a, i) => sel[i] && a.hp > 0);
   }
 
-  cmdMove(sel: boolean[], tx: number, ty: number): void {
+  // which standing surface is an agent on right now?
+  private slotOf(p: Ped): number { return p.z > 0 ? 1 : 0; }
+
+  cmdMove(sel: boolean[], tx: number, ty: number, tslot = 0): void {
     const group = this.selectedAgents(sel);
     let n = 0;
     let anyMoved = false;
@@ -431,7 +464,13 @@ export class World {
         continue;
       }
       const ox = (n % 2) * 1.4 - 0.7, oy = Math.floor(n / 2) * 1.4 - 0.7;
-      const p = this.pf.walkPath(a.x, a.y, tx + ox, ty + oy) ?? this.pf.walkPath(a.x, a.y, tx, ty);
+      const here = this.slotOf(a);
+      // Off the street, or heading for a roof, the squad climbs; on the flat
+      // it keeps the cheaper two-dimensional search.
+      const p = (tslot === 1 || here === 1)
+        ? (this.pf.climbPath(a.x, a.y, here, tx + ox, ty + oy, tslot)
+           ?? this.pf.climbPath(a.x, a.y, here, tx, ty, tslot))
+        : (this.pf.walkPath(a.x, a.y, tx + ox, ty + oy) ?? this.pf.walkPath(a.x, a.y, tx, ty));
       if (p) { a.path = p; a.pathIdx = 0; a.state = "walk"; anyMoved = true; }
       n++;
     }
@@ -444,10 +483,10 @@ export class World {
     this.pings.push({ x, y, life: 1.1, maxLife: 1.1, ok });
   }
 
-  cmdShoot(sel: boolean[], tx: number, ty: number): void {
+  cmdShoot(sel: boolean[], tx: number, ty: number, tz = 0): void {
     for (const a of this.selectedAgents(sel)) {
       if (a.carId !== null) continue;
-      a.fireAt = { x: tx, y: ty, until: this.time + 0.6 };
+      a.fireAt = { x: tx, y: ty, z: tz, until: this.time + 0.6 };
     }
   }
 
@@ -601,6 +640,45 @@ export class World {
     return car;
   }
 
+  // Step aboard a train standing at a platform. There is no driving it: it
+  // keeps its own timetable, and the only choice is where to get off.
+  cmdBoardTrain(sel: boolean[], trainId: number): void {
+    const t = this.trains.find((q) => q.id === trainId);
+    if (!t || t.state !== "dwell") { this.notify("TRAIN IN MOTION"); return; }
+    const at = this.trainPos(t);
+    for (const a of this.selectedAgents(sel)) {
+      if (a.carId !== null || a.trainId !== null) continue;
+      if (Math.abs(a.z - TRAIN_LEVEL) > 0.2) { this.notify("REACH THE PLATFORM FIRST"); continue; }
+      if (dist2(a.x, a.y, at.x, at.y) > 3.5 * 3.5) continue;
+      t.occupants.push(a.id);
+      a.trainId = t.id;
+      a.path = null;
+      this.audio.carStart();
+    }
+  }
+
+  cmdExitTrain(sel: boolean[]): void {
+    for (const a of this.selectedAgents(sel)) {
+      if (a.trainId === null) continue;
+      const t = this.trains.find((q) => q.id === a.trainId);
+      if (!t) { a.trainId = null; continue; }
+      if (t.state !== "dwell") { this.notify("WAIT FOR THE NEXT STOP"); continue; }
+      t.occupants = t.occupants.filter((o) => o !== a.id);
+      a.trainId = null;
+      // step out onto the platform beside the train
+      const line = this.city.skytrains[t.line];
+      const at = this.trainPos(t);
+      for (let d = 1; d <= 3; d++) {
+        const px = line.axis === "v" ? at.x : at.x + d - 2;
+        const py = line.axis === "v" ? at.y + d - 2 : at.y;
+        if (inGrid(px | 0, py | 0) && this.city.structZ[idx(px | 0, py | 0)] === TRAIN_LEVEL) {
+          a.x = (px | 0) + 0.5; a.y = (py | 0) + 0.5; a.z = TRAIN_LEVEL;
+          break;
+        }
+      }
+    }
+  }
+
   cmdExitCar(sel: boolean[]): void {
     for (const a of this.selectedAgents(sel)) {
       if (a.carId === null) continue;
@@ -665,15 +743,17 @@ export class World {
 
   private fireWeapon(
     shooter: Ped, item: ItemStack | null, wType: ItemType, tx: number, ty: number,
-    spreadMult = 1, rangeMult = 1
+    spreadMult = 1, rangeMult = 1, tz = 0
   ): void {
     const def = ITEMS[wType];
     if (item && item.charge <= 0) return;
     if (item) item.charge--;
     shooter.fireCd = def.cooldown;
-    const dx = tx - shooter.x, dy = ty - shooter.y;
-    const len = Math.max(0.001, Math.sqrt(dx * dx + dy * dy));
+    const dx = tx - shooter.x, dy = ty - shooter.y, dz = tz - shooter.z;
+    const flat = Math.max(0.001, Math.sqrt(dx * dx + dy * dy));
+    const len = Math.max(0.001, Math.sqrt(dx * dx + dy * dy + dz * dz));
     const baseA = Math.atan2(dy, dx);
+    const pitch = dz / len;                    // storeys gained per tile of travel
     this.audio.shoot(wType);
     this.flashes.push({ x: shooter.x, y: shooter.y, life: 0.06, maxLife: 0.06, r: 10, ring: false });
     this.alertArea(shooter.x, shooter.y, 14, shooter);
@@ -681,16 +761,21 @@ export class World {
       // hitscan beam, pierces peds, stops at walls
       const maxR = def.range * rangeMult;
       let ex = shooter.x + (dx / len) * maxR, ey = shooter.y + (dy / len) * maxR;
+      let ez = shooter.z + pitch * maxR;
       const steps = Math.ceil(maxR * 3);
       for (let i = 1; i <= steps; i++) {
-        const px = shooter.x + (dx / len) * (maxR * i / steps);
-        const py = shooter.y + (dy / len) * (maxR * i / steps);
-        if (!this.pf.losShot(shooter.x, shooter.y, px, py)) { ex = px; ey = py; break; }
+        const f = maxR * i / steps;
+        const px = shooter.x + (dx / len) * f;
+        const py = shooter.y + (dy / len) * f;
+        const pz = shooter.z + pitch * f;
+        if (!this.pf.losShot3(shooter.x, shooter.y, shooter.z, px, py, pz)) { ex = px; ey = py; ez = pz; break; }
       }
-      this.beams.push({ x0: shooter.x, y0: shooter.y, x1: ex, y1: ey, life: 0.12, maxLife: 0.12, color: def.color, w: 2 });
+      this.beams.push({ x0: shooter.x, y0: shooter.y, z0: shooter.z, x1: ex, y1: ey, z1: ez,
+                        life: 0.12, maxLife: 0.12, color: def.color, w: 2 });
       for (const p of this.peds) {
         if (p === shooter || p.state === "dead" || p.carId !== null) continue;
-        if (this.pointSegDist(p.x, p.y, shooter.x, shooter.y, ex, ey) < 0.5) {
+        if (this.pointSegDist(p.x, p.y, shooter.x, shooter.y, ex, ey) < 0.5
+            && Math.abs(p.z - this.zAlong(shooter, p.x, p.y, ex, ey, ez)) < 0.8) {
           this.damagePed(p, def.damage, shooter);
         }
       }
@@ -701,12 +786,22 @@ export class World {
     }
     for (let i = 0; i < def.pellets; i++) {
       const a = baseA + (this.rng.next() - 0.5) * def.spread * spreadMult * 2;
+      const flatSpeed = def.speed * (flat / len);
       this.projectiles.push({
-        x: shooter.x, y: shooter.y,
-        vx: Math.cos(a) * def.speed, vy: Math.sin(a) * def.speed,
+        x: shooter.x, y: shooter.y, z: shooter.z,
+        vx: Math.cos(a) * flatSpeed, vy: Math.sin(a) * flatSpeed, vz: pitch * def.speed,
         dmg: def.damage, team: shooter.team, life: (def.range * rangeMult) / def.speed, type: wType,
       });
     }
+  }
+
+  // the height of a shot where it passes closest to (px,py)
+  private zAlong(shooter: Ped, px: number, py: number, ex: number, ey: number, ez: number): number {
+    const dx = ex - shooter.x, dy = ey - shooter.y;
+    const l2 = dx * dx + dy * dy;
+    if (l2 < 1e-6) return shooter.z;
+    const t = clamp(((px - shooter.x) * dx + (py - shooter.y) * dy) / l2, 0, 1);
+    return shooter.z + (ez - shooter.z) * t;
   }
 
   private pointSegDist(px: number, py: number, x0: number, y0: number, x1: number, y1: number): number {
@@ -801,6 +896,13 @@ export class World {
           && (o.state === "player" || (c.state !== "player" && o.id < c.id))) near = o;
     }
     return near;
+  }
+
+  // Range and accuracy are reckoned in three dimensions, a storey of height
+  // costing exactly what a tile of ground does.
+  private dist3(ax: number, ay: number, az: number, bx: number, by: number, bz: number): number {
+    const dx = bx - ax, dy = by - ay, dz = bz - az;
+    return Math.sqrt(dx * dx + dy * dy + dz * dz);
   }
 
   // Would this shot go through a car? A car standing between the shooter and
@@ -1013,6 +1115,7 @@ export class World {
 
     this.updateMission(dt, viewRadius);
     for (const p of this.peds) this.updatePed(p, dt);
+    for (const t of this.trains) this.updateTrain(t, dt);
     for (const c of this.cars) this.updateCar(c, dt);
     this.separateCars(dt);
     this.cars = this.cars.filter((c) => c.waitT < 1e8);
@@ -1106,10 +1209,14 @@ export class World {
     }
     const wp = p.path[p.pathIdx];
     const dx = wp.x - p.x, dy = wp.y - p.y;
+    const wz = wp.z ?? 0;
+    const dz = wz - p.z;
     const d = Math.sqrt(dx * dx + dy * dy);
-    const step = p.speed * dt * (p.state === "flee" ? 1.15 : 1);
+    // A rung of stairs is one tile across but several storeys up: it is walked
+    // at the pace of the climb, so an agent visibly works its way up the flank.
+    const step = p.speed * dt * (p.state === "flee" ? 1.15 : 1) / (1 + Math.abs(dz) * 1.5);
     if (d < Math.max(0.12, step)) {
-      p.x = wp.x; p.y = wp.y;
+      p.x = wp.x; p.y = wp.y; p.z = wz;
       p.pathIdx++;
       if (p.pathIdx >= p.path.length) {
         p.path = null;
@@ -1120,6 +1227,7 @@ export class World {
     }
     p.x += (dx / d) * step;
     p.y += (dy / d) * step;
+    if (dz !== 0) p.z += dz * Math.min(1, step / d);   // rise in step with the walk
     p.dir = this.dirOf(dx, dy);
   }
 
@@ -1260,14 +1368,17 @@ export class World {
         if (t.state === "dead") continue;
         const hostile = t.team === "enemy" || (t.team === "cop" && (t.hostileCop || this.mission.kind === "assassinate"));
         if (!hostile) continue;
-        const d2 = dist2(t.x, t.y, p.x, p.y);
-        if (d2 >= bd || !this.pf.losShot(p.x, p.y, t.x, t.y)) continue;
+        // height counts toward the reach exactly as ground distance does
+        const d3 = this.dist3(p.x, p.y, p.z, t.x, t.y, t.z);
+        const d2 = d3 * d3;
+        if (d2 >= bd || !this.pf.losShot3(p.x, p.y, p.z, t.x, t.y, t.z)) continue;
         if (this.carInLine(p, t.x, t.y)) continue;      // not through a car
         if (this.wardInLine(p, t.x, t.y)) continue;  // nor past the escortee
         best = t; bd = d2;
       }
       if (best) {
-        this.fireWeapon(p, weapon, weapon.type, best.x + this.rng.float(-0.2, 0.2), best.y + this.rng.float(-0.2, 0.2));
+        this.fireWeapon(p, weapon, weapon.type, best.x + this.rng.float(-0.2, 0.2),
+                        best.y + this.rng.float(-0.2, 0.2), 1, 1, best.z);
         if (!p.path) p.dir = this.dirOf(best.x - p.x, best.y - p.y);
       }
     }
@@ -1323,14 +1434,15 @@ export class World {
       const reach = ITEMS.gun.range * NPC_RANGE_MULT;
       for (const a of this.agents) {
         if (a.hp <= 0 || a.carId !== null) continue;
-        const d2 = dist2(a.x, a.y, p.x, p.y);
+        const d3 = this.dist3(p.x, p.y, p.z, a.x, a.y, a.z);
+        const d2 = d3 * d3;
         if (d2 >= bd) continue;
         if (this.wardInLine(p, a.x, a.y)) continue;  // never down the escortee's line
         best = a; bd = d2;
       }
       if (best) {
         const d = Math.sqrt(bd);
-        const canShoot = d < reach && this.pf.losShot(p.x, p.y, best.x, best.y)
+        const canShoot = d < reach && this.pf.losShot3(p.x, p.y, p.z, best.x, best.y, best.z)
           && !this.carInLine(p, best.x, best.y);
         if (!canShoot) p.aimTargetId = null; // breaking the shot forfeits the draw
         // the escortee crossing the line stays the trigger's business: it must
@@ -1343,7 +1455,8 @@ export class World {
           if (p.aimTargetId !== best.id) { p.aimTargetId = best.id; p.aimT = this.rng.float(NPC_AIM_MIN, NPC_AIM_MAX); }
           if (p.aimT <= 0 && p.fireCd <= 0 && safe) {
             const j = 0.7 * NPC_SPREAD_MULT;
-            this.fireWeapon(p, null, "gun", best.x + this.rng.float(-j, j), best.y + this.rng.float(-j, j), NPC_SPREAD_MULT, NPC_RANGE_MULT);
+            this.fireWeapon(p, null, "gun", best.x + this.rng.float(-j, j), best.y + this.rng.float(-j, j),
+                            NPC_SPREAD_MULT, NPC_RANGE_MULT, best.z);
             p.fireCd *= NPC_FIRE_MULT;
           }
           return;
@@ -1377,7 +1490,8 @@ export class World {
     let blocked: Ped | null = null; let bbd = 1e9;
     for (const a of this.agents) {
       if (a.hp <= 0 || a.carId !== null) continue;
-      const d2 = dist2(a.x, a.y, p.x, p.y);
+      const d3 = this.dist3(p.x, p.y, p.z, a.x, a.y, a.z);
+      const d2 = d3 * d3;
       if (this.wardInLine(p, a.x, a.y)) {
         if (d2 < bbd) { blocked = a; bbd = d2; }   // still worth closing on
         continue;
@@ -1388,7 +1502,7 @@ export class World {
     if (!best) return;
     const d = Math.sqrt(bd);
     const hunting = m.kind === "killall" ? d < 55 || this.rng.chance(0.001) : true;
-    const canShoot = d < reach && this.pf.losShot(p.x, p.y, best.x, best.y)
+    const canShoot = d < reach && this.pf.losShot3(p.x, p.y, p.z, best.x, best.y, best.z)
       && !this.carInLine(p, best.x, best.y);
     if (!canShoot) p.aimTargetId = null; // breaking the shot forfeits the draw
     // the escortee crossing the line stays the trigger's business: it must not
@@ -1401,7 +1515,8 @@ export class World {
       if (p.aimTargetId !== best.id) { p.aimTargetId = best.id; p.aimT = this.rng.float(NPC_AIM_MIN, NPC_AIM_MAX); }
       if (p.aimT <= 0 && p.fireCd <= 0 && safe) {
         const j = 0.5 * NPC_SPREAD_MULT;
-        this.fireWeapon(p, null, p.weapon ?? "gun", best.x + this.rng.float(-j, j), best.y + this.rng.float(-j, j), NPC_SPREAD_MULT, NPC_RANGE_MULT);
+        this.fireWeapon(p, null, p.weapon ?? "gun", best.x + this.rng.float(-j, j), best.y + this.rng.float(-j, j),
+                        NPC_SPREAD_MULT, NPC_RANGE_MULT, best.z);
         p.fireCd *= NPC_FIRE_MULT * 0.75; // rival agents shoot faster than cops
       }
     } else if (hunting && p.thinkT <= 0) {
@@ -1439,6 +1554,59 @@ export class World {
           if (bits !== 0 && !(bits & DBIT[car.dir])) continue;
           car.x = nx; car.y = ny;
         }
+      }
+    }
+  }
+
+  // where a train is in the world right now
+  trainPos(t: Train): { x: number; y: number } {
+    const line = this.city.skytrains[t.line];
+    return line.axis === "v"
+      ? { x: line.pos + 1.5, y: t.u + 0.5 }
+      : { x: t.u + 0.5, y: line.pos + 1.5 };
+  }
+
+  private updateTrain(t: Train, dt: number): void {
+    const stops = this.city.skytrains[t.line].stops;
+    if (stops.length < 2) return;
+    if (t.state === "dwell") {
+      t.speed = 0;
+      t.dwell -= dt;
+      if (t.dwell <= 0) {
+        // pull away toward the next platform, turning back at the end of the line
+        let next = t.stop;
+        if (next < 0 || next >= stops.length) { t.dir = (t.dir === 1 ? -1 : 1) as 1 | -1; next = t.stop + t.dir; }
+        if (next < 0 || next >= stops.length) return;
+        t.stop = next;
+        t.state = "run";
+      }
+    } else {
+      const target = stops[t.stop];
+      const left = Math.abs(target - t.u);
+      // brake in time to come to rest at the platform
+      const brake = (t.speed * t.speed) / (2 * TRAIN_ACCEL) + 0.4;
+      t.speed = left <= brake
+        ? Math.max(1.2, t.speed - TRAIN_ACCEL * dt)
+        : Math.min(TRAIN_CRUISE, t.speed + TRAIN_ACCEL * dt);
+      const step = t.speed * dt;
+      if (left <= step) {
+        t.u = target;
+        t.speed = 0;
+        t.state = "dwell";
+        t.dwell = TRAIN_DWELL;
+        const ahead = t.stop + t.dir;
+        if (ahead < 0 || ahead >= stops.length) t.dir = (t.dir === 1 ? -1 : 1) as 1 | -1;
+        t.stop = Math.max(0, Math.min(stops.length - 1, t.stop + t.dir));
+      } else {
+        t.u += Math.sign(target - t.u) * step;
+      }
+    }
+    // carry the passengers
+    if (t.occupants.length > 0) {
+      const at = this.trainPos(t);
+      for (const oid of t.occupants) {
+        const rider = this.peds.find((q) => q.id === oid);
+        if (rider) { rider.x = at.x; rider.y = at.y; rider.z = TRAIN_LEVEL; rider.path = null; }
       }
     }
   }
@@ -1582,16 +1750,18 @@ export class World {
 
   private updateProjectiles(dt: number): void {
     for (const pr of this.projectiles) {
-      const tx0 = pr.x, ty0 = pr.y;
+      const tx0 = pr.x, ty0 = pr.y, tz0 = pr.z;
       const steps = Math.ceil(Math.max(1, (Math.abs(pr.vx) + Math.abs(pr.vy)) * dt * 2));
       for (let s = 0; s < steps && pr.life > 0; s++) {
         const sdt = dt / steps;
-        pr.x += pr.vx * sdt; pr.y += pr.vy * sdt;
+        pr.x += pr.vx * sdt; pr.y += pr.vy * sdt; pr.z += pr.vz * sdt;
         pr.life -= sdt;
         const txi = Math.floor(pr.x), tyi = Math.floor(pr.y);
         if (!inGrid(txi, tyi)) { pr.life = 0; break; }
+        if (pr.z < -0.2) { pr.life = 0; break; }        // spent itself in the road
         const t = this.city.tiles[idx(txi, tyi)];
-        if (t === 3 || t === 4) { // wall / building
+        // a building only stops a round travelling at or below its roofline
+        if ((t === 3 || t === 4) && this.city.height[idx(txi, tyi)] > pr.z + 0.1) {
           pr.life = 0;
           this.fx(pr.x, pr.y, 0, 0, 0.15, "#ccc", 1, "spark");
           break;
@@ -1601,7 +1771,7 @@ export class World {
           if (p.state === "dead" || p.team === pr.team || p.carId !== null) continue;
           if (pr.team === "cop" && p.team === "civ") continue;
           if (pr.team === "enemy" && (p.team === "cop")) continue;
-          if (dist2(p.x, p.y, pr.x, pr.y) < 0.35) {
+          if (dist2(p.x, p.y, pr.x, pr.y) < 0.35 && Math.abs(p.z - pr.z) < 0.8) {
             if (pr.type === "gauss") { this.explode(pr.x, pr.y, this.pedByTeamNear(pr.team, pr.x, pr.y)); }
             else this.damagePed(p, pr.dmg, this.pedByTeamNear(pr.team, pr.x, pr.y));
             pr.life = 0;
@@ -1612,7 +1782,7 @@ export class World {
         // hit cars
         for (const car of this.cars) {
           if (car.state === "wreck") continue;
-          if (dist2(car.x, car.y, pr.x, pr.y) < 0.8) {
+          if (dist2(car.x, car.y, pr.x, pr.y) < 0.8 && Math.abs(pr.z) < 0.8) {
             if (pr.type === "gauss") this.explode(pr.x, pr.y, this.pedByTeamNear(pr.team, pr.x, pr.y));
             this.damageCar(car, pr.dmg, null);
             // riders take the hit too
@@ -1627,7 +1797,8 @@ export class World {
       }
       if (pr.type === "gauss" && (pr.x !== tx0 || pr.y !== ty0)) {
         // the slug leaves a bright wake that fades in a fraction of a second
-        this.beams.push({ x0: tx0, y0: ty0, x1: pr.x, y1: pr.y, life: 0.28, maxLife: 0.28, color: "#9fe8ff", w: 2.6 });
+        this.beams.push({ x0: tx0, y0: ty0, z0: tz0, x1: pr.x, y1: pr.y, z1: pr.z,
+                          life: 0.28, maxLife: 0.28, color: "#9fe8ff", w: 2.6 });
       }
     }
     this.projectiles = this.projectiles.filter((p) => p.life > 0);
