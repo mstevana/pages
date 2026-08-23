@@ -215,11 +215,8 @@ export function generateCity(seed: number): City {
   const hEdges = [-3, ...hRoads, GRID + 1];
   for (let bi = 0; bi < vEdges.length - 1; bi++) {
     for (let bj = 0; bj < hEdges.length - 1; bj++) {
-      // inset past the sidewalks AND past the roundabout rings that wrap every
-      // intersection - otherwise each block's corners are clipped and the
-      // whole corner lot has to be abandoned
-      const x0 = vEdges[bi] + 4, x1 = vEdges[bi + 1] - 3;
-      const y0 = hEdges[bj] + 4, y1 = hEdges[bj + 1] - 3;
+      const x0 = vEdges[bi] + 3, x1 = vEdges[bi + 1] - 2;      // inside the sidewalks
+      const y0 = hEdges[bj] + 3, y1 = hEdges[bj + 1] - 2;
       if (x1 - x0 < MIN_LOT - 1 || y1 - y0 < MIN_LOT - 1) continue;
       fillBlock(tiles, height, bstyle, rng, Math.max(1, x0), Math.max(1, y0), Math.min(GRID - 2, x1), Math.min(GRID - 2, y1));
     }
@@ -288,20 +285,13 @@ function fillBlock(tiles: Uint8Array, height: Uint8Array, bstyle: Uint8Array, rn
   const w = x1 - x0 + 1, h = y1 - y0 + 1;
   if (w < MIN_LOT || h < MIN_LOT) return;
 
-  // is the whole lot still untouched ground? roads and roundabouts carved
-  // earlier cut into blocks, and those tiles must never be built over
-  let clear = true;
-  for (let y = y0; y <= y1 && clear; y++) {
-    for (let x = x0; x <= x1; x++) {
-      if (tiles[idx(x, y)] !== T_GROUND) { clear = false; break; }
-    }
-  }
-
-  // Oversized lots are split; so are obstructed ones, so that whatever part
-  // of them IS clear still gets built on instead of the block going empty.
+  // Oversized lots are subdivided; anything else is built as-is and simply
+  // carved around whatever already occupies part of it (a roundabout corner,
+  // a stub road). Carving only ever removes tiles, so buildings can never end
+  // up closer together than the 4-tile alleys already guarantee.
   const span = MIN_LOT * 2 + ALLEY;
   const canX = w >= span, canY = h >= span;
-  if ((!clear || w > MAX_LOT || h > MAX_LOT) && (canX || canY)) {
+  if ((w > MAX_LOT || h > MAX_LOT) && (canX || canY)) {
     // cut near the middle: lopsided cuts leave skinny lots whose 4-tile
     // alleys would swallow most of the block
     const halve = (len: number): number => {
@@ -321,14 +311,24 @@ function fillBlock(tiles: Uint8Array, height: Uint8Array, bstyle: Uint8Array, rn
     }
     return;
   }
-  if (!clear) return; // too small to work around what is in the way
+
+  // how much of the lot survives the carve?
+  let free = 0;
+  for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
+    if (tiles[idx(x, y)] === T_GROUND) free++;
+  }
+  if (free < 6) return; // barely anything left - leave it as open ground
 
   // lot: park / sunken pit / building
   if (rng.chance(0.18) && w >= 5 && h >= 5) {
-    for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) tiles[idx(x, y)] = T_PARK;
+    for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
+      if (tiles[idx(x, y)] === T_GROUND) tiles[idx(x, y)] = T_PARK;
+    }
     // some plazas hold a sunken pit (vent shaft / excavation) with a walkable rim
     if (rng.chance(0.35) && w >= 7 && h >= 7) {
-      for (let y = y0 + 2; y <= y1 - 2; y++) for (let x = x0 + 2; x <= x1 - 2; x++) tiles[idx(x, y)] = T_PIT;
+      for (let y = y0 + 2; y <= y1 - 2; y++) for (let x = x0 + 2; x <= x1 - 2; x++) {
+        if (tiles[idx(x, y)] === T_PARK) tiles[idx(x, y)] = T_PIT;
+      }
     }
     return;
   }
@@ -344,12 +344,26 @@ function fillBlock(tiles: Uint8Array, height: Uint8Array, bstyle: Uint8Array, rn
   else style = rng.pick([S_CONCRETE, S_INDUSTRIAL, S_COMMERCIAL, S_BALCONY, S_BALCONY, S_COLUMNS]);
   const hue = rng.int(0, 2);
   const packed = (hue << 4) | style;
+
+  // raise the shell on every free tile...
   for (let y = y0; y <= y1; y++) {
     for (let x = x0; x <= x1; x++) {
-      const edge = x === x0 || x === x1 || y === y0 || y === y1;
-      tiles[idx(x, y)] = edge ? T_WALL : T_BUILDING;
+      if (tiles[idx(x, y)] !== T_GROUND) continue;
+      tiles[idx(x, y)] = T_BUILDING;
       height[idx(x, y)] = stories;
       bstyle[idx(x, y)] = packed;
+    }
+  }
+  // ...then turn anything facing the outside world - including the carved
+  // edge - into a perimeter wall
+  for (let y = y0; y <= y1; y++) {
+    for (let x = x0; x <= x1; x++) {
+      const i = idx(x, y);
+      if (tiles[i] !== T_BUILDING) continue;
+      for (let d = 0; d < 4; d++) {
+        const t = tiles[idx(x + DX[d], y + DY[d])];
+        if (t !== T_BUILDING && t !== T_WALL) { tiles[i] = T_WALL; break; }
+      }
     }
   }
 }

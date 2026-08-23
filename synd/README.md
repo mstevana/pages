@@ -51,6 +51,10 @@ offline after the first load.
   pistol, an uzi, a shotgun, a minigun barrel cluster, a laser emitter, a
   coiled gauss rifle, a shield crest, a red-cross medkit, a persuadertron
   dish — each under a pulsing beacon so it stays visible behind buildings.
+- **Traffic**: civilian drivers yield — a car will stop and wait for anyone
+  on foot in its lane, agent or citizen. A car *you* are driving will not:
+  at speed it runs down whoever is in front of it (your own agents excepted),
+  and killing bystanders costs you credits.
 - **Cars**: shoot a passing car to force it to stop — its pilot bails out and
   flees. Board it with your squad, then tap anywhere on the road network to
   drive there. Every lane is strictly one-way: traffic turns and U-turns only at the

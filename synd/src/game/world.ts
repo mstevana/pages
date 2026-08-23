@@ -680,6 +680,42 @@ export class World {
     return null;
   }
 
+  // anyone on foot standing in this car's path (NPC traffic yields to them)
+  private pedAhead(c: Car, range: number): Ped | null {
+    const fx = Math.cos(c.angle), fy = Math.sin(c.angle);
+    for (const p of this.peds) {
+      if (p.state === "dead" || p.carId !== null) continue;
+      const relx = p.x - c.x, rely = p.y - c.y;
+      const along = relx * fx + rely * fy;
+      if (along < 0.2 || along > range) continue;
+      if (Math.abs(relx * -fy + rely * fx) < 0.85) return p;
+    }
+    return null;
+  }
+
+  // a car driven at speed runs down whoever is under its nose
+  private runDownPeds(c: Car): void {
+    if (c.speed < 2.5) return;
+    const driver = c.occupants.length > 0
+      ? this.peds.find((q) => q.id === c.occupants[0]) ?? null
+      : null;
+    const fx = Math.cos(c.angle), fy = Math.sin(c.angle);
+    for (const p of this.peds) {
+      if (p.state === "dead" || p.carId !== null) continue;
+      if (p.team === "player") continue; // never our own agents
+      const relx = p.x - c.x, rely = p.y - c.y;
+      const along = relx * fx + rely * fy;
+      if (Math.abs(along) > 1.25) continue;
+      if (Math.abs(relx * -fy + rely * fx) > 0.6) continue;
+      this.audio.hit();
+      this.damagePed(p, 500, driver);
+      for (let i = 0; i < 6; i++) {
+        const a = this.rng.float(0, Math.PI * 2), s = this.rng.float(1, 4);
+        this.particles.push({ x: p.x, y: p.y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life: 0.5, maxLife: 0.5, color: "#a01020", size: 1 });
+      }
+    }
+  }
+
   damageCar(c: Car, dmg: number, from: Ped | null): void {
     if (c.state === "wreck") return;
     c.hp -= dmg;
@@ -1149,6 +1185,7 @@ export class World {
       return;
     }
     if (c.state === "player") {
+      this.runDownPeds(c); // a coasting car still kills, path or no path
       if (!c.path || c.pathIdx >= c.path.length) { c.speed = Math.max(0, c.speed - dt * 10); return; }
       const blocker = this.carBlocked(c, 2.0 + c.speed * 0.7);
       if (blocker) {
@@ -1185,7 +1222,8 @@ export class World {
     // AI traffic: follow lane field tile to tile. Cars never overlap: a
     // blocked car stops dead and waits (for the player too); if it has
     // waited a long time out of sight, it is quietly recycled.
-    const blocker = this.carBlocked(c, 2.4 + c.speed * 0.7);
+    const blocker = this.carBlocked(c, 2.4 + c.speed * 0.7)
+      || this.pedAhead(c, 1.8 + c.speed * 0.55);
     if (blocker) {
       c.speed = Math.max(0, c.speed - dt * 16);
       c.waitT += dt;
