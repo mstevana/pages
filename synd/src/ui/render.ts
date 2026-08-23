@@ -322,14 +322,38 @@ export class Renderer {
         const sx = SX(tx, ty) - tw / 2;
         const syTop = SY(tx, ty) - stories * STORY_H * z;
         if (sx > vx + vw || sx + tw < vx || syTop > vy + vh || syTop + th + stories * STORY_H * z < vy) continue;
-        // a building occluding an agent hides everything above its ground floor
+        // A building occluding an agent is sliced open above its ground floor.
+        // Cropping the tall sprite used to cut straight across its sloped wall
+        // faces, leaving a staircase silhouette; instead the column is redrawn
+        // as a genuine one-storey block and capped with a flat section slab.
         const cut = stories > 1 && cutIds.has(this.buildingId[i]);
-        if (cut && t === T_BUILDING) continue; // interior columns vanish entirely
+        const gy = SY(tx, ty);
+        const diamond = (dy: number) => {
+          g.beginPath();
+          g.moveTo(sx + tw / 2, dy);
+          g.lineTo(sx + tw, dy + th / 2);
+          g.lineTo(sx + tw / 2, dy + th);
+          g.lineTo(sx, dy + th / 2);
+          g.closePath();
+        };
         if (cut) {
-          // perimeter walls keep just their ground-floor shell
-          const cutSrcY = TILE_H / 2 + (stories - 1) * STORY_H + 4;
-          const rest = block.height - cutSrcY;
-          g.drawImage(block, 0, cutSrcY, TILE_W, rest, sx, syTop + cutSrcY * z, tw, rest * z);
+          if (t === T_BUILDING) {
+            // interior: the exposed floor of the room
+            g.fillStyle = art.cutFloor;
+            diamond(gy);
+            g.fill();
+            continue;
+          }
+          const one = art.block(1, packed & 15, packed >> 4, (tx * 31 + ty * 17) % 3);
+          const syOne = gy - STORY_H * z;
+          g.drawImage(one, sx, syOne, tw, th + STORY_H * z);
+          // flat slab where the storeys above were cut away
+          g.fillStyle = art.cutCap;
+          diamond(syOne);
+          g.fill();
+          g.strokeStyle = "rgba(0,0,0,0.35)";
+          g.lineWidth = 1;
+          g.stroke();
         } else {
           g.drawImage(block, sx, syTop, tw, th + stories * STORY_H * z);
         }
@@ -368,7 +392,7 @@ export class Renderer {
               this.drawDoor(g, d, sx, groundY, tw, z, art);
               continue;
             }
-            if (cut) continue; // its floor is cut away
+            if (cut && d.level > 0) continue; // that storey was cut away
             const level = Math.min(d.level, stories - 1);
             const img = d.kind === "videowall"
               ? art.ads[d.variant % art.ads.length][(adFrame + d.variant) % 4]

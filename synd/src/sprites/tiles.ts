@@ -30,6 +30,8 @@ export interface TileArt {
   stalls: HTMLCanvasElement[];
   crossV: HTMLCanvasElement;     // zebra stripes on a north-south road
   crossH: HTMLCanvasElement;     // zebra stripes on an east-west road
+  cutCap: string;                // slab colour where a cut-away wall is sliced
+  cutFloor: string;              // interior floor revealed by the cut
   adColors: string[];            // dominant color per ad variant (neon = variant+3)
   ambient: number;               // 0..1 light level
   night: boolean;
@@ -599,6 +601,8 @@ export function buildTileArt(seed: number, weather: Weather): TileArt {
     weather, ground, sidewalk, road, roadDashV, roadDashH, roadPuddle,
     park, island, block, pitFloor, pitWallNW, pitWallNE, lamp, ads, neons,
     billboards, shops, trees, benches, stalls, crossV, crossH,
+    cutCap: tint("#7c818c", ambient, blue),
+    cutFloor: tint("#31343d", ambient, blue),
     adColors: adCols, ambient, night,
   };
 }
