@@ -1,6 +1,6 @@
 // SYND: bootstrap, game state machine, input, camera, and the main loop.
 
-import { City, TRAIN_LEVEL, T_BUILDING, T_ISLAND, T_PARK, T_PIT, T_ROAD, T_SIDEWALK, T_WALL, generateCity, idx } from "./city/citygen";
+import { City, TRAIN_LEVEL, surfaceNear, T_BUILDING, T_ISLAND, T_PARK, T_PIT, T_ROAD, T_SIDEWALK, T_WALL, generateCity, idx } from "./city/citygen";
 import { AudioEngine } from "./engine/audio";
 import { GRID, PANEL_FRAC, STORY_H, TILE_H, TILE_W, WEATHERS, Weather, clamp, ctx2d, isRain, isoX, isoY, lerp, makeCanvas } from "./engine/util";
 import { ITEMS } from "./game/items";
@@ -33,6 +33,7 @@ let people: PeopleAtlas | null = null;
 let renderer: Renderer | null = null;
 let slider: SectionSlider | null = null;
 let sectionLevel = Infinity;   // Infinity = whole city, no cross-section
+let levelHeights: number[] = [];   // every distinct standing height, tallest first
 let panel: Panel | null = null;
 let mapBase: HTMLCanvasElement | null = null;
 let endTimer = 0;
@@ -57,26 +58,27 @@ resize();
 
 // ---------- helpers ----------
 
-// Which standing surface does this tap land on? A roof at height h draws
+// Which standing surface does this tap land on? A surface at height h draws
 // h*STORY_H higher up the screen, which is the same place the ground tile
-// h*STORY_H/TILE_H further from the camera would draw - so walk the candidates
-// from the top down and take the first real roof.
-function pickSurface(sx: number, sy: number): { x: number; y: number; slot: number } {
+// h*STORY_H/TILE_H further from the camera would draw - so walk the sector's
+// heights from the top down and take the first that is really there. Nothing
+// above the section plane can be picked, which is what lets the slider choose
+// the level you are commanding on.
+function pickSurface(sx: number, sy: number): { x: number; y: number; surf: number } {
   const g0 = screenToWorld(sx, sy);
-  if (city && renderer) {
-    // every standing height the sector offers, tallest first
-    const levels: number[] = [];
-    for (let h = renderer.maxStories; h >= 1; h--) levels.push(h);
-    levels.push(TRAIN_LEVEL);
-    levels.sort((a, b) => b - a);
-    for (const h of levels) {
+  if (city) {
+    const L = city.levels;
+    for (const h of levelHeights) {
+      if (h > sectionLevel + 0.01) continue;
       const k = (h * STORY_H) / TILE_H;
       const rx = Math.floor(g0.x + k), ry = Math.floor(g0.y + k);
       if (rx < 0 || ry < 0 || rx >= GRID || ry >= GRID) continue;
-      if (city.structZ[idx(rx, ry)] === h) return { x: rx + 0.5, y: ry + 0.5, slot: 1 };
+      const s = surfaceNear(city, rx, ry, h, 0.01);
+      if (s >= 0 && L.z[s] !== 0) return { x: rx + 0.5, y: ry + 0.5, surf: s };
     }
   }
-  return { x: g0.x, y: g0.y, slot: 0 };
+  const gs = city ? surfaceNear(city, g0.x | 0, g0.y | 0, 0, 0.01) : -1;
+  return { x: g0.x, y: g0.y, surf: gs };
 }
 
 function screenToWorld(sx: number, sy: number): { x: number; y: number } {
@@ -134,8 +136,12 @@ function buildMission(): void {
   world = new World(city, p.weather, save, audio, p.kind, save.mission);
   world.notify = (msg) => notices.push({ text: msg, t: 4 });
   renderer = new Renderer(city);
-  slider = new SectionSlider(renderer.maxStories);
+  slider = new SectionSlider(renderer.maxStories, renderer.minLevel);
   sectionLevel = renderer.maxStories;
+  // the heights a tap may land on, gathered once from the level model
+  const seen = new Set<number>();
+  for (let s2 = 0; s2 < city.levels.count; s2++) seen.add(city.levels.z[s2]);
+  levelHeights = [...seen].sort((a, b) => b - a);
   panel = new Panel(panelW, H);
   mapBase = buildMapBase(city);
   cam.x = world.camX; cam.y = world.camY;
@@ -341,7 +347,7 @@ function pointerEnd(ev: PointerEvent): void {
   const t = screenToWorld(p.x, p.y);
   if (mode === "shoot") {
     const aim = pickSurface(p.x, p.y);
-    w.cmdShoot(w.uiSelected, aim.x, aim.y, aim.slot === 1 ? (city ? city.structZ[idx(aim.x | 0, aim.y | 0)] : 0) : 0);
+    w.cmdShoot(w.uiSelected, aim.x, aim.y, aim.surf >= 0 && city ? city.levels.z[aim.surf] : 0);
     return;
   }
   // walk mode: pickups and cars take priority
@@ -388,7 +394,7 @@ function pointerEnd(ev: PointerEvent): void {
   // a bare tap goes to whatever surface it landed on - street, or the roof
   // of a building with a fire stair up its flank
   const surf = pickSurface(p.x, p.y);
-  w.cmdMove(w.uiSelected, surf.x, surf.y, surf.slot);
+  w.cmdMove(w.uiSelected, surf.x, surf.y, surf.surf);
   followCam = true;
 }
 canvas.addEventListener("pointerup", pointerEnd);
@@ -549,6 +555,7 @@ requestAnimationFrame(frame);
   setFollow(v: boolean) { followCam = v; },
   screenToWorld,
   get section() { return sectionLevel; },
+  get sliderMin() { return slider ? slider.minLevel : 0; },
 };
 
 // ---------- boot ----------

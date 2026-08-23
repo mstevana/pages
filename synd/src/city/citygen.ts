@@ -17,6 +17,9 @@ export const T_PIT = 7;
 // The elevated deck, in storeys. 2.125 is exact in float32, so a height read
 // back out of City.structZ compares equal to it - which 64/30 would not.
 export const TRAIN_LEVEL = 2.125;
+// Underground levels are negative storeys. Like TRAIN_LEVEL these are chosen
+// to be exact in float32 so a height read back out of the model compares equal.
+export const TUNNEL_LEVEL = -1.5;
 const PLATFORM_HALF = 2;              // platform reaches this far each way      // sunken excavation/vent shaft (blocks movement, not bullets)
 
 // building facade styles
@@ -67,14 +70,107 @@ export interface City {
   props: Prop[];             // trees, benches, food stalls
   crossing: Uint8Array;      // 0 none, 1 stripes along y, 2 stripes along x
   streetUsed: Uint8Array;    // 1 where a prop or a lamp already stands
-  stairTo: Int32Array;       // fire stairs: index of the roof tile this ground tile climbs to, else -1
-  structZ: Float32Array;     // height of the walkable surface above a tile (roof/platform), 0 = none
+  levels: Levels;            // every standing surface in the sector, and the ways between them
   lamps: { x: number; y: number }[];
   roundabouts: { x: number; y: number }[]; // centers
   vRoads: number[];          // x of left lane of each vertical avenue
   hRoads: number[];          // y of top lane of each horizontal avenue
   skytrains: Skytrain[];     // elevated rail lines running above avenues
   stations: Station[];       // platforms on those lines, every other block
+}
+
+// ---------------------------------------------------------------------------
+// Levels: every standing surface in the sector, at any height above or below
+// the street, and the ways between them.
+//
+// A tile no longer has "the ground, and maybe one thing over it". It has a
+// list of surfaces - a pavement at 0, a basement at -1, a metro platform at
+// -3, a roof at 5 - and links join them where a stair, ladder or shaft
+// actually connects two. Heights are in storeys and may be negative.
+//
+// The storage is flat so the search can run over it without allocating: the
+// surfaces of tile i live at [start[i], start[i+1]), and the links leaving
+// surface s live at [linkStart[s], linkStart[s+1]).
+// ---------------------------------------------------------------------------
+
+export const SURF_GROUND = 0;    // the street itself
+export const SURF_ROOF = 1;      // a building's roof
+export const SURF_PLATFORM = 2;  // elevated rail platform
+export const SURF_TUNNEL = 3;    // metro or sewer floor
+export const SURF_BASEMENT = 4;  // under a building
+
+export const LINK_STAIR = 0;     // fire escape, station stair
+export const LINK_LADDER = 1;    // manhole, shaft
+export const LINK_ESCALATOR = 2;
+
+export interface Levels {
+  start: Int32Array;        // GRID*GRID + 1 offsets into z/kind/tile
+  z: Float32Array;          // surface height in storeys
+  kind: Uint8Array;
+  tile: Int32Array;         // which tile each surface belongs to
+  linkStart: Int32Array;    // surfaceCount + 1 offsets into linkTo
+  linkTo: Int32Array;
+  linkKind: Uint8Array;
+  linkCost: Float32Array;
+  count: number;            // total surfaces
+}
+
+// Collects surfaces and links while the city is being generated, then packs
+// them down into the flat arrays above.
+export class LevelBuilder {
+  private surf: { tile: number; z: number; kind: number }[] = [];
+  private links: { a: number; b: number; kind: number; cost: number }[] = [];
+
+  // add a standing surface, returning the index the links will refer to
+  add(tile: number, z: number, kind: number): number {
+    this.surf.push({ tile, z, kind });
+    return this.surf.length - 1;
+  }
+
+  // join two surfaces both ways: anything you can climb up you can climb down
+  link(a: number, b: number, kind: number, cost: number): void {
+    this.links.push({ a, b, kind, cost });
+    this.links.push({ a: b, b: a, kind, cost });
+  }
+
+  freeze(cells: number): Levels {
+    const n = this.surf.length;
+    // sort surfaces by tile so each tile's are contiguous, keeping the old
+    // index alive long enough to remap the links onto the new order
+    const order = this.surf.map((_, i) => i).sort((p, q) => {
+      const d = this.surf[p].tile - this.surf[q].tile;
+      return d !== 0 ? d : this.surf[p].z - this.surf[q].z;
+    });
+    const remap = new Int32Array(n);
+    for (let k = 0; k < n; k++) remap[order[k]] = k;
+
+    const start = new Int32Array(cells + 1);
+    const z = new Float32Array(n);
+    const kind = new Uint8Array(n);
+    const tile = new Int32Array(n);
+    for (let k = 0; k < n; k++) {
+      const s = this.surf[order[k]];
+      z[k] = s.z; kind[k] = s.kind; tile[k] = s.tile;
+      start[s.tile + 1]++;
+    }
+    for (let i = 0; i < cells; i++) start[i + 1] += start[i];
+
+    const linkStart = new Int32Array(n + 1);
+    for (const l of this.links) linkStart[remap[l.a] + 1]++;
+    for (let i = 0; i < n; i++) linkStart[i + 1] += linkStart[i];
+    const cursor = linkStart.slice(0, n);
+    const linkTo = new Int32Array(this.links.length);
+    const linkKind = new Uint8Array(this.links.length);
+    const linkCost = new Float32Array(this.links.length);
+    for (const l of this.links) {
+      const a = remap[l.a];
+      const at = cursor[a]++;
+      linkTo[at] = remap[l.b];
+      linkKind[at] = l.kind;
+      linkCost[at] = l.cost;
+    }
+    return { start, z, kind, tile, linkStart, linkTo, linkKind, linkCost, count: n };
+  }
 }
 
 export function idx(x: number, y: number): number { return y * GRID + x; }
@@ -101,21 +197,54 @@ export function kerbAt(c: City, x: number, y: number): Kerb | null {
   return null;
 }
 
-// A tile carries at most two standing surfaces: the ground, and whatever roof
-// or platform is above it. Slot 0 is the street, slot 1 the structure.
-export function surfaceZ(c: City, x: number, y: number, slot: number): number {
-  if (slot === 0) return 0;
-  return inGrid(x, y) ? c.structZ[idx(x, y)] : 0;
+// ---- reading the level model -------------------------------------------
+// Surfaces are addressed by a single index into City.levels, which is what the
+// pathfinder searches over. These helpers are the only way anything else needs
+// to look at it.
+
+// the range of surfaces standing on a tile
+export function tileSurfaces(c: City, x: number, y: number): { from: number; to: number } {
+  if (!inGrid(x, y)) return { from: 0, to: 0 };
+  const i = idx(x, y);
+  return { from: c.levels.start[i], to: c.levels.start[i + 1] };
 }
-export function walkableAt(c: City, x: number, y: number, slot: number): boolean {
-  if (!inGrid(x, y)) return false;
-  if (slot === 0) return isWalkable(c, x, y);
-  return c.structZ[idx(x, y)] > 0;
+
+// the surface on this tile nearest a given height, or -1 if the tile has none
+export function surfaceNear(c: City, x: number, y: number, z: number, tol = 0.35): number {
+  const { from, to } = tileSurfaces(c, x, y);
+  let best = -1, bd = tol;
+  for (let s = from; s < to; s++) {
+    const d = Math.abs(c.levels.z[s] - z);
+    if (d <= bd) { bd = d; best = s; }
+  }
+  return best;
 }
-// a ground tile with a stair on it reaches the roof of the tile it returns
-export function stairRoof(c: City, x: number, y: number): number {
-  return inGrid(x, y) ? c.stairTo[idx(x, y)] : -1;
+
+// the highest surface on a tile at or below a ceiling - what a tap picks
+export function surfaceUnder(c: City, x: number, y: number, ceiling: number): number {
+  const { from, to } = tileSurfaces(c, x, y);
+  let best = -1;
+  for (let s = from; s < to; s++) {
+    if (c.levels.z[s] <= ceiling + 0.01 && (best < 0 || c.levels.z[s] > c.levels.z[best])) best = s;
+  }
+  return best;
 }
+
+// is the sector hollowed out at this depth, on this tile? Only surfaces that
+// are themselves underground count - the street overhead is not a void.
+export function hollowAt(c: City, x: number, y: number, z: number, tol = 0.9): boolean {
+  const { from, to } = tileSurfaces(c, x, y);
+  for (let s = from; s < to; s++) {
+    if (c.levels.z[s] < -0.1 && Math.abs(c.levels.z[s] - z) <= tol) return true;
+  }
+  return false;
+}
+
+export function surfaceZOf(c: City, s: number): number { return c.levels.z[s]; }
+export function surfaceKindOf(c: City, s: number): number { return c.levels.kind[s]; }
+export function surfaceTileOf(c: City, s: number): number { return c.levels.tile[s]; }
+export function surfaceX(c: City, s: number): number { return c.levels.tile[s] % GRID; }
+export function surfaceY(c: City, s: number): number { return (c.levels.tile[s] / GRID) | 0; }
 
 // street furniture already claims some pavement; a stair may not share it
 function streetUsedAt(props: Prop[], lamps: { x: number; y: number }[], x: number, y: number): boolean {
@@ -471,7 +600,63 @@ export function generateCity(seed: number): City {
     }
   }
 
-  return { seed, tiles, height, bstyle, laneDir, decos, props, crossing, streetUsed, stairTo, structZ, lamps, roundabouts, vRoads, hRoads, skytrains, stations };
+  // ---- 7. Pack every standing surface, and the ways between them, into the
+  // level model the pathfinder and the renderer both read ----
+  const lb = new LevelBuilder();
+  const groundSurf = new Int32Array(GRID * GRID).fill(-1);
+  const aboveSurf = new Int32Array(GRID * GRID).fill(-1);
+  for (let y = 0; y < GRID; y++) {
+    for (let x = 0; x < GRID; x++) {
+      const i = idx(x, y);
+      const t = tiles[i];
+      if (t === T_GROUND || t === T_SIDEWALK || t === T_ROAD || t === T_PARK || t === T_ISLAND) {
+        groundSurf[i] = lb.add(i, 0, SURF_GROUND);
+      }
+      if (structZ[i] > 0) {
+        const roof = t === T_BUILDING || t === T_WALL;
+        aboveSurf[i] = lb.add(i, structZ[i], roof ? SURF_ROOF : SURF_PLATFORM);
+      }
+    }
+  }
+  // stairs and station steps become links between the two surfaces they join
+  for (let i = 0; i < GRID * GRID; i++) {
+    const to = stairTo[i];
+    if (to < 0) continue;
+    const a = groundSurf[i], b = aboveSurf[to];
+    if (a < 0 || b < 0) continue;
+    lb.link(a, b, LINK_STAIR, 1 + structZ[to] * 1.5);
+  }
+  // ---- 7b. A first thing under the street: a service tunnel beneath one
+  // avenue, reached by manholes. It is deliberately small - the point is that
+  // the model, the search, the section view and the shooting all already work
+  // below zero, so metro, sewers and basements are content rather than
+  // foundation work. ----
+  const undergroundSurf = new Int32Array(GRID * GRID).fill(-1);
+  if (vRoads.length > 1) {
+    const ux = vRoads[rng.int(0, vRoads.length - 1)];
+    const y0t = 6, y1t = GRID - 7;
+    for (let y = y0t; y <= y1t; y++) {
+      const i = idx(ux, y);
+      undergroundSurf[i] = lb.add(i, TUNNEL_LEVEL, SURF_TUNNEL);
+    }
+    // a manhole every so often, dropping from the pavement beside the avenue
+    for (let y = y0t + 4; y <= y1t - 4; y += 18) {
+      const i = idx(ux, y);
+      if (undergroundSurf[i] < 0) continue;
+      for (const gx of [ux - 1, ux + 2, ux - 2, ux + 3]) {
+        if (!inGrid(gx, y)) continue;
+        const gi = idx(gx, y);
+        if (tiles[gi] !== T_SIDEWALK || streetUsed[gi] || stairTo[gi] >= 0) continue;
+        if (groundSurf[gi] < 0) continue;
+        lb.link(groundSurf[gi], undergroundSurf[i], LINK_LADDER, 2 - TUNNEL_LEVEL * 1.5);
+        break;
+      }
+    }
+  }
+
+  const levels = lb.freeze(GRID * GRID);
+
+  return { seed, tiles, height, bstyle, laneDir, decos, props, crossing, streetUsed, levels, lamps, roundabouts, vRoads, hRoads, skytrains, stations };
 }
 
 // Recursively split a block into lots separated by 4-tile alleys, then raise

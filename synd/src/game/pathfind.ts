@@ -1,10 +1,9 @@
 // Grid pathfinding: 8-way A* for pedestrians, lane-directed A* for cars.
 
-import { City, DBIT, DX, DY, T_ROAD, idx, inGrid, isWalkable, surfaceZ, walkableAt } from "../city/citygen";
+import { City, DBIT, DX, DY, T_ROAD, hollowAt, idx, inGrid, isWalkable, surfaceNear } from "../city/citygen";
 import { GRID } from "../engine/util";
 
 const MAX_EXPAND = 60000;
-const CELLS = GRID * GRID;      // one slot's worth of search space
 export interface Step { x: number; y: number; z: number }
 
 class Heap {
@@ -46,9 +45,9 @@ class Heap {
 
 export class Pathfinder {
   private g = new Float32Array(GRID * GRID);
-  private g2 = new Float32Array(GRID * GRID * 2);
-  private came2 = new Int32Array(GRID * GRID * 2);
-  private stamp2 = new Int32Array(GRID * GRID * 2);
+  private g2 = new Float32Array(0);
+  private came2 = new Int32Array(0);
+  private stamp2 = new Int32Array(0);
   private came = new Int32Array(GRID * GRID);
   private stamp = new Int32Array(GRID * GRID);
   private gen = 0;
@@ -117,76 +116,69 @@ export class Pathfinder {
     return this.smooth(path);
   }
 
-  // Level-aware pedestrian path. Nodes are (tile, slot): slot 0 is the street,
-  // slot 1 the roof or platform above it, and a fire stair is the rung between
-  // them. Returns waypoints carrying the height to walk them at.
-  climbPath(sx: number, sy: number, sslot: number, tx: number, ty: number, tslot: number): Step[] | null {
-    const c = this.city;
-    sx |= 0; sy |= 0; tx |= 0; ty |= 0;
-    if (!walkableAt(c, sx, sy, sslot) || !walkableAt(c, tx, ty, tslot)) return null;
-    const si = idx(sx, sy) + sslot * CELLS, ti = idx(tx, ty) + tslot * CELLS;
-    if (si === ti) return [{ x: tx + 0.5, y: ty + 0.5, z: surfaceZ(c, tx, ty, tslot) }];
+  // Level-aware pedestrian path. The search runs over surfaces - a node is one
+  // standing surface anywhere in the sector, at any height - so it costs the
+  // same whether the sector has roofs, basements or both. Neighbours are the
+  // surfaces of adjacent tiles at the same height, plus whatever a stair,
+  // ladder or shaft explicitly joins.
+  climbPath(sx: number, sy: number, sSurf: number, tx: number, ty: number, tSurf: number): Step[] | null {
+    const c = this.city, L = c.levels;
+    if (sSurf < 0 || tSurf < 0 || sSurf >= L.count || tSurf >= L.count) return null;
+    const step = (s: number): Step => ({
+      x: (L.tile[s] % GRID) + 0.5, y: ((L.tile[s] / GRID) | 0) + 0.5, z: L.z[s],
+    });
+    if (sSurf === tSurf) return [step(tSurf)];
+    this.ensureSurfaceScratch(L.count);
 
     this.gen++;
     const { g2, came2, stamp2, heap } = this;
     heap.clear();
-    g2[si] = 0; stamp2[si] = this.gen; came2[si] = -1;
-    heap.push(this.hDist(sx, sy, tx, ty), si);
+    g2[sSurf] = 0; stamp2[sSurf] = this.gen; came2[sSurf] = -1;
+    heap.push(this.hDist(sx, sy, tx, ty), sSurf);
     let expanded = 0, found = false;
     while (heap.size > 0 && expanded < MAX_EXPAND) {
       const cur = heap.pop();
-      if (cur === ti) { found = true; break; }
+      if (cur === tSurf) { found = true; break; }
       expanded++;
-      const slot = cur >= CELLS ? 1 : 0;
-      const cell = cur - slot * CELLS;
+      const cell = L.tile[cur];
       const cx = cell % GRID, cy = (cell / GRID) | 0;
-      const cz = surfaceZ(c, cx, cy, slot);
-      // step across this level
+      const cz = L.z[cur];
+      // walk this level
       for (let dyy = -1; dyy <= 1; dyy++) {
         for (let dxx = -1; dxx <= 1; dxx++) {
           if (dxx === 0 && dyy === 0) continue;
           const nx = cx + dxx, ny = cy + dyy;
-          if (!walkableAt(c, nx, ny, slot)) continue;
-          if (surfaceZ(c, nx, ny, slot) !== cz) continue;   // no stepping between roofs
+          const ns = surfaceNear(c, nx, ny, cz, 0.01);
+          if (ns < 0) continue;
           if (dxx !== 0 && dyy !== 0
-              && (!walkableAt(c, cx + dxx, cy, slot) || !walkableAt(c, cx, cy + dyy, slot))) continue;
-          const ni = idx(nx, ny) + slot * CELLS;
-          const step = dxx !== 0 && dyy !== 0 ? 1.4142 : 1;
-          this.relax(cur, ni, step, nx, ny, tx, ty);
+              && (surfaceNear(c, cx + dxx, cy, cz, 0.01) < 0 || surfaceNear(c, cx, cy + dyy, cz, 0.01) < 0)) continue;
+          this.relax(cur, ns, dxx !== 0 && dyy !== 0 ? 1.4142 : 1, nx, ny, tx, ty);
         }
       }
-      // and the rung between them, wherever a stair stands
-      if (slot === 0) {
-        const roof = c.stairTo[cell];
-        if (roof >= 0) {
-          const rx = roof % GRID, ry = (roof / GRID) | 0;
-          this.relax(cur, roof + CELLS, 1 + c.structZ[roof] * 1.5, rx, ry, tx, ty);
-        }
-      } else {
-        for (let dyy = -1; dyy <= 1; dyy++) {
-          for (let dxx = -1; dxx <= 1; dxx++) {
-            const gx = cx + dxx, gy = cy + dyy;
-            if (!inGrid(gx, gy)) continue;
-            const gi = idx(gx, gy);
-            if (c.stairTo[gi] !== cell) continue;
-            this.relax(cur, gi, 1 + cz * 1.5, gx, gy, tx, ty);
-          }
-        }
+      // and take any way off it
+      for (let e = L.linkStart[cur]; e < L.linkStart[cur + 1]; e++) {
+        const ns = L.linkTo[e];
+        this.relax(cur, ns, L.linkCost[e], L.tile[ns] % GRID, (L.tile[ns] / GRID) | 0, tx, ty);
       }
     }
-    if (!found && stamp2[ti] !== this.gen) return null;
+    if (!found && stamp2[tSurf] !== this.gen) return null;
     const out: Step[] = [];
-    let cur = ti;
+    let cur = tSurf;
     while (cur !== -1 && out.length < 4096) {
-      const slot = cur >= CELLS ? 1 : 0;
-      const cell = cur - slot * CELLS;
-      const px = cell % GRID, py = (cell / GRID) | 0;
-      out.push({ x: px + 0.5, y: py + 0.5, z: surfaceZ(c, px, py, slot) });
+      out.push(step(cur));
       cur = came2[cur];
       if (cur !== -1 && stamp2[cur] !== this.gen) break;
     }
     out.reverse();
     return out;
+  }
+
+  // the search arrays follow however many surfaces the sector turned out to have
+  private ensureSurfaceScratch(n: number): void {
+    if (this.g2.length >= n) return;
+    this.g2 = new Float32Array(n);
+    this.came2 = new Int32Array(n);
+    this.stamp2 = new Int32Array(n);
   }
 
   private relax(cur: number, ni: number, cost: number, nx: number, ny: number, tx: number, ty: number): void {
@@ -295,9 +287,16 @@ export class Pathfinder {
       const t = i / steps;
       const x = Math.floor(x0 + (x1 - x0) * t), y = Math.floor(y0 + (y1 - y0) * t);
       if (!inGrid(x, y)) return false;
+      const rz = z0 + (z1 - z0) * t;
+      // Below the street the world is solid: a shot only passes where the
+      // sector has actually been hollowed out at that depth.
+      if (rz < -0.1) {
+        if (!hollowAt(c, x, y, rz)) return false;
+        continue;
+      }
       const tt = c.tiles[idx(x, y)];
       if (tt !== 3 && tt !== 4) continue;              // WALL / BUILDING
-      if (c.height[idx(x, y)] > z0 + (z1 - z0) * t + 0.1) return false;
+      if (c.height[idx(x, y)] > rz + 0.1) return false;
     }
     return true;
   }

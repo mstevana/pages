@@ -1,7 +1,7 @@
 // The live mission world: pedestrians, cops, enemy agents, cars, projectiles,
 // dropped items, objectives, and all the AI that drives them.
 
-import { City, Kerb, Station, TRAIN_LEVEL, T_ROAD, kerbAt, DBIT, DX, DY, idx, inGrid, isRoad, isWalkable } from "../city/citygen";
+import { City, Kerb, Station, TRAIN_LEVEL, T_ROAD, kerbAt, surfaceNear, DBIT, DX, DY, idx, inGrid, isRoad, isWalkable } from "../city/citygen";
 import { AudioEngine } from "../engine/audio";
 import { Rng } from "../engine/rng";
 import { GRID, Weather, clamp, dist, dist2 } from "../engine/util";
@@ -446,10 +446,18 @@ export class World {
     return this.agents.filter((a, i) => sel[i] && a.hp > 0);
   }
 
-  // which standing surface is an agent on right now?
-  private slotOf(p: Ped): number { return p.z > 0 ? 1 : 0; }
+  // which standing surface is this ped on right now?
+  surfaceOf(p: Ped): number { return surfaceNear(this.city, p.x | 0, p.y | 0, p.z); }
 
-  cmdMove(sel: boolean[], tx: number, ty: number, tslot = 0): void {
+  // the same height as the ordered surface, one tile over, so a squad spreads
+  // out on arrival instead of stacking on one spot
+  private spreadSurface(tSurf: number, x: number, y: number): number {
+    if (tSurf < 0) return -1;
+    const near = surfaceNear(this.city, x | 0, y | 0, this.city.levels.z[tSurf], 0.01);
+    return near >= 0 ? near : tSurf;
+  }
+
+  cmdMove(sel: boolean[], tx: number, ty: number, tSurf = -1): void {
     const group = this.selectedAgents(sel);
     let n = 0;
     let anyMoved = false;
@@ -464,12 +472,14 @@ export class World {
         continue;
       }
       const ox = (n % 2) * 1.4 - 0.7, oy = Math.floor(n / 2) * 1.4 - 0.7;
-      const here = this.slotOf(a);
-      // Off the street, or heading for a roof, the squad climbs; on the flat
-      // it keeps the cheaper two-dimensional search.
-      const p = (tslot === 1 || here === 1)
-        ? (this.pf.climbPath(a.x, a.y, here, tx + ox, ty + oy, tslot)
-           ?? this.pf.climbPath(a.x, a.y, here, tx, ty, tslot))
+      const here = this.surfaceOf(a);
+      // Anything off the street - starting on one, or heading for one - goes
+      // through the level search; a walk along the pavement keeps the cheaper
+      // two-dimensional one.
+      const offStreet = (tSurf >= 0 && this.city.levels.z[tSurf] !== 0) || (here >= 0 && a.z !== 0);
+      const p = offStreet
+        ? (this.pf.climbPath(a.x, a.y, here, tx + ox, ty + oy, this.spreadSurface(tSurf, tx + ox, ty + oy))
+           ?? this.pf.climbPath(a.x, a.y, here, tx, ty, tSurf))
         : (this.pf.walkPath(a.x, a.y, tx + ox, ty + oy) ?? this.pf.walkPath(a.x, a.y, tx, ty));
       if (p) { a.path = p; a.pathIdx = 0; a.state = "walk"; anyMoved = true; }
       n++;
@@ -671,7 +681,7 @@ export class World {
       for (let d = 1; d <= 3; d++) {
         const px = line.axis === "v" ? at.x : at.x + d - 2;
         const py = line.axis === "v" ? at.y + d - 2 : at.y;
-        if (inGrid(px | 0, py | 0) && this.city.structZ[idx(px | 0, py | 0)] === TRAIN_LEVEL) {
+        if (surfaceNear(this.city, px | 0, py | 0, TRAIN_LEVEL, 0.01) >= 0) {
           a.x = (px | 0) + 0.5; a.y = (py | 0) + 0.5; a.z = TRAIN_LEVEL;
           break;
         }

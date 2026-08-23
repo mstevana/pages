@@ -2,7 +2,7 @@
 // blocks correctly occlude people and cars behind them. Also draws the static
 // street furniture (fences, doors, pit rails) and the elevated skytrain.
 
-import { City, Deco, Prop, Station, TRAIN_LEVEL, T_BUILDING, T_GROUND, T_ISLAND, T_PARK, T_PIT, T_ROAD, T_SIDEWALK, T_WALL, D_S, D_W, idx, inGrid, isRoad } from "../city/citygen";
+import { City, Deco, Prop, Station, TRAIN_LEVEL, surfaceUnder, T_BUILDING, T_GROUND, T_ISLAND, T_PARK, T_PIT, T_ROAD, T_SIDEWALK, T_WALL, D_S, D_W, idx, inGrid, isRoad } from "../city/citygen";
 import { GRID, STORY_H, TILE_H, TILE_W, isNight, isRain, isoX, isoY } from "../engine/util";
 import { PeopleAtlas, FW, FH } from "../sprites/people";
 import { BENCH_H, BENCH_W, STALL_H, STALL_W, TREE_H, TREE_W } from "../sprites/props";
@@ -25,7 +25,7 @@ interface Entity {
   s: number;    // depth key = tx + ty
   pri: number;  // within-bucket order: 0 elevated structure, 1 ground, 2 trains
   kind: "ped" | "car" | "drop" | "lamp" | "fence" | "pylon" | "deck" | "train" | "prop" | "stair" | "station";
-  stair?: { x: number; y: number; rx: number; ry: number; h: number };
+  stair?: { x: number; y: number; rx: number; ry: number; h: number; base: number };
   station?: Station;
   ped?: Ped;
   car?: Car;
@@ -53,7 +53,8 @@ export class Renderer {
   private decks: DeckTile[] = [];
   private buildingId: Int32Array; // connected-component label per WALL/BUILDING tile
   readonly maxStories: number;    // ceiling of the tallest building in the sector
-  private stairs: { x: number; y: number; rx: number; ry: number; h: number }[] = [];
+  readonly minLevel: number;      // floor of the deepest surface under the street
+  private stairs: { x: number; y: number; rx: number; ry: number; h: number; base: number }[] = [];
   // emissive sources gathered while drawing, blended additively later
   private lampGlows: { x: number; y: number; gy: number; phase: number }[] = [];
   private emissives: { x: number; y: number; r: number; col: [number, number, number]; i: number }[] = [];
@@ -91,6 +92,10 @@ export class Renderer {
       if ((t[i] === T_WALL || t[i] === T_BUILDING) && city.height[i] > top) top = city.height[i];
     }
     this.maxStories = top;
+    // however deep the sector goes, the section slider must be able to reach it
+    let low = 0;
+    for (let s2 = 0; s2 < city.levels.count; s2++) if (city.levels.z[s2] < low) low = city.levels.z[s2];
+    this.minLevel = Math.floor(low);
     this.buildStairs();
 
     for (const d of city.decos) {
@@ -131,15 +136,19 @@ export class Renderer {
   }
 
   private buildStairs(): void {
-    const c = this.city;
-    for (let i = 0; i < c.stairTo.length; i++) {
-      if (c.stairTo[i] < 0) continue;
-      const r = c.stairTo[i];
-      this.stairs.push({
-        x: i % GRID, y: (i / GRID) | 0,
-        rx: r % GRID, ry: (r / GRID) | 0,
-        h: c.structZ[r],
-      });
+    // every stair in the sector is a link in the level model; the ones that
+    // climb get a flight drawn up the wall they are bolted to
+    const L = this.city.levels;
+    for (let a = 0; a < L.count; a++) {
+      for (let e = L.linkStart[a]; e < L.linkStart[a + 1]; e++) {
+        const b = L.linkTo[e];
+        if (L.z[b] <= L.z[a]) continue;               // take each pair once, going up
+        this.stairs.push({
+          x: L.tile[a] % GRID, y: (L.tile[a] / GRID) | 0,
+          rx: L.tile[b] % GRID, ry: (L.tile[b] / GRID) | 0,
+          h: L.z[b] - L.z[a], base: L.z[a],
+        });
+      }
     }
   }
 
@@ -213,8 +222,31 @@ export class Renderer {
     const tw = TILE_W * z, th = TILE_H * z;
 
     // ---- pass 1: flat ground + pits ----
+    // With the plane under the street the ground itself is gone: what is left
+    // is the cut through the earth, and the floor of anything hollowed out of
+    // it that the plane has reached.
+    if (sectioned && section < 0) {
+      for (let ty = y0; ty <= y1; ty++) {
+        for (let tx = x0; tx <= x1; tx++) {
+          const sx = SX(tx, ty) - tw / 2;
+          const floor = surfaceUnder(this.city, tx, ty, section);
+          const fz = floor >= 0 ? this.city.levels.z[floor] : section;
+          const sy = SY(tx, ty) - fz * STORY_H * z;
+          if (sx > vx + vw || sx + tw < vx || sy > vy + vh || sy + th < vy) continue;
+          g.fillStyle = floor >= 0 ? art.cutFloor : "#000";   // hollow, or solid earth
+          g.beginPath();
+          g.moveTo(sx + tw / 2, sy);
+          g.lineTo(sx + tw, sy + th / 2);
+          g.lineTo(sx + tw / 2, sy + th);
+          g.lineTo(sx, sy + th / 2);
+          g.closePath();
+          g.fill();
+        }
+      }
+    }
     for (let ty = y0; ty <= y1; ty++) {
       for (let tx = x0; tx <= x1; tx++) {
+        if (sectioned && section < 0) break;      // the street is above the plane
         const t = tiles[idx(tx, ty)];
         if (t === T_WALL || t === T_BUILDING) continue;
         const sx = SX(tx, ty) - tw / 2, sy = SY(tx, ty);
@@ -255,15 +287,22 @@ export class Renderer {
       if (!b) { b = []; buckets.set(e.s, b); }
       b.push(e);
     };
+    // Anything standing above the section plane has been cut away with the
+    // storey it stood on. A living agent is the exception: the squad stays
+    // drawn whatever the plane, so it can never be lost behind the view.
+    const shown = (ez: number) => !sectioned || ez <= section + 0.01;
     for (const p of world.peds) {
       if (p.carId !== null || p.x < x0 || p.x > x1 || p.y < y0 || p.y > y1) continue;
       // Height needs no depth trickery: entities flush after the columns of
       // their own bucket, so a ped on a roof already lands on top of the
       // building it stands on, and nearer columns still occlude it.
+      const alive = p.team === "player" && p.agentIdx >= 0 && p.hp > 0;
+      if (!alive && !shown(p.z)) continue;
       push({ s: Math.floor(p.x) + Math.floor(p.y), pri: 1, kind: "ped", ped: p, x: p.x, y: p.y });
     }
     for (const c of world.cars) {
       if (c.x < x0 || c.x > x1 || c.y < y0 || c.y > y1) continue;
+      if (!shown(0)) continue;
       push({ s: Math.floor(c.x) + Math.floor(c.y), pri: 1, kind: "car", car: c, x: c.x, y: c.y });
     }
     for (const st of this.city.stations) {
@@ -274,19 +313,23 @@ export class Renderer {
     for (const fs of this.stairs) {
       if (fs.x < x0 || fs.x > x1 || fs.y < y0 || fs.y > y1) continue;
       if (sectioned && section <= 0) continue;
+      if (!shown(fs.base)) continue;
       push({ s: Math.max(fs.x + fs.y, fs.rx + fs.ry), pri: 1, kind: "stair",
              x: fs.x + 0.5, y: fs.y + 0.5, stair: fs });
     }
     for (const l of this.city.lamps) {
       if (l.x < x0 || l.x > x1 || l.y < y0 || l.y > y1) continue;
+      if (!shown(0)) continue;
       push({ s: l.x + l.y, pri: 1, kind: "lamp", x: l.x + 0.5, y: l.y + 0.5 });
     }
     for (const p of this.city.props) {
       if (p.x < x0 || p.x > x1 || p.y < y0 || p.y > y1) continue;
+      if (!shown(0)) continue;
       push({ s: p.x + p.y, pri: 1, kind: "prop", prop: p, x: p.x + 0.5, y: p.y + 0.5 });
     }
     for (const f of this.fences) {
       if (f.x < x0 || f.x > x1 || f.y < y0 || f.y > y1) continue;
+      if (!shown(0)) continue;
       push({ s: f.x + f.y, pri: 1, kind: "fence", fence: f, x: f.x + 0.5, y: f.y + 0.5 });
     }
     for (const d of this.decks) {
@@ -381,6 +424,7 @@ export class Renderer {
           g.lineTo(sx, dy + th / 2);
           g.closePath();
         };
+        if (sectioned && section < 0) continue;
         if (sectioned && stories > section) {
           // Horizontal cross-section: keep the storeys under the plane, take
           // everything above it away. The plane sits a hair above the floor it
@@ -998,7 +1042,7 @@ export class Renderer {
   }
 
   private drawFireStair(
-    g: CanvasRenderingContext2D, fs: { x: number; y: number; rx: number; ry: number; h: number },
+    g: CanvasRenderingContext2D, fs: { x: number; y: number; rx: number; ry: number; h: number; base: number },
     SX: (x: number, y: number) => number, SY: (x: number, y: number) => number, z: number
   ): void {
     // the edge the stair is bolted to, and the two ends of that edge
@@ -1009,7 +1053,8 @@ export class Renderer {
     const L = { x: ex + px - ax * out, y: ey + py - ay * out };
     const R = { x: ex - px - ax * out, y: ey - py - ay * out };
     const lx = SX(L.x, L.y), rx = SX(R.x, R.y);
-    const lyG = SY(L.x, L.y), ryG = SY(R.x, R.y);
+    const lyG = SY(L.x, L.y) - fs.base * STORY_H * z;
+    const ryG = SY(R.x, R.y) - fs.base * STORY_H * z;
     const up = STORY_H * z;
     const lw = Math.max(1.2, 1.1 * z);
 
