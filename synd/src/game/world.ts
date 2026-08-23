@@ -695,8 +695,12 @@ export class World {
         if (this.rng.chance(0.8)) this.startFlee(p, { x, y });
       }
       if (p.team === "cop" && source && source.team === "player") {
-        p.hostileCop = true;
-        this.heat = Math.max(this.heat, 4);
+        // unaware policemen stay neutral: they react only with a clear line
+        // of sight to the disturbance (the shooter or the victim)
+        if (this.pf.losShot(p.x, p.y, x, y)) {
+          p.hostileCop = true;
+          this.heat = Math.max(this.heat, 4);
+        }
       }
     }
   }
@@ -929,7 +933,7 @@ export class World {
       let best: Ped | null = null; let bd = wdef.range * wdef.range;
       for (const t of this.peds) {
         if (t.state === "dead") continue;
-        const hostile = t.team === "enemy" || (t.team === "cop" && (t.hostileCop || this.heat >= 6));
+        const hostile = t.team === "enemy" || (t.team === "cop" && (t.hostileCop || this.mission.kind === "assassinate"));
         if (!hostile) continue;
         const d2 = dist2(t.x, t.y, p.x, p.y);
         if (d2 < bd && this.pf.losShot(p.x, p.y, t.x, t.y)) { best = t; bd = d2; }
@@ -981,7 +985,7 @@ export class World {
   }
 
   private updateCop(p: Ped, dt: number): void {
-    const hostile = p.hostileCop || this.heat >= 6;
+    const hostile = p.hostileCop || this.mission.kind === "assassinate";
     if (hostile) {
       let best: Ped | null = null; let bd = 1e9;
       for (const a of this.agents) {
@@ -1086,7 +1090,14 @@ export class World {
         if (c.pathIdx >= c.path.length) { c.path = null; c.speed = 0; }
       } else {
         c.x += (dx / d) * step; c.y += (dy / d) * step;
-        c.angle = Math.atan2((dx + dy) * 0.5, dx - dy);
+        // world-space heading, smoothed so path corners do not snap
+        if (d > 0.2) {
+          const target = Math.atan2(dy, dx);
+          let da = target - c.angle;
+          while (da > Math.PI) da -= Math.PI * 2;
+          while (da < -Math.PI) da += Math.PI * 2;
+          c.angle += da * Math.min(1, dt * 10);
+        }
       }
       // keep the riders with the car
       for (const oid of c.occupants) {

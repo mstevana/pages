@@ -43,6 +43,7 @@ export class Renderer {
   private decoIndex = new Map<number, Deco[]>();
   private fences: FenceEdge[] = [];
   private decks: DeckTile[] = [];
+  private buildingId: Int32Array; // connected-component label per WALL/BUILDING tile
   // emissive sources gathered while drawing, blended additively later
   private lampGlows: { x: number; y: number; gy: number; phase: number }[] = [];
   private emissives: { x: number; y: number; r: number; col: [number, number, number]; i: number }[] = [];
@@ -50,6 +51,31 @@ export class Renderer {
   rainDrops: { x: number; y: number; v: number }[] = [];
 
   constructor(private city: City) {
+    // label each building so the cutaway can hide a whole structure at once
+    const bid = new Int32Array(GRID * GRID).fill(-1);
+    const t = city.tiles;
+    const stack: number[] = [];
+    let nextId = 0;
+    for (let i = 0; i < GRID * GRID; i++) {
+      if (bid[i] !== -1 || (t[i] !== T_WALL && t[i] !== T_BUILDING)) continue;
+      bid[i] = nextId;
+      stack.push(i);
+      while (stack.length > 0) {
+        const j = stack.pop()!;
+        const jx = j % GRID, jy = (j / GRID) | 0;
+        for (const [nx, ny] of [[jx - 1, jy], [jx + 1, jy], [jx, jy - 1], [jx, jy + 1]]) {
+          if (nx < 0 || ny < 0 || nx >= GRID || ny >= GRID) continue;
+          const n = ny * GRID + nx;
+          if (bid[n] === -1 && (t[n] === T_WALL || t[n] === T_BUILDING)) {
+            bid[n] = nextId;
+            stack.push(n);
+          }
+        }
+      }
+      nextId++;
+    }
+    this.buildingId = bid;
+
     for (const d of city.decos) {
       const k = idx(d.x, d.y);
       let arr = this.decoIndex.get(k);
@@ -245,6 +271,32 @@ export class Renderer {
       }
     }
 
+    // which whole buildings occlude an agent? (they cut away above floor 1)
+    const cutIds = new Set<number>();
+    if (cutTargets.length > 0) {
+      for (let ty = y0; ty <= y1; ty++) {
+        for (let tx = x0; tx <= x1; tx++) {
+          const i = idx(tx, ty);
+          const t = tiles[i];
+          if (t !== T_WALL && t !== T_BUILDING) continue;
+          const stories = hArr[i] || 1;
+          if (stories <= 1) continue;
+          const id = this.buildingId[i];
+          if (id < 0 || cutIds.has(id)) continue;
+          const s = tx + ty;
+          const colCx = SX(tx, ty);
+          const syTop = SY(tx, ty) - stories * STORY_H * z;
+          const baseBottom = syTop + stories * STORY_H * z + th;
+          for (const ct of cutTargets) {
+            if (s > ct.s && Math.abs(colCx - ct.ax) < tw * 0.8 && ct.ay - 32 * z < baseBottom && ct.ay > syTop) {
+              cutIds.add(id);
+              break;
+            }
+          }
+        }
+      }
+    }
+
     // ---- pass 2: blocks + entities in depth order ----
     const adFrame = Math.floor(time * 2.2);
     for (let s = x0 + y0; s <= x1 + y1; s++) {
@@ -259,24 +311,12 @@ export class Renderer {
         const sx = SX(tx, ty) - tw / 2;
         const syTop = SY(tx, ty) - stories * STORY_H * z;
         if (sx > vx + vw || sx + tw < vx || syTop > vy + vh || syTop + th + stories * STORY_H * z < vy) continue;
-        // does this column stand in front of an agent?
-        let cut = false;
-        if (stories > 1) {
-          const baseBottom = syTop + stories * STORY_H * z + th;
-          const colCx = sx + tw / 2;
-          for (const ct of cutTargets) {
-            if (s > ct.s && Math.abs(colCx - ct.ax) < tw * 0.8 && ct.ay - 32 * z < baseBottom && ct.ay > syTop) {
-              cut = true;
-              break;
-            }
-          }
-        }
+        // a building occluding an agent hides everything above its ground floor
+        const cut = stories > 1 && cutIds.has(this.buildingId[i]);
+        if (cut && t === T_BUILDING) continue; // interior columns vanish entirely
         if (cut) {
-          // ground floor stays opaque; everything above goes translucent
+          // perimeter walls keep just their ground-floor shell
           const cutSrcY = TILE_H / 2 + (stories - 1) * STORY_H + 4;
-          g.globalAlpha = 0.2;
-          g.drawImage(block, 0, 0, TILE_W, cutSrcY, sx, syTop, tw, cutSrcY * z);
-          g.globalAlpha = 1;
           const rest = block.height - cutSrcY;
           g.drawImage(block, 0, cutSrcY, TILE_W, rest, sx, syTop + cutSrcY * z, tw, rest * z);
         } else {
@@ -317,7 +357,7 @@ export class Renderer {
               this.drawDoor(g, d, sx, groundY, tw, z, art);
               continue;
             }
-            if (cut) g.globalAlpha = 0.2;
+            if (cut) continue; // its floor is cut away
             const level = Math.min(d.level, stories - 1);
             const img = d.kind === "videowall"
               ? art.ads[d.variant % art.ads.length][(adFrame + d.variant) % 4]
