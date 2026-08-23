@@ -1,7 +1,7 @@
 // The live mission world: pedestrians, cops, enemy agents, cars, projectiles,
 // dropped items, objectives, and all the AI that drives them.
 
-import { City, ParkSpot, T_ROAD, DBIT, DX, DY, idx, inGrid, isRoad, isWalkable } from "../city/citygen";
+import { City, Kerb, T_ROAD, kerbAt, DBIT, DX, DY, idx, inGrid, isRoad, isWalkable } from "../city/citygen";
 import { AudioEngine } from "../engine/audio";
 import { Rng } from "../engine/rng";
 import { GRID, Weather, clamp, dist, dist2 } from "../engine/util";
@@ -115,6 +115,7 @@ const AGENT_HP = 100;
 const CIV_LIMIT = 90;
 const CAR_LIMIT = 7;
 const BLAST_R = 3.5;      // a wrecked car hurts everyone inside this radius
+const KERB_GAP = 3;       // clear length a car needs to itself at the kerb
 const COP_LIMIT = 4;
 const NPC_FIRE_MULT = 2.1;        // NPCs shoot slower than player agents
 const NPC_RANGE_MULT = 0.85;      // hostiles engage 15% closer than the weapon's reach
@@ -183,14 +184,9 @@ export class World {
     const blocks = (city.vRoads.length + 1) * (city.hRoads.length + 1);
     this.policeTotal = Math.max(4, Math.round(blocks / 2));
 
-    // every bay the city laid out starts with a car standing in it
-    for (const b of city.parking) {
-      const car = this.spawnCar(b.px, b.py, b.axis === 1 ? 2 : 1);
-      car.state = "parked";
-      car.pilotOut = true;
-      car.angle = b.axis === 1 ? Math.PI / 2 : 0;
-      if (this.rng.chance(0.5)) car.angle += Math.PI;
-    }
+    // a car or two per block starts the mission standing at the kerb, on
+    // whichever stretch of pavement the block happens to offer
+    for (const k of this.pickKerbs(2)) this.parkCarAt(k);
 
     this.mission = this.setupMission(kind, start);
     // persuade missions: issue a persuadertron to the first living agent
@@ -521,22 +517,85 @@ export class World {
     }
   }
 
-  // the closest kerbside bay with nothing already standing in it
-  private freeParkingNear(x: number, y: number, selfId: number): ParkSpot | null {
-    let best: ParkSpot | null = null;
-    let bd = 60 * 60;
-    for (const b of this.city.parking) {
-      const d = dist2(b.px, b.py, x, y);
-      if (d >= bd) continue;
-      let occupied = false;
-      for (const o of this.cars) {
-        if (o.state === "wreck" || o.id === selfId) continue;
-        if (dist2(o.x, o.y, b.px, b.py) < 1.2 * 1.2) { occupied = true; break; }
-      }
-      if (occupied) continue;
-      bd = d; best = b;
+  // Is this stretch of kerb spoken for? Only cars at the kerb count - traffic
+  // passing on the carriageway does not - and a car already gliding toward a
+  // berth has claimed it, so several dismounting at once do not pile up.
+  private kerbTaken(k: Kerb, selfId: number): boolean {
+    const R2 = KERB_GAP * KERB_GAP;
+    for (const o of this.cars) {
+      if (o.id === selfId || o.state === "wreck") continue;
+      if ((o.state === "parked" || o.state === "docking")
+          && dist2(o.x, o.y, k.px, k.py) < R2) return true;
+      if (o.glide && dist2(o.glide.x, o.glide.y, k.px, k.py) < R2) return true;
     }
-    return best;
+    return false;
+  }
+
+  // The nearest free kerb, searched outward a ring at a time so the first one
+  // found is the closest. Any pavement fronting a road will do.
+  private freeParkingNear(x: number, y: number, selfId: number): Kerb | null {
+    const cx = x | 0, cy = y | 0;
+    for (let r = 0; r <= 14; r++) {
+      let best: Kerb | null = null, bd = 1e9;
+      for (let dy = -r; dy <= r; dy++) {
+        for (let dx = -r; dx <= r; dx++) {
+          if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;  // this ring only
+          const k = kerbAt(this.city, cx + dx, cy + dy);
+          if (!k || this.kerbTaken(k, selfId)) continue;
+          const d = dist2(k.px, k.py, x, y);
+          if (d < bd) { bd = d; best = k; }
+        }
+      }
+      if (best) return best;
+    }
+    return null;
+  }
+
+  // A scatter of kerbs, up to `perBlock` in each block the avenues carve out,
+  // never two close enough to crowd one another.
+  private pickKerbs(perBlock: number): Kerb[] {
+    const c = this.city;
+    const vEdges = [0, ...c.vRoads, GRID];
+    const hEdges = [0, ...c.hRoads, GRID];
+    const out: Kerb[] = [];
+    const taken = new Set<number>();
+    for (let bi = 0; bi < vEdges.length - 1; bi++) {
+      for (let bj = 0; bj < hEdges.length - 1; bj++) {
+        const kerbs: Kerb[] = [];
+        for (let y = hEdges[bj]; y <= hEdges[bj + 1] && y < GRID; y++) {
+          for (let x = vEdges[bi]; x <= vEdges[bi + 1] && x < GRID; x++) {
+            const k = kerbAt(c, x, y);
+            if (k) kerbs.push(k);
+          }
+        }
+        if (kerbs.length === 0) continue;
+        this.rng.shuffle(kerbs);
+        let placed = 0;
+        for (const k of kerbs) {
+          if (placed >= this.rng.int(1, perBlock)) break;
+          let clash = false;
+          const g = KERB_GAP - 1;
+          for (let dy = -g; dy <= g && !clash; dy++) {
+            for (let dx = -g; dx <= g; dx++) if (taken.has(idx(k.x + dx, k.y + dy))) { clash = true; break; }
+          }
+          if (clash) continue;
+          taken.add(idx(k.x, k.y));
+          out.push(k);
+          placed++;
+        }
+      }
+    }
+    return out;
+  }
+
+  // stand a car at the kerb, facing either way along the street
+  private parkCarAt(k: Kerb): Car {
+    const car = this.spawnCar(k.px, k.py, k.axis === 1 ? 2 : 1);
+    car.state = "parked";
+    car.pilotOut = true;
+    car.angle = k.axis === 1 ? Math.PI / 2 : 0;
+    if (this.rng.chance(0.5)) car.angle += Math.PI;
+    return car;
   }
 
   cmdExitCar(sel: boolean[]): void {
@@ -549,7 +608,12 @@ export class World {
         car.path = null; car.speed = 0;
         const bay = this.freeParkingNear(car.x, car.y, car.id);
         if (bay) {
-          car.glide = { x: bay.px, y: bay.py, a: bay.axis === 1 ? Math.PI / 2 : 0 };
+          // park facing whichever way along the street needs the smaller turn
+          const along = bay.axis === 1 ? Math.PI / 2 : 0;
+          let da = along - car.angle;
+          while (da > Math.PI) da -= Math.PI * 2;
+          while (da < -Math.PI) da += Math.PI * 2;
+          car.glide = { x: bay.px, y: bay.py, a: Math.abs(da) > Math.PI / 2 ? along + Math.PI : along };
           car.state = "docking";
         } else {
           car.state = "parked";
