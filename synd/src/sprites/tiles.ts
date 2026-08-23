@@ -22,6 +22,7 @@ export interface TileArt {
   lamp: HTMLCanvasElement;
   ads: HTMLCanvasElement[][];    // [variant][frame]
   neons: HTMLCanvasElement[];
+  adColors: string[];            // dominant color per ad variant (neon = variant+3)
   ambient: number;               // 0..1 light level
   night: boolean;
 }
@@ -473,6 +474,7 @@ export function buildTileArt(seed: number, weather: Weather): TileArt {
 
   return {
     weather, ground, sidewalk, road, roadDashV, roadDashH, roadPuddle,
-    park, island, block, pitFloor, pitWallNW, pitWallNE, lamp, ads, neons, ambient, night,
+    park, island, block, pitFloor, pitWallNW, pitWallNE, lamp, ads, neons,
+    adColors: adCols, ambient, night,
   };
 }

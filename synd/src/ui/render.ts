@@ -43,8 +43,10 @@ export class Renderer {
   private decoIndex = new Map<number, Deco[]>();
   private fences: FenceEdge[] = [];
   private decks: DeckTile[] = [];
-  // emissive sources gathered while drawing entities, blended additively later
+  // emissive sources gathered while drawing, blended additively later
   private lampGlows: { x: number; y: number; gy: number; phase: number }[] = [];
+  private emissives: { x: number; y: number; r: number; col: [number, number, number]; i: number }[] = [];
+  private frameTime = 0;
   rainDrops: { x: number; y: number; v: number }[] = [];
 
   constructor(private city: City) {
@@ -99,6 +101,12 @@ export class Renderer {
     }
   }
 
+  private glow(x: number, y: number, r: number, hex: string, intensity: number): void {
+    if (intensity <= 0.01 || this.emissives.length > 160) return;
+    const n = parseInt(hex.slice(1), 16);
+    this.emissives.push({ x, y, r, col: [(n >> 16) & 255, (n >> 8) & 255, n & 255], i: intensity });
+  }
+
   draw(
     g: CanvasRenderingContext2D,
     world: World,
@@ -115,6 +123,8 @@ export class Renderer {
     const SY = (tx: number, ty: number) => cy + (isoY(tx, ty) - camPY) * z;
 
     this.lampGlows.length = 0;
+    this.emissives.length = 0;
+    this.frameTime = time;
     g.save();
     g.beginPath();
     g.rect(vx, vy, vw, vh);
@@ -326,15 +336,27 @@ export class Renderer {
               g.transform(z * sxAd, -0.5 * z * sxAd, 0, z * syAd, ax, ay);
             }
             g.drawImage(img, 0, 0);
-            if (d.kind === "videowall" && isNight(art.weather) && !cut) {
-              g.globalCompositeOperation = "lighter";
-              g.globalAlpha = 0.25;
-              g.drawImage(img, -1, -1, img.width + 2, img.height + 2);
-              g.globalAlpha = 1;
-              g.globalCompositeOperation = "source-over";
-            }
             g.restore();
             g.globalAlpha = 1;
+            if (!cut) {
+              // feed the shared emissive pass
+              const anchX = d.face === 0 ? sx + 2 * z : sx + tw / 2 + 2 * z;
+              const anchY = d.face === 0
+                ? groundY + (TILE_H / 2) * z - (level + 1) * STORY_H * z + 4 * z
+                : groundY + TILE_H * z - (level + 1) * STORY_H * z + 2 * z;
+              const cxAd = anchX + (img.width / 2) * sxAd * z;
+              const cyAd = anchY + (img.width / 2) * (d.face === 0 ? 0.5 : -0.5) * sxAd * z + (img.height / 2) * syAd * z;
+              if (d.kind === "videowall") {
+                this.glow(cxAd, cyAd, img.width * sxAd * z * 1.15, art.adColors[d.variant % art.adColors.length], art.night ? 0.2 : 0.07);
+              } else {
+                // neon signs buzz: a few of them flicker hard
+                const phase = d.x * 2.7 + d.y * 5.3;
+                const buzzy = ((d.x * 31 + d.y * 17) & 7) === 0;
+                const fl = buzzy ? (Math.sin(this.frameTime * 12 + phase) > -0.4 ? 1 : 0.15)
+                  : 0.9 + 0.1 * Math.sin(this.frameTime * 5 + phase);
+                this.glow(cxAd, cyAd, 20 * z, art.adColors[(d.variant + 3) % art.adColors.length], (art.night ? 0.3 : 0.1) * fl);
+              }
+            }
           }
         }
       }
@@ -432,7 +454,26 @@ export class Renderer {
     }
     g.globalAlpha = 1;
 
-    // ---- emissive pass: additive bloom for the street lamps ----
+    // ---- emissive pass: shared additive bloom for every light source ----
+    if (this.emissives.length > 0) {
+      g.globalCompositeOperation = "lighter";
+      for (const e of this.emissives) {
+        const [cr, cg, cb] = e.col;
+        // hot core
+        let gr = g.createRadialGradient(e.x, e.y, 0, e.x, e.y, e.r * 0.45);
+        gr.addColorStop(0, `rgba(${cr},${cg},${cb},${Math.min(1, e.i * 1.6)})`);
+        gr.addColorStop(1, `rgba(${cr},${cg},${cb},0)`);
+        g.fillStyle = gr;
+        g.fillRect(e.x - e.r * 0.45, e.y - e.r * 0.45, e.r * 0.9, e.r * 0.9);
+        // soft halo
+        gr = g.createRadialGradient(e.x, e.y, 0, e.x, e.y, e.r);
+        gr.addColorStop(0, `rgba(${cr},${cg},${cb},${e.i * 0.45})`);
+        gr.addColorStop(1, `rgba(${cr},${cg},${cb},0)`);
+        g.fillStyle = gr;
+        g.fillRect(e.x - e.r, e.y - e.r, e.r * 2, e.r * 2);
+      }
+      g.globalCompositeOperation = "source-over";
+    }
     if (this.lampGlows.length > 0) {
       g.globalCompositeOperation = "lighter";
       for (const lm of this.lampGlows) {
@@ -806,6 +847,8 @@ export class Renderer {
     // nose light on the lead car
     if (t.head) {
       quad([px(L, W * 0.4, h0 + 3 * z), px(L, -W * 0.4, h0 + 3 * z), px(L, -W * 0.4, h0 + 6 * z), px(L, W * 0.4, h0 + 6 * z)], "#fff8c8");
+      const np = px(L, 0, h0 + 4.5 * z);
+      this.glow(np[0], np[1], 9 * z, "#fff8c8", night ? 0.5 : 0.15);
     }
     if (night) {
       const sx = SX(t.wx, t.wy), sy = SY(t.wx, t.wy) - elev;
@@ -908,6 +951,13 @@ export class Renderer {
     quad([px(L, -W * 0.35, lift + 2 * z), px(L, -W * 0.75, lift + 2 * z), px(L, -W * 0.75, lift + 3.6 * z), px(L, -W * 0.35, lift + 3.6 * z)], hl);
     // taillight strip across the rear face
     quad([px(-L, W * 0.8, lift + 2 * z), px(-L, -W * 0.8, lift + 2 * z), px(-L, -W * 0.8, lift + 3.4 * z), px(-L, W * 0.8, lift + 3.4 * z)], night ? "#ff3048" : "#c02838");
+    // bloom for the light fixtures via the shared emissive pass
+    for (const s of [0.55, -0.55]) {
+      const hp = px(L, W * s, lift + 2.8 * z);
+      this.glow(hp[0], hp[1], 7 * z, "#fff4be", night ? 0.5 : 0.1);
+    }
+    const tp = px(-L, 0, lift + 2.7 * z);
+    this.glow(tp[0], tp[1], 6.5 * z, "#ff3048", night ? 0.4 : 0.14);
 
     if (c.state === "player") {
       g.strokeStyle = "rgba(120,255,190,0.8)";
