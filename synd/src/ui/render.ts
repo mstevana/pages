@@ -864,11 +864,15 @@ export class Renderer {
     };
 
     const sx = SX(c.x, c.y), sy = SY(c.x, c.y);
-    const L = 1.15, W = 0.5;
-    // shadow
+    const L = 1.15, W = 0.44;
+    // shadow, oriented along the projected body axis (an axis-aligned
+    // ellipse under a diagonal car reads as the car sitting sideways)
+    const nose = px(L, 0, 0), tail = px(-L, 0, 0);
+    const bodyAngle = Math.atan2(nose[1] - tail[1], nose[0] - tail[0]);
+    const bodyLen = Math.hypot(nose[0] - tail[0], nose[1] - tail[1]);
     g.fillStyle = "rgba(0,0,0,0.45)";
     g.beginPath();
-    g.ellipse(sx, sy, 17 * z, 7.5 * z, 0, 0, Math.PI * 2);
+    g.ellipse(sx, sy, bodyLen * 0.62, 7 * z, bodyAngle, 0, Math.PI * 2);
     g.fill();
 
     if (c.state === "wreck") {

@@ -42,8 +42,9 @@ offline after the first load.
       firing, and auto-engage hostiles that come into range.
 - **Cars**: shoot a passing car to force it to stop — its pilot bails out and
   flees. Board it with your squad, then tap anywhere on the road network to
-  drive there. Dead-end streets always end in a roundabout so you can come
-  back on the opposite lane.
+  drive there. Every lane is strictly one-way: traffic turns and U-turns only at the
+  roundabouts, which sit at every intersection and at the end of every
+  dead-end street.
 - **Weather**: each mission rolls day / night / rainy day / rainy night.
 
 ## Objectives (one per mission, at random)

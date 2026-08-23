@@ -301,7 +301,7 @@ export class World {
 
   spawnCar(x: number, y: number, dir: number): Car {
     const car: Car = {
-      id: nextId++, x, y, angle: 0, dir, speed: 0,
+      id: nextId++, x, y, angle: Math.atan2(DY[dir], DX[dir]), dir, speed: 0,
       color: this.rng.pick(["#3a5a72", "#7a3050", "#4a7a3a", "#5a5a70", "#8a5a28", "#2a5a8a", "#8a8a92", "#7a2828"]),
       hp: 40, state: "drive", path: null, pathIdx: 0, pilotOut: false, occupants: [],
     };
@@ -1054,11 +1054,15 @@ export class World {
     }
     // AI traffic: follow lane field tile to tile
     c.speed = Math.min(6.5, c.speed + dt * 5);
-    // brake for cars ahead
+    // brake for cars ahead; keep a creep floor for moving traffic so two
+    // cars whose brake zones overlap can never deadlock at a ring
     for (const o of this.cars) {
       if (o === c || o.state === "wreck") continue;
       const aheadX = c.x + DX[c.dir] * 2.2, aheadY = c.y + DY[c.dir] * 2.2;
-      if (dist2(o.x, o.y, aheadX, aheadY) < 1.4 * 1.4) { c.speed = Math.min(c.speed, Math.max(0, o.speed - 0.5)); }
+      if (dist2(o.x, o.y, aheadX, aheadY) < 1.4 * 1.4) {
+        const floor = o.state === "parked" ? 0 : 0.7;
+        c.speed = Math.min(c.speed, Math.max(floor, o.speed - 0.5));
+      }
     }
     this.advanceCarAlongDir(c, dt);
   }
