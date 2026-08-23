@@ -82,6 +82,7 @@ export interface Beam { x0: number; y0: number; x1: number; y1: number; life: nu
 export interface Drop { id: number; x: number; y: number; item: ItemStack; }
 export interface Particle { x: number; y: number; vx: number; vy: number; life: number; maxLife: number; color: string; size: number; }
 export interface Flash { x: number; y: number; life: number; }
+export interface Ping { x: number; y: number; life: number; maxLife: number; ok: boolean; }
 
 export interface Mission {
   kind: ObjectiveKind;
@@ -123,6 +124,7 @@ export class World {
   drops: Drop[] = [];
   particles: Particle[] = [];
   flashes: Flash[] = [];
+  pings: Ping[] = [];   // feedback markers for tapped destinations
   mission: Mission;
   agents: Ped[] = [];              // the (up to) 4 player agents, index-stable
   time = 0;
@@ -351,7 +353,7 @@ export class World {
       const s = this.ringSpawnRoad(cx, cy, 18, 45);
       if (s) {
         let clear = true;
-        for (const o of this.cars) if (dist2(o.x, o.y, s.x, s.y) < 3.5 * 3.5) { clear = false; break; }
+        for (const o of this.cars) if (dist2(o.x, o.y, s.x, s.y) < 7 * 7) { clear = false; break; }
         if (!clear) continue;
         const bits = this.city.laneDir[idx(s.x | 0, s.y | 0)];
         for (let d = 0; d < 4; d++) if (bits & DBIT[d]) { this.spawnCar(s.x, s.y, d); break; }
@@ -397,21 +399,29 @@ export class World {
   cmdMove(sel: boolean[], tx: number, ty: number): void {
     const group = this.selectedAgents(sel);
     let n = 0;
+    let anyMoved = false;
     for (const a of group) {
       a.fireAt = null; a.dropOrder = null; a.pickOrder = null; a.giveOrder = null; a.boardOrder = null;
       if (a.carId !== null) {
         const car = this.cars.find((c) => c.id === a.carId);
         if (car && car.state === "player" && car.occupants[0] === a.id) {
           const p = this.pf.drivePath(car.x, car.y, tx, ty);
-          if (p) { car.path = p; car.pathIdx = 0; }
+          if (p) { car.path = p; car.pathIdx = 0; anyMoved = true; }
         }
         continue;
       }
       const ox = (n % 2) * 1.4 - 0.7, oy = Math.floor(n / 2) * 1.4 - 0.7;
       const p = this.pf.walkPath(a.x, a.y, tx + ox, ty + oy) ?? this.pf.walkPath(a.x, a.y, tx, ty);
-      if (p) { a.path = p; a.pathIdx = 0; a.state = "walk"; }
+      if (p) { a.path = p; a.pathIdx = 0; a.state = "walk"; anyMoved = true; }
       n++;
     }
+    this.addPing(tx, ty, anyMoved);
+  }
+
+  // a marker at a tapped destination: green when someone is on their way,
+  // red when nothing could path there
+  addPing(x: number, y: number, ok: boolean): void {
+    this.pings.push({ x, y, life: 1.1, maxLife: 1.1, ok });
   }
 
   cmdShoot(sel: boolean[], tx: number, ty: number): void {
@@ -772,6 +782,8 @@ export class World {
     this.beams = this.beams.filter((b) => b.life > 0);
     for (const f of this.flashes) f.life -= dt;
     this.flashes = this.flashes.filter((f) => f.life > 0);
+    for (const pg of this.pings) pg.life -= dt;
+    this.pings = this.pings.filter((pg) => pg.life > 0);
     for (const pt of this.particles) {
       pt.x += pt.vx * dt; pt.y += pt.vy * dt;
       pt.vx *= 0.92; pt.vy *= 0.92;
@@ -1138,7 +1150,7 @@ export class World {
     }
     if (c.state === "player") {
       if (!c.path || c.pathIdx >= c.path.length) { c.speed = Math.max(0, c.speed - dt * 10); return; }
-      const blocker = this.carBlocked(c, 1.0 + c.speed * 0.35);
+      const blocker = this.carBlocked(c, 2.0 + c.speed * 0.7);
       if (blocker) {
         c.speed = Math.max(0, c.speed - dt * 14);
         if (c.speed <= 0.02) return; // hold position until the road clears
@@ -1173,7 +1185,7 @@ export class World {
     // AI traffic: follow lane field tile to tile. Cars never overlap: a
     // blocked car stops dead and waits (for the player too); if it has
     // waited a long time out of sight, it is quietly recycled.
-    const blocker = this.carBlocked(c, 1.2 + c.speed * 0.35);
+    const blocker = this.carBlocked(c, 2.4 + c.speed * 0.7);
     if (blocker) {
       c.speed = Math.max(0, c.speed - dt * 16);
       c.waitT += dt;

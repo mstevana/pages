@@ -26,8 +26,9 @@ offline after the first load.
 - **Left panel (1/5 of the screen)** — top to bottom:
   - **Agent dolls**: tap a doll to select that agent alone; tap the central
     **S** emblem to select the whole squad. Health (and shield) bars live here.
-  - **Inventory**: 8 slots for the selected agent. Tap to select an item
-    (highlighted orange); every weapon shows its remaining charge as a bar —
+  - **Inventory**: 8 slots for the selected agent, each showing that item's
+    icon (the equipped weapon is still named in words beside the doll). Tap
+    to select an item (highlighted orange); every weapon shows its charge —
     an empty weapon is useless. Tapping a **medkit** heals; tapping the
     **shield belt** toggles it. **Drag a slot into the world** to have the
     agent walk there and drop the item, or **drag it onto another agent's
@@ -38,7 +39,8 @@ offline after the first load.
   - **Minimap**: the surrounding area. The current objective is the white dot
     with radar pings.
   - **WALK / SHOOT** toggles (mutually exclusive):
-    - **WALK** — tap the viewport and the selected agents path there. Tap a
+    - **WALK** — tap the viewport and the selected agents path there; the
+      tapped spot flashes a marker so you can see the order register. Tap a
       dropped item to collect it, tap a stopped, pilotless car to board it.
     - **SHOOT** — tap to fire in that direction; agents keep walking while
       firing, and auto-engage hostiles that come into range. Hostiles take

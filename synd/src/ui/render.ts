@@ -555,6 +555,37 @@ export class Renderer {
       g.globalCompositeOperation = "source-over";
     }
 
+    // ---- tap-destination markers ----
+    for (const pg of world.pings) {
+      const t = 1 - pg.life / pg.maxLife;      // 0 fresh -> 1 gone
+      const fade = 1 - t;
+      const mx = SX(pg.x, pg.y), my = SY(pg.x, pg.y);
+      const col = pg.ok ? "79,220,106" : "224,64,64";
+      const rx = (TILE_W / 2) * z, ry = (TILE_H / 2) * z;
+      // expanding shockwave ring
+      const grow = 0.35 + t * 1.5;
+      g.strokeStyle = `rgba(${col},${0.8 * fade})`;
+      g.lineWidth = 2.5;
+      g.beginPath();
+      g.ellipse(mx, my, rx * grow, ry * grow, 0, 0, Math.PI * 2);
+      g.stroke();
+      // steady inner ring with tick marks
+      g.strokeStyle = `rgba(${col},${0.9 * fade})`;
+      g.lineWidth = 1.5;
+      g.beginPath();
+      g.ellipse(mx, my, rx * 0.62, ry * 0.62, 0, 0, Math.PI * 2);
+      g.stroke();
+      g.beginPath();
+      for (const [dx, dy] of [[-1, 0], [1, 0], [0, -1], [0, 1]] as const) {
+        g.moveTo(mx + dx * rx * 0.75, my + dy * ry * 0.75);
+        g.lineTo(mx + dx * rx * 1.1, my + dy * ry * 1.1);
+      }
+      g.stroke();
+      // bright pip at the exact spot
+      g.fillStyle = `rgba(${col},${fade})`;
+      g.fillRect(mx - 1.5 * z, my - 1 * z, 3 * z, 2 * z);
+    }
+
     // roundabout holo-beacons
     for (const rb of this.city.roundabouts) {
       if (rb.x + 0.5 < x0 || rb.x > x1 || rb.y + 0.5 < y0 || rb.y > y1) continue;

@@ -3,7 +3,7 @@
 // building walls = 1 tile thick, dead-end streets terminate in a roundabout.
 
 import { Rng } from "../engine/rng";
-import { GRID } from "../engine/util";
+import { GRID, clamp } from "../engine/util";
 
 export const T_GROUND = 0;   // open ground / alley / plaza
 export const T_SIDEWALK = 1; // curb
@@ -215,9 +215,12 @@ export function generateCity(seed: number): City {
   const hEdges = [-3, ...hRoads, GRID + 1];
   for (let bi = 0; bi < vEdges.length - 1; bi++) {
     for (let bj = 0; bj < hEdges.length - 1; bj++) {
-      const x0 = vEdges[bi] + 3, x1 = vEdges[bi + 1] - 2;      // inside the sidewalks
-      const y0 = hEdges[bj] + 3, y1 = hEdges[bj + 1] - 2;
-      if (x1 - x0 < 5 || y1 - y0 < 5) continue;
+      // inset past the sidewalks AND past the roundabout rings that wrap every
+      // intersection - otherwise each block's corners are clipped and the
+      // whole corner lot has to be abandoned
+      const x0 = vEdges[bi] + 4, x1 = vEdges[bi + 1] - 3;
+      const y0 = hEdges[bj] + 4, y1 = hEdges[bj + 1] - 3;
+      if (x1 - x0 < MIN_LOT - 1 || y1 - y0 < MIN_LOT - 1) continue;
       fillBlock(tiles, height, bstyle, rng, Math.max(1, x0), Math.max(1, y0), Math.min(GRID - 2, x1), Math.min(GRID - 2, y1));
     }
   }
@@ -277,42 +280,64 @@ export function generateCity(seed: number): City {
 // buildings with a facade style, or lay out parks and sunken pits.
 // Invariant: two buildings are never closer than 4 tiles (alleys are 4 wide,
 // and street corridors are curb+road+road+curb = 4 tiles wall to wall).
+const MIN_LOT = 3;   // smallest building footprint, walls included
+const MAX_LOT = 13;  // a lot larger than this is always subdivided
+const ALLEY = 4;     // gap between lots - this is what enforces the invariant
+
 function fillBlock(tiles: Uint8Array, height: Uint8Array, bstyle: Uint8Array, rng: Rng, x0: number, y0: number, x1: number, y1: number): void {
   const w = x1 - x0 + 1, h = y1 - y0 + 1;
-  if (w < 4 || h < 4) return;
-  if (w > 13 && (w >= h || h <= 13)) {
-    const cut = x0 + rng.int(5, w - 9); // 4-tile alley keeps both halves >= 5 wide
-    fillBlock(tiles, height, bstyle, rng, x0, y0, cut - 1, y1);
-    fillBlock(tiles, height, bstyle, rng, cut + 4, y0, x1, y1);
+  if (w < MIN_LOT || h < MIN_LOT) return;
+
+  // is the whole lot still untouched ground? roads and roundabouts carved
+  // earlier cut into blocks, and those tiles must never be built over
+  let clear = true;
+  for (let y = y0; y <= y1 && clear; y++) {
+    for (let x = x0; x <= x1; x++) {
+      if (tiles[idx(x, y)] !== T_GROUND) { clear = false; break; }
+    }
+  }
+
+  // Oversized lots are split; so are obstructed ones, so that whatever part
+  // of them IS clear still gets built on instead of the block going empty.
+  const span = MIN_LOT * 2 + ALLEY;
+  const canX = w >= span, canY = h >= span;
+  if ((!clear || w > MAX_LOT || h > MAX_LOT) && (canX || canY)) {
+    // cut near the middle: lopsided cuts leave skinny lots whose 4-tile
+    // alleys would swallow most of the block
+    const halve = (len: number): number => {
+      const mid = Math.floor((len - ALLEY) / 2);
+      const jit = Math.floor((len - ALLEY) * 0.18);
+      const off = jit > 0 ? rng.int(-jit, jit) : 0;
+      return clamp(mid + off, MIN_LOT, len - MIN_LOT - ALLEY);
+    };
+    if (canX && (w >= h || !canY)) {
+      const cut = x0 + halve(w);
+      fillBlock(tiles, height, bstyle, rng, x0, y0, cut - 1, y1);
+      fillBlock(tiles, height, bstyle, rng, cut + ALLEY, y0, x1, y1);
+    } else {
+      const cut = y0 + halve(h);
+      fillBlock(tiles, height, bstyle, rng, x0, y0, x1, cut - 1);
+      fillBlock(tiles, height, bstyle, rng, x0, cut + ALLEY, x1, y1);
+    }
     return;
   }
-  if (h > 13) {
-    const cut = y0 + rng.int(5, h - 9);
-    fillBlock(tiles, height, bstyle, rng, x0, y0, x1, cut - 1);
-    fillBlock(tiles, height, bstyle, rng, x0, cut + 4, x1, y1);
-    return;
-  }
+  if (!clear) return; // too small to work around what is in the way
+
   // lot: park / sunken pit / building
-  if (rng.chance(0.22)) {
-    // parks only claim untouched ground, so stub roads survive
-    for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
-      if (tiles[idx(x, y)] === T_GROUND) tiles[idx(x, y)] = T_PARK;
-    }
+  if (rng.chance(0.18) && w >= 5 && h >= 5) {
+    for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) tiles[idx(x, y)] = T_PARK;
     // some plazas hold a sunken pit (vent shaft / excavation) with a walkable rim
-    if (rng.chance(0.35) && w >= 6 && h >= 6) {
-      for (let y = y0 + 2; y <= y1 - 2; y++) for (let x = x0 + 2; x <= x1 - 2; x++) {
-        if (tiles[idx(x, y)] === T_PARK) tiles[idx(x, y)] = T_PIT;
-      }
+    if (rng.chance(0.35) && w >= 7 && h >= 7) {
+      for (let y = y0 + 2; y <= y1 - 2; y++) for (let x = x0 + 2; x <= x1 - 2; x++) tiles[idx(x, y)] = T_PIT;
     }
     return;
   }
-  // a building lot must sit on clear ground - never pave over a stub road
-  // or roundabout that was carved through this block earlier
-  for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
-    if (tiles[idx(x, y)] !== T_GROUND) return;
-  }
-  // facade style: pick by lot, tall lots lean toward glass towers
-  const stories = rng.chance(0.08) ? rng.int(5, 7) : rng.int(1, 4);
+
+  // facade style: small footprints stay low-rise, big ones can tower
+  const small = w <= 5 || h <= 5;
+  const stories = small
+    ? rng.int(1, 3)
+    : (rng.chance(0.1) ? rng.int(5, 7) : rng.int(1, 4));
   let style: number;
   if (stories >= 5) style = rng.chance(0.6) ? S_GLASS : rng.pick([S_CONCRETE, S_COLUMNS, S_COMMERCIAL]);
   else if (stories === 1) style = rng.pick([S_INDUSTRIAL, S_COMMERCIAL, S_CONCRETE]);

@@ -5,6 +5,7 @@ import { GRID, clamp } from "../engine/util";
 import { ITEMS } from "../game/items";
 import { Ped, World } from "../game/world";
 import { FW, FH, PeopleAtlas } from "../sprites/people";
+import { itemIcons } from "../sprites/icons";
 
 export type PanelHit =
   | { type: "doll"; i: number }
@@ -224,6 +225,7 @@ export class Panel {
     g.textAlign = "left";
 
     // inventory of first selected agent
+    const icons = itemIcons();
     const inv = this.invAgent(world);
     for (let i = 0; i < 8; i++) {
       const r = L.slots[i];
@@ -237,11 +239,11 @@ export class Panel {
       g.strokeRect(r.x + 0.5, r.y + 0.5, r.w - 1, r.h - 1);
       if (item) {
         const def = ITEMS[item.type];
-        g.fillStyle = isSel ? ORANGE : "#c3ccd6";
-        g.font = `bold ${Math.max(7, r.h * 0.28)}px monospace`;
-        g.textAlign = "center";
-        g.fillText(def.short, r.x + r.w / 2, r.y + r.h * 0.38);
-        g.textAlign = "left";
+        // the item's own icon identifies the slot; the equipped weapon is
+        // still spelled out in words next to the agent's doll
+        const icon = icons[item.type];
+        const isz = Math.min(r.w - 6, r.h - 11);
+        g.drawImage(icon, r.x + (r.w - isz) / 2, r.y + 2, isz, isz);
         // charge bar graph
         const frac = clamp(item.charge / def.charge, 0, 1);
         g.fillStyle = "#0a0b10";
