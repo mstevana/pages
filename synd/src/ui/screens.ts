@@ -1,7 +1,7 @@
 // Fullscreen DOM overlays: menu, briefing, armory, debrief, game over, objectives.
 
 import { Weather } from "../engine/util";
-import { ITEMS, ItemType, newItem, sellValue } from "../game/items";
+import { ITEMS, ItemType, newItem, reloadCost, sellValue } from "../game/items";
 import { itemIconUrls } from "../sprites/icons";
 import { SaveData, newAgentName } from "../game/save";
 import { MissionResult, ObjectiveKind } from "../game/world";
@@ -106,14 +106,19 @@ export function showArmory(save: SaveData, onDone: () => void): void {
       const cells = [];
       for (let i = 0; i < 8; i++) {
         const it = a.inv[i];
-        if (!it) { cells.push(`<div class="arm-slot empty"><img src="${icons.gun}" style="visibility:hidden"><span class="arm-price">&nbsp;</span></div>`); continue; }
+        if (!it) { cells.push(`<div class="arm-slot empty"><img src="${icons.gun}" style="visibility:hidden"><span class="arm-act">&nbsp;</span><span class="arm-act">&nbsp;</span></div>`); continue; }
         const def = ITEMS[it.type];
         const frac = Math.max(0, Math.min(1, it.charge / def.charge));
+        const rl = reloadCost(it);
+        const rlRow = rl > 0
+          ? `<span class="arm-act rld ${save.credits >= rl ? "" : "poor"}" data-i="${i}">&#8635;${rl}</span>`
+          : `<span class="arm-act poor">&#8635;&mdash;</span>`;
         cells.push(
-          `<div class="arm-slot sell" data-i="${i}" title="${def.name}">
+          `<div class="arm-slot" title="${def.name}">
              <img src="${icons[it.type]}" alt="${def.name}">
              <span class="arm-bar"><i style="width:${(frac * 100).toFixed(0)}%;background:${frac > 0.25 ? def.color : "#e04040"}"></i></span>
-             <span class="arm-price">+${sellValue(it)}</span>
+             ${rlRow}
+             <span class="arm-act sell" data-i="${i}">+${sellValue(it)}</span>
            </div>`
         );
       }
@@ -137,7 +142,7 @@ export function showArmory(save: SaveData, onDone: () => void): void {
         <button id="done">Back</button>
       </div>
       <div class="arm-tabs">${tabs}</div>
-      <div class="arm-sec">LOADOUT &middot; ${a.name} &middot; TAP TO SELL (spent gear fetches less)</div>
+      <div class="arm-sec">LOADOUT &middot; ${a.name} &middot; &#8635; RELOAD &middot; + SELL (spent gear fetches less)</div>
       ${slots}
       <div class="arm-sec">MARKET &middot; TAP TO BUY</div>
       <div class="arm-market">${market}</div>
@@ -157,13 +162,26 @@ export function showArmory(save: SaveData, onDone: () => void): void {
         render();
       })
     );
-    s.querySelectorAll(".arm-slot.sell").forEach((el) =>
+    s.querySelectorAll(".arm-act.sell").forEach((el) =>
       el.addEventListener("click", () => {
         const i = Number((el as HTMLElement).dataset.i);
         const ag = save.agents[agentIdx];
         if (!ag.alive || i >= ag.inv.length) return;
         const [it] = ag.inv.splice(i, 1);
         save.credits += sellValue(it);
+        render();
+      })
+    );
+    s.querySelectorAll(".arm-act.rld:not(.poor)").forEach((el) =>
+      el.addEventListener("click", () => {
+        const i = Number((el as HTMLElement).dataset.i);
+        const ag = save.agents[agentIdx];
+        if (!ag.alive || i >= ag.inv.length) return;
+        const it = ag.inv[i];
+        const cost = reloadCost(it);
+        if (cost <= 0 || save.credits < cost) return;
+        save.credits -= cost;
+        it.charge = ITEMS[it.type].charge;
         render();
       })
     );

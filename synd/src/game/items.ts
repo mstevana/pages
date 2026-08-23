@@ -50,6 +50,18 @@ export function sellValue(it: ItemStack): number {
   return Math.floor(def.price * SELL_RATE * (0.5 + 0.5 * frac));
 }
 
+// Topping a weapon back up costs half its list price for a full load, charged
+// only for the portion that is actually missing. Always cheaper than buying a
+// replacement, and never worth doing just to resell (a reload costs more than
+// the resale value it adds).
+export const RELOAD_RATE = 0.5;
+export function reloadCost(it: ItemStack): number {
+  const def = ITEMS[it.type];
+  if (def.charge <= 0) return 0;
+  const missing = Math.max(0, 1 - it.charge / def.charge);
+  return Math.ceil(def.price * RELOAD_RATE * missing);
+}
+
 // Rough sustained damage per second, used to rank weapons when an agent's
 // current gun runs dry and has to be swapped for the next best one.
 export function weaponDps(t: ItemType): number {

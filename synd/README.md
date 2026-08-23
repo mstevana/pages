@@ -84,7 +84,9 @@ drop from the full arsenal: gun, uzi, shotgun, minigun, laser, gauss gun,
 shield belt, medkit, persuadertron. Between missions the **Armory** sells all
 of it and lets you hire replacements for fallen agents. Selling pays 40% of
 list price for fully loaded gear, scaling down to half that for something
-completely spent. Losing the whole squad
+completely spent. Spent weapons can also be **reloaded** there — a full load
+costs half the item's list price, charged only for the ammo actually missing,
+so topping up always beats buying a replacement. Losing the whole squad
 (with no funds for a recruit) ends the campaign.
 
 ## Development
