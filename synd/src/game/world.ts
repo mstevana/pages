@@ -116,6 +116,8 @@ const CIV_LIMIT = 90;
 const CAR_LIMIT = 7;
 const BLAST_R = 3.5;      // a wrecked car hurts everyone inside this radius
 const KERB_GAP = 3;       // clear length a car needs to itself at the kerb
+const WARD_CLEAR = 1.5;      // how wide a berth every gun gives the escorted civilian
+const WARD_STANDOFF = 0.8;   // how close to the mark he may stand and still be clear
 const COP_LIMIT = 4;
 const NPC_FIRE_MULT = 2.1;        // NPCs shoot slower than player agents
 const NPC_RANGE_MULT = 0.85;      // hostiles engage 15% closer than the weapon's reach
@@ -145,6 +147,7 @@ export class World {
   camX: number; camY: number;      // camera focus in tile coords (set by main)
   uiSelected: boolean[] = [true, true, true, true]; // which agents the UI has selected
   agentNames: string[] = [];
+  private wardPed: Ped | null = null;   // the civilian under the squad's protection
   result: MissionResult | null = null;
   pf: Pathfinder;
   notify: (msg: string) => void = () => {};
@@ -687,6 +690,7 @@ export class World {
       this.beams.push({ x0: shooter.x, y0: shooter.y, x1: ex, y1: ey, life: 0.12, maxLife: 0.12, color: def.color, w: 2 });
       for (const p of this.peds) {
         if (p === shooter || p.state === "dead" || p.carId !== null) continue;
+        if (p === this.wardPed) continue;    // no round of anyone's finds the escortee
         if (this.pointSegDist(p.x, p.y, shooter.x, shooter.y, ex, ey) < 0.5) {
           this.damagePed(p, def.damage, shooter);
         }
@@ -816,6 +820,34 @@ export class World {
       if (this.pointSegDist(c.x, c.y, shooter.x, shooter.y, tx, ty) < margin) return true;
     }
     return false;
+  }
+
+  // The civilian the squad is escorting. Losing them loses the mission, so
+  // for the whole run - before the persuasion, after the pickup - they are
+  // nobody's backstop.
+  private findWard(): Ped | null {
+    const m = this.mission;
+    if (m.kind !== "escort" && m.kind !== "persuade") return null;
+    const w = this.peds.find((q) => q.id === m.targetId);
+    return w && w.state !== "dead" ? w : null;
+  }
+
+  // Is the escorted civilian between this shooter and the mark? Only the
+  // stretch short of the target counts: someone level with the muzzle, behind
+  // it, or standing beside the mark is not being fired through, and treating
+  // them as if they were would leave every gun in the sector silent - the
+  // escortee spends the mission at an agent's shoulder. Rounds cannot touch
+  // them in any case; this is about where a gun is willing to point.
+  private wardInLine(shooter: Ped, tx: number, ty: number): boolean {
+    const w = this.wardPed;
+    if (!w || w === shooter) return false;
+    const dx = tx - shooter.x, dy = ty - shooter.y;
+    const d = Math.hypot(dx, dy);
+    if (d < 0.01) return false;
+    const ux = dx / d, uy = dy / d;
+    const along = (w.x - shooter.x) * ux + (w.y - shooter.y) * uy;
+    if (along <= 0 || along >= d - WARD_STANDOFF) return false;
+    return Math.abs((w.x - shooter.x) * -uy + (w.y - shooter.y) * ux) < WARD_CLEAR;
   }
 
   // anyone on foot standing in this car's path (NPC traffic yields to them)
@@ -974,6 +1006,7 @@ export class World {
 
   update(dt: number, viewRadius: number): void {
     this.time += dt;
+    this.wardPed = this.findWard();
     this.heat = Math.max(this.mission.kind === "assassinate" ? 10 : 0, this.heat - dt * 0.12);
     this.popTimer -= dt;
     if (this.popTimer <= 0) { this.popTimer = 1.2; this.populate(); }
@@ -1209,7 +1242,8 @@ export class World {
 
     // manual fire order
     if (p.fireAt && weapon && wdef && wdef.weapon && weapon.charge > 0) {
-      if (p.fireCd <= 0) {
+      // an order to shoot is still refused if it would rake the escortee
+      if (p.fireCd <= 0 && !this.wardInLine(p, p.fireAt.x, p.fireAt.y)) {
         this.fireWeapon(p, weapon, weapon.type, p.fireAt.x, p.fireAt.y);
         if (!p.path) p.dir = this.dirOf(p.fireAt.x - p.x, p.fireAt.y - p.y);
       }
@@ -1228,6 +1262,7 @@ export class World {
         const d2 = dist2(t.x, t.y, p.x, p.y);
         if (d2 >= bd || !this.pf.losShot(p.x, p.y, t.x, t.y)) continue;
         if (this.carInLine(p, t.x, t.y)) continue;      // not through a car
+        if (this.wardInLine(p, t.x, t.y)) continue;  // nor past the escortee
         best = t; bd = d2;
       }
       if (best) {
@@ -1284,22 +1319,28 @@ export class World {
     const hostile = provoked || this.mission.kind === "assassinate";
     if (hostile) {
       let best: Ped | null = null; let bd = 1e9;
+      const reach = ITEMS.gun.range * NPC_RANGE_MULT;
       for (const a of this.agents) {
         if (a.hp <= 0 || a.carId !== null) continue;
         const d2 = dist2(a.x, a.y, p.x, p.y);
-        if (d2 < bd) { best = a; bd = d2; }
+        if (d2 >= bd) continue;
+        if (this.wardInLine(p, a.x, a.y)) continue;  // never down the escortee's line
+        best = a; bd = d2;
       }
       if (best) {
         const d = Math.sqrt(bd);
-        const canShoot = d < ITEMS.gun.range * NPC_RANGE_MULT && this.pf.losShot(p.x, p.y, best.x, best.y)
+        const canShoot = d < reach && this.pf.losShot(p.x, p.y, best.x, best.y)
           && !this.carInLine(p, best.x, best.y);
         if (!canShoot) p.aimTargetId = null; // breaking the shot forfeits the draw
+        // the escortee crossing the line stays the trigger's business: it must
+        // not keep resetting the draw, or the shot never comes at all
+        const safe = !this.wardInLine(p, best.x, best.y);
         if (canShoot) {
           p.path = null; p.state = "idle";
           p.dir = this.dirOf(best.x - p.x, best.y - p.y);
           // freshly acquired target: take a beat to draw before firing
           if (p.aimTargetId !== best.id) { p.aimTargetId = best.id; p.aimT = this.rng.float(NPC_AIM_MIN, NPC_AIM_MAX); }
-          if (p.aimT <= 0 && p.fireCd <= 0) {
+          if (p.aimT <= 0 && p.fireCd <= 0 && safe) {
             const j = 0.7 * NPC_SPREAD_MULT;
             this.fireWeapon(p, null, "gun", best.x + this.rng.float(-j, j), best.y + this.rng.float(-j, j), NPC_SPREAD_MULT, NPC_RANGE_MULT);
             p.fireCd *= NPC_FIRE_MULT;
@@ -1326,29 +1367,38 @@ export class World {
   }
 
   private updateEnemy(p: Ped, dt: number): void {
-    // choose target: the vip (if persuaded/escorted) or nearest agent
+    // Rivals come for the squad, never for the civilian in its care, and they
+    // pick whichever agent they can engage without the escortee downrange.
     let best: Ped | null = null; let bd = 1e9;
     const m = this.mission;
-    const vip = (m.kind === "persuade" || m.kind === "escort") ? this.peds.find((q) => q.id === m.targetId && q.state !== "dead" && q.persuaded) : undefined;
-    if (vip) { best = vip; bd = dist2(vip.x, vip.y, p.x, p.y); }
+    const wdef = ITEMS[p.weapon ?? "gun"];
+    const reach = wdef.range * NPC_RANGE_MULT;
+    let blocked: Ped | null = null; let bbd = 1e9;
     for (const a of this.agents) {
       if (a.hp <= 0 || a.carId !== null) continue;
       const d2 = dist2(a.x, a.y, p.x, p.y);
+      if (this.wardInLine(p, a.x, a.y)) {
+        if (d2 < bbd) { blocked = a; bbd = d2; }   // still worth closing on
+        continue;
+      }
       if (d2 < bd) { best = a; bd = d2; }
     }
+    if (!best && blocked) { best = blocked; bd = bbd; }   // move up, hold fire
     if (!best) return;
     const d = Math.sqrt(bd);
-    const wdef = ITEMS[p.weapon ?? "gun"];
     const hunting = m.kind === "killall" ? d < 55 || this.rng.chance(0.001) : true;
-    const canShoot = d < wdef.range * NPC_RANGE_MULT && this.pf.losShot(p.x, p.y, best.x, best.y)
+    const canShoot = d < reach && this.pf.losShot(p.x, p.y, best.x, best.y)
       && !this.carInLine(p, best.x, best.y);
     if (!canShoot) p.aimTargetId = null; // breaking the shot forfeits the draw
+    // the escortee crossing the line stays the trigger's business: it must not
+    // keep resetting the draw, or the shot never comes at all
+    const safe = !this.wardInLine(p, best.x, best.y);
     if (canShoot) {
       p.path = null; p.state = "idle";
       p.dir = this.dirOf(best.x - p.x, best.y - p.y);
       // freshly acquired target: take a beat to draw before firing
       if (p.aimTargetId !== best.id) { p.aimTargetId = best.id; p.aimT = this.rng.float(NPC_AIM_MIN, NPC_AIM_MAX); }
-      if (p.aimT <= 0 && p.fireCd <= 0) {
+      if (p.aimT <= 0 && p.fireCd <= 0 && safe) {
         const j = 0.5 * NPC_SPREAD_MULT;
         this.fireWeapon(p, null, p.weapon ?? "gun", best.x + this.rng.float(-j, j), best.y + this.rng.float(-j, j), NPC_SPREAD_MULT, NPC_RANGE_MULT);
         p.fireCd *= NPC_FIRE_MULT * 0.75; // rival agents shoot faster than cops
@@ -1548,6 +1598,7 @@ export class World {
         // hit peds
         for (const p of this.peds) {
           if (p.state === "dead" || p.team === pr.team || p.carId !== null) continue;
+          if (p === this.wardPed) continue;  // no round of anyone's finds the escortee
           if (pr.team === "cop" && p.team === "civ") continue;
           if (pr.team === "enemy" && (p.team === "cop")) continue;
           if (dist2(p.x, p.y, pr.x, pr.y) < 0.35) {
