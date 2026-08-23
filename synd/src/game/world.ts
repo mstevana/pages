@@ -167,7 +167,7 @@ export class World {
       if (!sa || !sa.alive) { this.agents.push(this.makeDeadPlaceholder(i)); continue; }
       const p = this.makePed("player", start.x + (i % 2) * 1.2 - 0.6, start.y + Math.floor(i / 2) * 1.2 - 0.6);
       p.agentIdx = i;
-      p.hp = Math.max(35, sa.hp);
+      p.hp = AGENT_HP; // every agent deploys at full health
       p.maxHp = AGENT_HP;
       p.inv = sa.inv.map((s) => ({ ...s }));
       p.sel = p.inv.findIndex((s) => ITEMS[s.type].weapon && s.charge > 0);

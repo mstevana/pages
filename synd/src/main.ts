@@ -167,7 +167,7 @@ function endMission(result: MissionResult): void {
     if (a.hp <= 0) {
       sa.alive = false; sa.hp = 0; sa.inv = [];
     } else {
-      sa.hp = Math.min(100, Math.max(40, Math.round(a.hp) + 20)); // medbay patch-up
+      sa.hp = 100; // the medbay patches survivors up completely between missions
       sa.inv = a.inv.map((s) => ({ ...s }));
     }
   }

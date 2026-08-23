@@ -84,6 +84,7 @@ are left.
 
 ## Campaign
 
+Surviving agents are patched up to full health between missions.
 Progress persists in `localStorage`: your agents, their gear, credits and the
 mission counter. Cops usually drop a gun (occasionally better); rival agents
 drop from the full arsenal: gun, uzi, shotgun, minigun, laser, gauss gun,
