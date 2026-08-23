@@ -5,7 +5,7 @@ import { City, T_ROAD, DBIT, DX, DY, idx, inGrid, isRoad, isWalkable } from "../
 import { AudioEngine } from "../engine/audio";
 import { Rng } from "../engine/rng";
 import { GRID, Weather, clamp, dist, dist2 } from "../engine/util";
-import { ITEMS, ItemStack, ItemType, copDrop, enemyDrop, newItem } from "./items";
+import { ITEMS, ItemStack, ItemType, copDrop, enemyDrop, newItem, weaponDps } from "./items";
 import { Pathfinder } from "./pathfind";
 import { SaveData } from "./save";
 
@@ -422,9 +422,15 @@ export class World {
   }
 
   cmdPickup(sel: boolean[], dropId: number): void {
-    const a = this.selectedAgents(sel)[0];
     const d = this.drops.find((dd) => dd.id === dropId);
-    if (!a || !d || a.carId !== null) return;
+    if (!d) return;
+    // the first selected agent with a free slot goes to fetch it
+    const group = this.selectedAgents(sel).filter((g) => g.carId === null);
+    const a = group.find((g) => g.inv.length < 8);
+    if (!a) {
+      if (group.length > 0) this.notify("NO FREE INVENTORY SLOTS");
+      return;
+    }
     a.pickOrder = dropId; a.dropOrder = null; a.boardOrder = null; a.giveOrder = null;
     const p = this.pf.walkPath(a.x, a.y, d.x, d.y);
     if (p) { a.path = p; a.pathIdx = 0; a.state = "walk"; }
@@ -486,6 +492,18 @@ export class World {
       const n = this.pf.nearestWalkable((car.x | 0) - 1, (car.y | 0) - 1, 4);
       if (n) { a.x = n.x + 0.5; a.y = n.y + 0.5; } else { a.x = car.x; a.y = car.y; }
     }
+  }
+
+  // index of the highest-DPS weapon that still has charge, or -1
+  private bestWeaponIdx(p: Ped): number {
+    let best = -1, bestScore = -1;
+    for (let i = 0; i < p.inv.length; i++) {
+      const it = p.inv[i];
+      if (!ITEMS[it.type].weapon || it.charge <= 0) continue;
+      const s = weaponDps(it.type);
+      if (s > bestScore) { bestScore = s; best = i; }
+    }
+    return best;
   }
 
   selectItem(agent: Ped, invIdx: number): void {
@@ -865,7 +883,7 @@ export class World {
         p.inv.push(d.item);
         if (p.sel < 0) p.sel = p.inv.length - 1;
         this.audio.pickup();
-        this.notify(`${ITEMS[d.item.type].name} ACQUIRED`);
+        this.notify(`${this.agentNames[p.agentIdx] ?? "AGENT"}: ${ITEMS[d.item.type].name}`);
       }
     }
     if (p.giveOrder) {
@@ -904,6 +922,19 @@ export class World {
       else {
         belt.charge = Math.max(0, belt.charge - dt * 3);
         p.shield = belt.charge;
+      }
+    }
+    // a weapon that has run dry is swapped for the next best one in the pack
+    if (p.sel >= 0 && p.sel < p.inv.length) {
+      const cur = p.inv[p.sel];
+      if (ITEMS[cur.type].weapon && cur.charge <= 0) {
+        const nxt = this.bestWeaponIdx(p);
+        if (nxt >= 0) {
+          p.sel = nxt;
+          const who = this.agentNames[p.agentIdx] ?? "AGENT";
+          this.notify(`${who}: ${ITEMS[cur.type].short} DRY > ${ITEMS[p.inv[nxt].type].short}`);
+          this.audio.click();
+        }
       }
     }
     const weapon = p.sel >= 0 && p.sel < p.inv.length ? p.inv[p.sel] : null;

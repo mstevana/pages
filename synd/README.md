@@ -32,7 +32,9 @@ offline after the first load.
     **shield belt** toggles it. **Drag a slot into the world** to have the
     agent walk there and drop the item, or **drag it onto another agent's
     doll** to hand it over (they'll walk to each other if apart; the doll
-    lights up green when it can receive).
+    lights up green when it can receive). A weapon that runs dry is
+    swapped automatically for the best one left in that agent's pack, and
+    tapping loot sends the first selected agent with a free slot to fetch it.
   - **Minimap**: the surrounding area. The current objective is the white dot
     with radar pings.
   - **WALK / SHOOT** toggles (mutually exclusive):

@@ -41,6 +41,14 @@ export function newItem(type: ItemType): ItemStack {
   return { type, charge: ITEMS[type].charge };
 }
 
+// Rough sustained damage per second, used to rank weapons when an agent's
+// current gun runs dry and has to be swapped for the next best one.
+export function weaponDps(t: ItemType): number {
+  const d = ITEMS[t];
+  if (!d.weapon) return -1;
+  return (d.damage * Math.max(1, d.pellets)) / Math.max(0.05, d.cooldown);
+}
+
 // Loot tables. Cops normally drop a gun, small chance of something else.
 // Enemy agents have a higher chance to drop any item.
 export function copDrop(r: () => number): ItemType | null {
