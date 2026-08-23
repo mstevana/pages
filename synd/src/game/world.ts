@@ -64,6 +64,7 @@ export interface Car {
   pathIdx: number;
   pilotOut: boolean;
   occupants: number[];    // agent ped ids
+  waitT: number;          // seconds spent stopped behind another car
 }
 
 export interface Projectile {
@@ -303,7 +304,7 @@ export class World {
     const car: Car = {
       id: nextId++, x, y, angle: Math.atan2(DY[dir], DX[dir]), dir, speed: 0,
       color: this.rng.pick(["#3a5a72", "#7a3050", "#4a7a3a", "#5a5a70", "#8a5a28", "#2a5a8a", "#8a8a92", "#7a2828"]),
-      hp: 40, state: "drive", path: null, pathIdx: 0, pilotOut: false, occupants: [],
+      hp: 90, state: "drive", path: null, pathIdx: 0, pilotOut: false, occupants: [], waitT: 0,
     };
     this.cars.push(car);
     return car;
@@ -334,6 +335,9 @@ export class World {
     for (let i = activeCars; i < CAR_LIMIT; i++) {
       const s = this.ringSpawnRoad(cx, cy, 18, 45);
       if (s) {
+        let clear = true;
+        for (const o of this.cars) if (dist2(o.x, o.y, s.x, s.y) < 3.5 * 3.5) { clear = false; break; }
+        if (!clear) continue;
         const bits = this.city.laneDir[idx(s.x | 0, s.y | 0)];
         for (let d = 0; d < 4; d++) if (bits & DBIT[d]) { this.spawnCar(s.x, s.y, d); break; }
       }
@@ -612,18 +616,48 @@ export class World {
     }
   }
 
+  // is another car in this car's path? (cars never overlap: they stop and wait)
+  private carBlocked(c: Car, range: number): Car | null {
+    const fx = Math.cos(c.angle), fy = Math.sin(c.angle);
+    for (const o of this.cars) {
+      if (o === c || o.state === "wreck") continue;
+      const relx = o.x - c.x, rely = o.y - c.y;
+      const along = relx * fx + rely * fy;
+      if (along < 0.2 || along > range) continue;
+      const lat = Math.abs(relx * -fy + rely * fx);
+      if (lat < 0.95) return o;
+    }
+    return null;
+  }
+
   damageCar(c: Car, dmg: number, from: Ped | null): void {
     if (c.state === "wreck") return;
     c.hp -= dmg;
-    if (dmg >= 200) {
-      // gauss round: obliterate
-      c.state = "wreck";
-      this.explode(c.x, c.y, from);
+    if (c.hp <= 0 || dmg >= 200) {
+      this.destroyCar(c, from);
       return;
     }
     if (c.state === "drive") {
       c.state = "stopping";
     }
+  }
+
+  // too much damage: the car goes up in a fireball
+  private destroyCar(c: Car, from: Ped | null): void {
+    c.state = "wreck";
+    c.speed = 0;
+    c.path = null;
+    for (const oid of c.occupants) {
+      const rider = this.peds.find((q) => q.id === oid);
+      if (rider) {
+        rider.carId = null;
+        const n = this.pf.nearestWalkable((c.x | 0) + 1, (c.y | 0) + 1, 4);
+        rider.x = n ? n.x + 0.5 : c.x + 1;
+        rider.y = n ? n.y + 0.5 : c.y;
+      }
+    }
+    c.occupants = [];
+    this.explode(c.x, c.y, from);
   }
 
   private explode(x: number, y: number, from: Ped | null): void {
@@ -687,6 +721,7 @@ export class World {
     this.updateMission(dt, viewRadius);
     for (const p of this.peds) this.updatePed(p, dt);
     for (const c of this.cars) this.updateCar(c, dt);
+    this.cars = this.cars.filter((c) => c.waitT < 1e8);
     this.updateProjectiles(dt);
 
     for (const b of this.beams) b.life -= dt;
@@ -1023,6 +1058,8 @@ export class World {
       if (c.speed <= 0.01 && !c.pilotOut) {
         c.pilotOut = true;
         c.state = "parked";
+        // never rest diagonally mid-turn - that reads as a sideways car
+        c.angle = Math.round(c.angle / (Math.PI / 2)) * (Math.PI / 2);
         // pilot dismounts and flees
         const n = this.pf.nearestWalkable((c.x | 0) + 1, (c.y | 0) + 1, 4);
         const pilot = this.spawnCiv(n ? n.x + 0.5 : c.x + 1, n ? n.y + 0.5 : c.y);
@@ -1033,7 +1070,13 @@ export class World {
     }
     if (c.state === "player") {
       if (!c.path || c.pathIdx >= c.path.length) { c.speed = Math.max(0, c.speed - dt * 10); return; }
-      c.speed = Math.min(9, c.speed + dt * 8);
+      const blocker = this.carBlocked(c, 1.0 + c.speed * 0.35);
+      if (blocker) {
+        c.speed = Math.max(0, c.speed - dt * 14);
+        if (c.speed <= 0.02) return; // hold position until the road clears
+      } else {
+        c.speed = Math.min(9, c.speed + dt * 8);
+      }
       const wp = c.path[c.pathIdx];
       const dx = wp.x - c.x, dy = wp.y - c.y;
       const d = Math.sqrt(dx * dx + dy * dy);
@@ -1052,17 +1095,21 @@ export class World {
       }
       return;
     }
-    // AI traffic: follow lane field tile to tile
-    c.speed = Math.min(6.5, c.speed + dt * 5);
-    // brake for cars ahead; keep a creep floor for moving traffic so two
-    // cars whose brake zones overlap can never deadlock at a ring
-    for (const o of this.cars) {
-      if (o === c || o.state === "wreck") continue;
-      const aheadX = c.x + DX[c.dir] * 2.2, aheadY = c.y + DY[c.dir] * 2.2;
-      if (dist2(o.x, o.y, aheadX, aheadY) < 1.4 * 1.4) {
-        const floor = o.state === "parked" ? 0 : 0.7;
-        c.speed = Math.min(c.speed, Math.max(floor, o.speed - 0.5));
+    // AI traffic: follow lane field tile to tile. Cars never overlap: a
+    // blocked car stops dead and waits (for the player too); if it has
+    // waited a long time out of sight, it is quietly recycled.
+    const blocker = this.carBlocked(c, 1.2 + c.speed * 0.35);
+    if (blocker) {
+      c.speed = Math.max(0, c.speed - dt * 16);
+      c.waitT += dt;
+      if (c.waitT > 9 && dist2(c.x, c.y, this.camX, this.camY) > 45 * 45) {
+        c.waitT = 1e9; // culled after the update loop
+        return;
       }
+      if (c.speed <= 0.02) return;
+    } else {
+      c.waitT = 0;
+      c.speed = Math.min(6.5, c.speed + dt * 5);
     }
     this.advanceCarAlongDir(c, dt);
   }

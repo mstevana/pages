@@ -112,7 +112,8 @@ export function generateCity(seed: number): City {
     return true;
   };
   const carveRing = (rx0: number, ry0: number, register: boolean): void => {
-    const rx1 = rx0 + 5, ry1 = ry0 + 5;
+    // 4x4 ring: a 1-tile circulating road around a 2x2 island
+    const rx1 = rx0 + 3, ry1 = ry0 + 3;
     for (let y = ry0; y <= ry1; y++) for (let x = rx0; x <= rx1; x++) {
       const border = x === rx0 || x === rx1 || y === ry0 || y === ry1;
       tiles[idx(x, y)] = border ? T_ROAD : T_ISLAND;
@@ -124,24 +125,24 @@ export function generateCity(seed: number): City {
     for (let y = ry0; y <= ry1; y++) { laneDir[idx(rx0, y)] |= D_S; laneDir[idx(rx1, y)] |= D_N; }
     laneDir[idx(rx0, ry0)] = D_S; laneDir[idx(rx0, ry1)] = D_E;
     laneDir[idx(rx1, ry1)] = D_N; laneDir[idx(rx1, ry0)] = D_W;
+    // exits into the four outgoing one-way lanes (harmless when nothing is there)
+    laneDir[idx(rx0 + 2, ry0)] |= D_N;
+    laneDir[idx(rx0 + 1, ry1)] |= D_S;
+    laneDir[idx(rx0, ry0 + 1)] |= D_W;
+    laneDir[idx(rx1, ry0 + 2)] |= D_E;
     // surrounding sidewalk
     for (let y = ry0 - 1; y <= ry1 + 1; y++) for (let x = rx0 - 1; x <= rx1 + 1; x++) {
       if (inGrid(x, y) && tiles[idx(x, y)] === T_GROUND) tiles[idx(x, y)] = T_SIDEWALK;
     }
-    if (register) roundabouts.push({ x: rx0 + 2, y: ry0 + 2 });
+    if (register) roundabouts.push({ x: rx0 + 1, y: ry0 + 1 });
   };
 
   // A roundabout at EVERY avenue intersection: the ring is the only place
   // where traffic changes lanes/directions - straight lanes stay one-way.
   for (const x of vRoads) for (const y of hRoads) {
-    const rx0 = x - 2, ry0 = y - 2, rx1 = x + 3, ry1 = y + 3;
-    if (rx0 < 1 || ry0 < 1 || rx1 >= GRID - 1 || ry1 >= GRID - 1) continue;
+    const rx0 = x - 1, ry0 = y - 1;
+    if (rx0 < 1 || ry0 < 1 || rx0 + 3 >= GRID - 1 || ry0 + 3 >= GRID - 1) continue;
     carveRing(rx0, ry0, false);
-    // exits from the ring into each outgoing one-way lane
-    laneDir[idx(x + 1, ry0)] |= D_N; // northbound lane
-    laneDir[idx(x, ry1)] |= D_S;     // southbound lane
-    laneDir[idx(rx0, y)] |= D_W;     // westbound lane
-    laneDir[idx(rx1, y + 1)] |= D_E; // eastbound lane
   }
 
   const placeRoundabout = (rx0: number, ry0: number): void => {
@@ -155,35 +156,31 @@ export function generateCity(seed: number): City {
       // horizontal stub off a vertical avenue; stub rows y, y+1
       const ax = rng.pick(vRoads);
       const y = rng.int(8, GRID - 14);
-      if (rng.chance(0.5)) { // heading right (east)
-        const rx0 = ax + 2 + len, ry0 = y - 2;
-        if (!areaClear(ax + 2, ry0 - 1, rx0 + 6, ry0 + 6)) continue;
+      if (rng.chance(0.5)) { // heading right (east): ring's left column receives the stub
+        const rx0 = ax + 2 + len, ry0 = y - 1;
+        if (!areaClear(ax + 2, ry0 - 1, rx0 + 4, ry0 + 4)) continue;
         placeRoundabout(rx0, ry0);
         paveRoadH(y, ax + 2, rx0 - 1);
-        laneDir[idx(rx0, y)] |= D_W;      // ring exit into westbound stub lane
-      } else { // heading left (west)
-        const rx1 = ax - 3 - len, rx0 = rx1 - 5, ry0 = y - 2;
-        if (!areaClear(rx0 - 1, ry0 - 1, ax - 2, ry0 + 6)) continue;
+      } else { // heading left (west): ring's right column receives the stub
+        const rx1 = ax - 3 - len, rx0 = rx1 - 3, ry0 = y - 1;
+        if (!areaClear(rx0 - 1, ry0 - 1, ax - 2, ry0 + 4)) continue;
         placeRoundabout(rx0, ry0);
         paveRoadH(y, rx1 + 1, ax - 2);
-        laneDir[idx(rx1, y + 1)] |= D_E;  // ring exit into eastbound stub lane
       }
     } else if (hRoads.length > 0) {
       // vertical stub off a horizontal avenue; stub cols x, x+1
       const ay = rng.pick(hRoads);
       const x = rng.int(8, GRID - 14);
-      if (rng.chance(0.5)) { // heading down (south)
-        const ry0 = ay + 2 + len, rx0 = x - 2;
-        if (!areaClear(rx0 - 1, ay + 2, rx0 + 6, ry0 + 6)) continue;
+      if (rng.chance(0.5)) { // heading down (south): ring's top row receives the stub
+        const ry0 = ay + 2 + len, rx0 = x - 1;
+        if (!areaClear(rx0 - 1, ay + 2, rx0 + 4, ry0 + 4)) continue;
         placeRoundabout(rx0, ry0);
         paveRoadV(x, ay + 2, ry0 - 1);
-        laneDir[idx(x + 1, ry0)] |= D_N;  // ring exit into northbound stub lane
-      } else { // heading up (north)
-        const ry1 = ay - 3 - len, ry0 = ry1 - 5, rx0 = x - 2;
-        if (!areaClear(rx0 - 1, ry0 - 1, rx0 + 6, ay - 2)) continue;
+      } else { // heading up (north): ring's bottom row receives the stub
+        const ry1 = ay - 3 - len, ry0 = ry1 - 3, rx0 = x - 1;
+        if (!areaClear(rx0 - 1, ry0 - 1, rx0 + 4, ay - 2)) continue;
         placeRoundabout(rx0, ry0);
         paveRoadV(x, ry1 + 1, ay - 2);
-        laneDir[idx(x, ry1)] |= D_S;      // ring exit into southbound stub lane
       }
     }
   }
@@ -263,7 +260,7 @@ export function generateCity(seed: number): City {
   // ---- 5. Street lamps on the sidewalk corners around each roundabout ----
   const lamps: { x: number; y: number }[] = [];
   for (const x of vRoads) for (const y of hRoads) {
-    for (const [lx, ly] of [[x - 3, y - 3], [x + 4, y - 3], [x - 3, y + 4], [x + 4, y + 4]] as const) {
+    for (const [lx, ly] of [[x - 2, y - 2], [x + 3, y - 2], [x - 2, y + 3], [x + 3, y + 3]] as const) {
       if (inGrid(lx, ly) && tiles[idx(lx, ly)] === T_SIDEWALK && rng.chance(0.8)) lamps.push({ x: lx, y: ly });
     }
   }
