@@ -690,7 +690,6 @@ export class World {
       this.beams.push({ x0: shooter.x, y0: shooter.y, x1: ex, y1: ey, life: 0.12, maxLife: 0.12, color: def.color, w: 2 });
       for (const p of this.peds) {
         if (p === shooter || p.state === "dead" || p.carId !== null) continue;
-        if (p === this.wardPed) continue;    // no round of anyone's finds the escortee
         if (this.pointSegDist(p.x, p.y, shooter.x, shooter.y, ex, ey) < 0.5) {
           this.damagePed(p, def.damage, shooter);
         }
@@ -836,8 +835,9 @@ export class World {
   // stretch short of the target counts: someone level with the muzzle, behind
   // it, or standing beside the mark is not being fired through, and treating
   // them as if they were would leave every gun in the sector silent - the
-  // escortee spends the mission at an agent's shoulder. Rounds cannot touch
-  // them in any case; this is about where a gun is willing to point.
+  // escortee spends the mission at an agent's shoulder. A stray can still
+  // find them - this governs where a gun is willing to point, not what a
+  // round in flight is allowed to hit.
   private wardInLine(shooter: Ped, tx: number, ty: number): boolean {
     const w = this.wardPed;
     if (!w || w === shooter) return false;
@@ -1598,7 +1598,6 @@ export class World {
         // hit peds
         for (const p of this.peds) {
           if (p.state === "dead" || p.team === pr.team || p.carId !== null) continue;
-          if (p === this.wardPed) continue;  // no round of anyone's finds the escortee
           if (pr.team === "cop" && p.team === "civ") continue;
           if (pr.team === "enemy" && (p.team === "cop")) continue;
           if (dist2(p.x, p.y, pr.x, pr.y) < 0.35) {

@@ -61,8 +61,22 @@ export function showBriefing(
   onArmory: () => void
 ): void {
   clearScreens();
+  const icons = itemIconUrls();
+  // the loadout reads as the kit itself: one icon per item, each over what is
+  // left in it, so a squad going out on empty guns is obvious at a glance
+  const kit = (a: SaveData["agents"][number]): string => {
+    if (!a.alive || a.inv.length === 0) return `<span class="dim">-</span>`;
+    return `<div class="brief-kit">${a.inv.map((it) => {
+      const def = ITEMS[it.type];
+      const frac = Math.max(0, Math.min(1, it.charge / def.charge));
+      const bar = def.charge > 1
+        ? `<span class="kit-bar"><i style="width:${(frac * 100).toFixed(0)}%;background:${frac > 0.25 ? def.color : "#e04040"}"></i></span>`
+        : `<span class="kit-bar"></span>`;
+      return `<span class="kit-slot" title="${def.name}"><img src="${icons[it.type]}" alt="${def.name}">${bar}</span>`;
+    }).join("")}</div>`;
+  };
   const roster = save.agents.map((a) =>
-    `<tr><td>${a.name}</td><td>${a.alive ? a.hp + "%" : "K.I.A."}</td><td>${a.alive ? a.inv.map((i) => ITEMS[i.type].short).join(" ") || "-" : "-"}</td></tr>`
+    `<tr><td>${a.name}</td><td>${a.alive ? a.hp + "%" : "K.I.A."}</td><td>${kit(a)}</td></tr>`
   ).join("");
   const s = screen(`
     <h2>MISSION ${String(save.mission).padStart(2, "0")} &middot; ${OBJECTIVE_LABEL[kind]}</h2>
