@@ -103,7 +103,7 @@ export class AudioEngine {
       const f = this.ac.createBiquadFilter();
       f.type = "bandpass"; f.frequency.value = 3000; f.Q.value = 0.4;
       this.rainGain = this.ac.createGain();
-      this.rainGain.gain.value = 0.08;
+      this.rainGain.gain.value = 0.04;
       this.rainSrc.connect(f).connect(this.rainGain).connect(this.master);
       this.rainSrc.start();
     } else if (!on && this.rainSrc) {
