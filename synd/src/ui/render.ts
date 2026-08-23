@@ -6,6 +6,7 @@ import { City, Deco, Prop, T_BUILDING, T_GROUND, T_ISLAND, T_PARK, T_PIT, T_ROAD
 import { GRID, STORY_H, TILE_H, TILE_W, isNight, isRain, isoX, isoY } from "../engine/util";
 import { PeopleAtlas, FW, FH } from "../sprites/people";
 import { BENCH_H, BENCH_W, STALL_H, STALL_W, TREE_H, TREE_W } from "../sprites/props";
+import { CAR_MODELS } from "../sprites/cars";
 import { TileArt } from "../sprites/tiles";
 import { Car, Ped, World } from "../game/world";
 import { ITEMS } from "../game/items";
@@ -1048,6 +1049,7 @@ export class Renderer {
     SX: (x: number, y: number) => number, SY: (x: number, y: number) => number, z: number
   ): void {
     const night = isNight(art.weather);
+    const m = CAR_MODELS[c.model % CAR_MODELS.length];
     const shade = (hex: string, f: number): string => {
       const n = parseInt(hex.slice(1), 16);
       const r = Math.min(255, (((n >> 16) & 255) * f) | 0);
@@ -1090,9 +1092,7 @@ export class Renderer {
     };
 
     // ---- shadow, oriented along the projected body axis ----
-    const bt = c.id % 3; // body type: 0 speeder, 1 sports wedge, 2 cargo van
-    const L = bt === 2 ? 1.3 : bt === 1 ? 1.22 : 1.15;
-    const W = bt === 2 ? 0.48 : 0.42;
+    const L = m.L, W = m.W;
     const sx = SX(c.x, c.y), sy = SY(c.x, c.y);
     const nose = px(L, 0, 0), tail = px(-L, 0, 0);
     const bodyAngle = Math.atan2(nose[1] - tail[1], nose[0] - tail[0]);
@@ -1109,14 +1109,15 @@ export class Renderer {
       return;
     }
 
-    const accent = ["#25e0ff", "#ff2fa0", "#ffe32f", "#7dff3f", "#ff7a1f", "#b06bff"][c.id % 6];
+    const accent = m.accent;
     const lift = 2 * z;
-    const hullH = bt === 2 ? 9 * z : bt === 1 ? 5.5 * z : 6.5 * z;
-    const glass = night ? "#31434f" : "#6fa8c2";
-    const glassTop = night ? "#243038" : "#54889e";
+    const hullH = m.hull * z;
+    const cabTop = m.cabH * z;
+    const glass = night ? "#31434f" : m.glassTint;
+    const moving = c.speed > 0.5;
 
     // headlight cone on the ground at night
-    if (night && c.speed > 0.5) {
+    if (night && moving) {
       quad([px(L, -W * 0.7, 0), px(L, W * 0.7, 0), px(L + 2.6, W * 1.8, 0), px(L + 2.6, -W * 1.8, 0)], "rgba(255,245,200,0.09)");
     }
     // hover underglow in the car's accent color
@@ -1130,95 +1131,181 @@ export class Renderer {
       g.globalCompositeOperation = "source-over";
     }
 
-    // ---- hull: chamfered, nose-tapered footprint ----
-    const hull: [number, number][] = bt === 2
-      ? [[L, W * 0.55], [L * 0.72, W], [-L * 0.85, W], [-L, W * 0.65], [-L, -W * 0.65], [-L * 0.85, -W], [L * 0.72, -W], [L, -W * 0.55]]
-      : [[L, W * 0.32], [L * 0.62, W], [-L * 0.78, W], [-L, W * 0.55], [-L, -W * 0.55], [-L * 0.78, -W], [L * 0.62, -W], [L, -W * 0.32]];
-    extrude(hull, lift, lift + hullH, c.color, shade(c.color, 1.12));
+    // hull plan: a superellipse whose squareness is the model's own, narrowed
+    // toward the nose by its taper. round 0 is a slab-sided box, 1 an ellipse.
+    const tw = W * (1 - m.taper);
+    const e = 2 / (4.5 - 2.5 * m.round);
+    const hull: [number, number][] = [];
+    for (let k = 0; k < 12; k++) {
+      const th = (k + 0.5) * Math.PI / 6;
+      const ca = Math.cos(th), sa = Math.sin(th);
+      const hx = L * Math.sign(ca) * Math.abs(ca) ** e;
+      const hy = W * Math.sign(sa) * Math.abs(sa) ** e;
+      hull.push([hx, hy * (1 - m.taper * Math.max(0, hx / L))]);
+    }
+    if (m.skirt) {                                   // ground-effect flare
+      extrude([[L * 0.82, W * 1.16], [L * 0.82, -W * 1.16], [-L * 0.82, -W * 1.16], [-L * 0.82, W * 1.16]],
+              lift - 1.4 * z, lift + 1.8 * z, shade(m.body, 0.5), null);
+    }
+    extrude(hull, lift, lift + hullH, m.body, shade(m.body, 1.12));
+    if (m.bull) {                                    // welded ram bar
+      extrude([[L * 1.1, W * 0.82], [L * 1.1, -W * 0.82], [L * 0.96, -W * 0.82], [L * 0.96, W * 0.82]],
+              lift + hullH * 0.15, lift + hullH * 0.95, shade(m.accent, 0.55), shade(m.accent, 0.8));
+    }
 
-    // deck details on the roof
-    g.strokeStyle = shade(c.color, 0.7); // panel seams
+    // deck seams and a nose flash
+    g.strokeStyle = shade(m.body, 0.7);
     g.lineWidth = Math.max(1, z * 0.5);
     g.beginPath();
     const s1 = px(L * 0.55, W * 0.85, lift + hullH + 0.1), s2 = px(L * 0.55, -W * 0.85, lift + hullH + 0.1);
     g.moveTo(s1[0], s1[1]); g.lineTo(s2[0], s2[1]);
-    const s3 = px(-L * 0.7, W * 0.85, lift + hullH + 0.1), s4 = px(-L * 0.7, -W * 0.85, lift + hullH + 0.1);
-    g.moveTo(s3[0], s3[1]); g.lineTo(s4[0], s4[1]);
     g.stroke();
-    // nose chevron in the accent color
-    quad([px(L * 0.92, W * 0.28, lift + hullH + 0.1), px(L * 0.92, -W * 0.28, lift + hullH + 0.1), px(L * 0.78, -W * 0.42, lift + hullH + 0.1), px(L * 0.78, W * 0.42, lift + hullH + 0.1)], accent);
+    quad([px(L * 0.92, W * 0.28, lift + hullH + 0.1), px(L * 0.92, -W * 0.28, lift + hullH + 0.1),
+          px(L * 0.78, -W * 0.42, lift + hullH + 0.1), px(L * 0.78, W * 0.42, lift + hullH + 0.1)], accent);
 
-    // ---- canopy: tapered glass with a raked windshield ----
-    const cF = bt === 2 ? L * 0.55 : bt === 1 ? L * 0.45 : L * 0.35; // canopy front
-    const cB = bt === 2 ? -L * 0.1 : -L * 0.62;                      // canopy back
-    const cw = W * (bt === 2 ? 0.8 : 0.72);
-    const cH = bt === 1 ? 8.5 * z : bt === 2 ? 13.5 * z : 11 * z;    // canopy roof height
-    const canopy: [number, number][] = [[cF, cw * 0.62], [cB + 0.12, cw], [cB, cw * 0.8], [cB, -cw * 0.8], [cB + 0.12, -cw], [cF, -cw * 0.62]];
-    extrude(canopy, lift + hullH, lift + cH, glass, glassTop);
-    // raked windshield from the hull deck up to the canopy roof lip
-    quad([
-      px(cF + 0.24, cw * 0.5, lift + hullH + 0.1), px(cF + 0.24, -cw * 0.5, lift + hullH + 0.1),
-      px(cF - 0.05, -cw * 0.58, lift + cH), px(cF - 0.05, cw * 0.58, lift + cH),
-    ], night ? "#3a505e" : "#8cc2da");
-    // canopy highlight
-    quad([px(cF - 0.06, cw * 0.42, lift + cH + 0.1), px(cF - 0.06, -cw * 0.42, lift + cH + 0.1), px(cF - 0.3, -cw * 0.5, lift + cH + 0.1), px(cF - 0.3, cw * 0.5, lift + cH + 0.1)], "rgba(230,245,255,0.35)");
-    if (bt === 2) { // van roof marker lights
-      g.fillStyle = night ? "#ffb060" : "#c08040";
-      for (const [df, dr] of [[cF - 0.1, cw * 0.6], [cF - 0.1, -cw * 0.6]] as const) {
-        const p = px(df, dr, lift + cH + 0.5 * z);
-        g.fillRect(p[0] - z * 0.7, p[1] - z * 0.7, 1.4 * z, 1.4 * z);
+    // livery
+    if (m.livery === "check") {                     // taxi chequer along the flank
+      for (const s of [1, -1]) {
+        if (px(0, W * s, lift)[1] <= sy) continue;
+        for (let k = 0; k < 8; k++) {
+          const f0 = -L * 0.8 + k * (L * 1.6 / 8);
+          quad([px(f0, W * s, lift + hullH * 0.42), px(f0 + L * 1.6 / 8, W * s, lift + hullH * 0.42),
+                px(f0 + L * 1.6 / 8, W * s, lift + hullH * 0.72), px(f0, W * s, lift + hullH * 0.72)],
+               k % 2 ? accent : "#f2f2f2");
+        }
+      }
+    } else if (m.livery === "stripe") {             // racing / service stripe
+      for (const s of [1, -1]) {
+        if (px(0, W * s, lift)[1] <= sy) continue;
+        quad([px(L * 0.92, W * s, lift + hullH * 0.5), px(-L * 0.92, W * s, lift + hullH * 0.5),
+              px(-L * 0.92, W * s, lift + hullH * 0.72), px(L * 0.92, W * s, lift + hullH * 0.72)], accent);
+      }
+    } else if (m.livery === "corp") {               // thin chrome/gold beltline
+      for (const s of [1, -1]) {
+        if (px(0, W * s, lift)[1] <= sy) continue;
+        quad([px(L * 0.9, W * s, lift + hullH * 0.78), px(-L * 0.9, W * s, lift + hullH * 0.78),
+              px(-L * 0.9, W * s, lift + hullH * 0.9), px(L * 0.9, W * s, lift + hullH * 0.9)], accent);
+      }
+    } else if (m.livery === "rust") {               // patchwork of primer and rot
+      for (const s of [1, -1]) {
+        if (px(0, W * s, lift)[1] <= sy) continue;
+        for (let k = 0; k < 3; k++) {
+          const f0 = -L * 0.7 + k * L * 0.55;
+          quad([px(f0, W * s, lift + hullH * 0.3), px(f0 + L * 0.3, W * s, lift + hullH * 0.3),
+                px(f0 + L * 0.3, W * s, lift + hullH * 0.62), px(f0, W * s, lift + hullH * 0.62)],
+               k % 2 ? shade(accent, 0.9) : shade(m.body, 0.62));
+        }
       }
     }
 
-    // ---- neon side strip along the camera-facing skirt ----
-    const centerScreenY = sy;
+    // neon side strip along the camera-facing skirt
     for (const s of [1, -1]) {
       const mid = px(0, W * s, lift + 1.2 * z);
-      if (mid[1] <= centerScreenY) continue; // far side, hidden by the hull
+      if (mid[1] <= sy) continue;                    // far side, hidden by the hull
       g.globalAlpha = night ? 0.95 : 0.55;
-      quad([px(L * 0.55, W * s, lift + 1 * z), px(-L * 0.72, W * s, lift + 1 * z), px(-L * 0.72, W * s, lift + 1.9 * z), px(L * 0.55, W * s, lift + 1.9 * z)], accent);
+      quad([px(L * 0.55, W * s, lift + 1 * z), px(-L * 0.72, W * s, lift + 1 * z),
+            px(-L * 0.72, W * s, lift + 1.9 * z), px(L * 0.55, W * s, lift + 1.9 * z)], accent);
       g.globalAlpha = 1;
     }
 
-    // ---- tail fin (speeder & sports) ----
-    if (bt !== 2) {
+    // canopy
+    const cF = L * m.cabF, cB = L * m.cabB, cw = W * m.cabW;
+    const canopy: [number, number][] = [[cF, cw * 0.62], [cB + 0.12, cw], [cB, cw * 0.8], [cB, -cw * 0.8], [cB + 0.12, -cw], [cF, -cw * 0.62]];
+    extrude(canopy, lift + hullH, lift + cabTop, glass, night ? "#243038" : shade(m.glassTint, 0.78));
+    quad([
+      px(cF + 0.24, cw * 0.5, lift + hullH + 0.1), px(cF + 0.24, -cw * 0.5, lift + hullH + 0.1),
+      px(cF - 0.05, -cw * 0.58, lift + cabTop), px(cF - 0.05, cw * 0.58, lift + cabTop),
+    ], night ? "#3a505e" : shade(m.glassTint, 1.25));
+    quad([px(cF - 0.06, cw * 0.42, lift + cabTop + 0.1), px(cF - 0.06, -cw * 0.42, lift + cabTop + 0.1),
+          px(cF - 0.3, -cw * 0.5, lift + cabTop + 0.1), px(cF - 0.3, cw * 0.5, lift + cabTop + 0.1)], "rgba(230,245,255,0.35)");
+
+    // full-width cargo box: vans, haulers and armoured wagons
+    if (m.cargo > 0) {
+      const bx = Math.min(cB, L * 0.5), bw = W * 0.94;
+      extrude([[bx, bw], [bx, -bw], [-L * 0.94, -bw], [-L * 0.94, bw]],
+              lift + hullH, lift + hullH + m.cargo * z, shade(m.body, 0.88), shade(m.body, 1.05));
+      for (const s2 of [1, -1]) {                    // shutter seams down the flanks
+        if (px(0, bw * s2, lift)[1] <= sy) continue;
+        g.strokeStyle = shade(m.body, 0.6);
+        g.lineWidth = Math.max(1, z * 0.5);
+        for (let k = 1; k < 3; k++) {
+          const f0 = bx + (-L * 0.94 - bx) * (k / 3);
+          const a0 = px(f0, bw * s2, lift + hullH + 1 * z), a1 = px(f0, bw * s2, lift + hullH + m.cargo * z - 1 * z);
+          g.beginPath(); g.moveTo(a0[0], a0[1]); g.lineTo(a1[0], a1[1]); g.stroke();
+        }
+        quad([px(bx, bw * s2, lift + hullH + m.cargo * z * 0.72), px(-L * 0.94, bw * s2, lift + hullH + m.cargo * z * 0.72),
+              px(-L * 0.94, bw * s2, lift + hullH + m.cargo * z * 0.86), px(bx, bw * s2, lift + hullH + m.cargo * z * 0.86)],
+             m.accent);
+      }
+    }
+
+    // roof furniture
+    if (m.rack) {
+      extrude([[cB - 0.05, cw * 0.9], [cB - 0.05, -cw * 0.9], [-L * 0.85, -cw * 0.9], [-L * 0.85, cw * 0.9]],
+              lift + hullH, lift + hullH + 4 * z, shade(m.body, 0.8), shade(m.body, 0.95));
+    }
+    if (m.bar === 1) {                               // police strobes
+      const blink = Math.floor(performance.now() / 260) % 2 === 0;
+      quad([px(0.16, cw * 0.9, lift + cabTop), px(0.16, 0, lift + cabTop), px(-0.16, 0, lift + cabTop + 2.5 * z), px(-0.16, cw * 0.9, lift + cabTop + 2.5 * z)], blink ? "#ff2f4a" : "#3a1015");
+      quad([px(0.16, 0, lift + cabTop), px(0.16, -cw * 0.9, lift + cabTop), px(-0.16, -cw * 0.9, lift + cabTop + 2.5 * z), px(-0.16, 0, lift + cabTop + 2.5 * z)], blink ? "#1e2c8c" : "#2fa8ff");
+      const lp = px(0, 0, lift + cabTop + 1.5 * z);
+      this.glow(lp[0], lp[1], 9 * z, blink ? "#ff2f4a" : "#2fa8ff", night ? 0.5 : 0.22);
+    } else if (m.bar === 2) {                        // lit hire sign
+      quad([px(0.22, cw * 0.55, lift + cabTop), px(0.22, -cw * 0.55, lift + cabTop),
+            px(-0.22, -cw * 0.55, lift + cabTop + 2.6 * z), px(-0.22, cw * 0.55, lift + cabTop + 2.6 * z)],
+           night ? "#ffe9a8" : "#e8d890");
+      const lp = px(0, 0, lift + cabTop + 1.6 * z);
+      this.glow(lp[0], lp[1], 7 * z, "#ffe9a8", night ? 0.35 : 0.1);
+    }
+    if (m.spoiler) {
+      extrude([[-L * 0.78, W * 0.95], [-L * 0.78, -W * 0.95], [-L * 0.95, -W * 0.95], [-L * 0.95, W * 0.95]],
+              lift + hullH, lift + hullH + 4.5 * z, shade(m.body, 0.7), accent);
+    }
+    if (m.fin > 0) {
       const f1 = px(-L * 0.68, 0, lift + hullH), f2 = px(-L * 0.95, 0, lift + hullH);
-      const f3 = px(-L * 0.95, 0, lift + hullH + 5 * z);
-      quad([f1, f2, f3], shade(c.color, 0.75));
+      const f3 = px(-L * 0.95, 0, lift + hullH + m.fin * z);
+      quad([f1, f2, f3], shade(m.body, 0.75));
       g.fillStyle = accent;
       g.fillRect(f3[0] - z * 0.6, f3[1] - z * 0.6, 1.2 * z, 2.2 * z);
     }
 
     // ---- light bar across the nose + taillight strip ----
     const hl = night ? "#fff8c8" : "#e8e8d0";
-    quad([px(L, W * 0.32, lift + hullH * 0.55), px(L, -W * 0.32, lift + hullH * 0.55), px(L * 0.98, -W * 0.32, lift + hullH * 0.8), px(L * 0.98, W * 0.32, lift + hullH * 0.8)], hl);
-    quad([px(-L, W * 0.5, lift + hullH * 0.45), px(-L, -W * 0.5, lift + hullH * 0.45), px(-L, -W * 0.5, lift + hullH * 0.72), px(-L, W * 0.5, lift + hullH * 0.72)], night ? "#ff3048" : "#c02838");
+    quad([px(L, tw * 0.9, lift + hullH * 0.55), px(L, -tw * 0.9, lift + hullH * 0.55),
+          px(L * 0.98, -tw * 0.9, lift + hullH * 0.8), px(L * 0.98, tw * 0.9, lift + hullH * 0.8)], hl);
+    quad([px(-L, W * 0.5, lift + hullH * 0.45), px(-L, -W * 0.5, lift + hullH * 0.45),
+          px(-L, -W * 0.5, lift + hullH * 0.72), px(-L, W * 0.5, lift + hullH * 0.72)], night ? "#ff3048" : "#c02838");
     // bloom via the shared emissive pass
     const hp = px(L, 0, lift + hullH * 0.68);
     this.glow(hp[0], hp[1], 8 * z, "#fff4be", night ? 0.5 : 0.1);
     const tp = px(-L, 0, lift + hullH * 0.58);
     this.glow(tp[0], tp[1], 6.5 * z, "#ff3048", night ? 0.4 : 0.14);
 
-    // ---- rear hover thrusters with exhaust when moving ----
-    for (const s of [0.55, -0.55]) {
-      const t0 = px(-L * 1.0, W * s, lift + 2 * z);
-      g.fillStyle = shade(c.color, 0.5);
+    // ---- rear hover thrusters with exhaust when moving, one pair per bank ----
+    const banks: [number, number][] = [];
+    for (let b = 0; b < m.turbo; b++) {
+      const f0 = -L * (1 - b * 0.42);
+      banks.push([f0, 0.55], [f0, -0.55]);
+    }
+    for (const [df, s] of banks) {
+      const t0 = px(df, W * s, lift + 2 * z);
+      g.fillStyle = shade(m.body, 0.5);
       g.fillRect(t0[0] - 1.4 * z, t0[1] - 1.4 * z, 2.8 * z, 2.8 * z);
-      g.fillStyle = c.speed > 0.5 ? "#9fe8ff" : "#3a606c";
+      g.fillStyle = moving ? "#9fe8ff" : "#3a606c";
       g.fillRect(t0[0] - 0.8 * z, t0[1] - 0.8 * z, 1.6 * z, 1.6 * z);
-      if (c.speed > 0.5) {
+      if (moving) {
         this.glow(t0[0], t0[1], 5 * z, "#9fe8ff", night ? 0.4 : 0.16);
-        // exhaust streak scales with speed
-        const len = 0.25 + (c.speed / 9) * 0.8;
+        const len = 0.25 + (c.speed / 9) * 0.8; // exhaust streak scales with speed
         g.globalCompositeOperation = "lighter";
         g.globalAlpha = 0.3;
-        quad([px(-L, W * s + 0.05, lift + 2 * z), px(-L, W * s - 0.05, lift + 2 * z), px(-L - len, W * s - 0.02, lift + 2 * z), px(-L - len, W * s + 0.02, lift + 2 * z)], "#9fe8ff");
+        quad([px(df, W * s + 0.05, lift + 2 * z), px(df, W * s - 0.05, lift + 2 * z),
+              px(df - len, W * s - 0.02, lift + 2 * z), px(df - len, W * s + 0.02, lift + 2 * z)], "#9fe8ff");
         g.globalAlpha = 1;
         g.globalCompositeOperation = "source-over";
       }
     }
 
-    if (c.state === "player") {
+    if (c.state === "player" || c.state === "launching" || c.state === "docking") {
       g.strokeStyle = "rgba(120,255,190,0.8)";
       g.lineWidth = 1.5;
       g.beginPath();

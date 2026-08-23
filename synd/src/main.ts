@@ -476,6 +476,7 @@ requestAnimationFrame(frame);
   get city() { return city; },
   get panel() { return panel; },
   setFollow(v: boolean) { followCam = v; },
+  screenToWorld,
 };
 
 // ---------- boot ----------

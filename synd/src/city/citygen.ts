@@ -32,6 +32,12 @@ export interface Deco {
   level: number;             // story on the wall (0-based)
 }
 
+export interface ParkSpot {
+  x: number; y: number;   // curb tile the car stands on
+  px: number; py: number; // where the car actually stands: backed off the kerb
+  axis: 0 | 1;            // 0 = parked along x, 1 = parked along y
+}
+
 export interface Prop {
   x: number; y: number;      // tile the prop stands on
   kind: "tree" | "bench" | "stall";
@@ -51,6 +57,7 @@ export interface City {
   laneDir: Uint8Array;       // bitmask of allowed exits for cars
   decos: Deco[];
   props: Prop[];             // trees, benches, food stalls
+  parking: ParkSpot[];       // curbside bays, one or two per city block
   crossing: Uint8Array;      // 0 none, 1 stripes along y, 2 stripes along x
   lamps: { x: number; y: number }[];
   roundabouts: { x: number; y: number }[]; // centers
@@ -307,6 +314,51 @@ export function generateCity(seed: number): City {
     }
   }
 
+  // ---- 4c. Curbside parking: one or two bays per city block, on pavement
+  // that fronts a carriageway ----
+  const parking: ParkSpot[] = [];
+  const taken = new Set<number>();
+  for (let bi = 0; bi < vEdges.length - 1; bi++) {
+    for (let bj = 0; bj < hEdges.length - 1; bj++) {
+      const bx0 = Math.max(1, vEdges[bi] + 2), bx1 = Math.min(GRID - 2, vEdges[bi + 1] - 1);
+      const by0 = Math.max(1, hEdges[bj] + 2), by1 = Math.min(GRID - 2, hEdges[bj + 1] - 1);
+      if (bx1 - bx0 < 2 || by1 - by0 < 2) continue;
+      const bays: ParkSpot[] = [];
+      for (let y = by0; y <= by1; y++) {
+        for (let x = bx0; x <= bx1; x++) {
+          if (tiles[idx(x, y)] !== T_SIDEWALK) continue;
+          const roadEW = tiles[idx(x - 1, y)] === T_ROAD || tiles[idx(x + 1, y)] === T_ROAD;
+          const roadNS = tiles[idx(x, y - 1)] === T_ROAD || tiles[idx(x, y + 1)] === T_ROAD;
+          if (!roadEW && !roadNS) continue;
+          // keep the bay clear of lamps, stalls and crossings
+          if (props.some((p) => p.x === x && p.y === y)) continue;
+          // stand the car a little back from the kerb so passing traffic clears it
+          const BACK = 0.28;
+          let px = x + 0.5, py = y + 0.5;
+          if (roadEW) px += tiles[idx(x - 1, y)] === T_ROAD ? BACK : -BACK;
+          else py += tiles[idx(x, y - 1)] === T_ROAD ? BACK : -BACK;
+          bays.push({ x, y, px, py, axis: roadEW ? 1 : 0 });
+        }
+      }
+      if (bays.length === 0) continue;
+      rng.shuffle(bays);
+      const want = rng.int(1, 2);
+      let placed = 0;
+      for (const b of bays) {
+        if (placed >= want) break;
+        // bays need a little breathing room from one another
+        let clash = false;
+        for (let dy = -2; dy <= 2 && !clash; dy++) for (let dx = -2; dx <= 2; dx++) {
+          if (taken.has(idx(b.x + dx, b.y + dy))) { clash = true; break; }
+        }
+        if (clash) continue;
+        taken.add(idx(b.x, b.y));
+        parking.push(b);
+        placed++;
+      }
+    }
+  }
+
   // ---- 5. Street lamps on the sidewalk corners around each roundabout ----
   const lamps: { x: number; y: number }[] = [];
   for (const x of vRoads) for (const y of hRoads) {
@@ -316,12 +368,16 @@ export function generateCity(seed: number): City {
     }
   }
 
+  // lamps are sited last, so drop any bay that ended up under a post
+  const lampAt = new Set(lamps.map((l) => idx(l.x, l.y)));
+  const bays = parking.filter((b) => !lampAt.has(idx(b.x, b.y)));
+
   // ---- 6. Elevated skytrain lines above a couple of avenues ----
   const skytrains: Skytrain[] = [];
   if (vRoads.length > 2) skytrains.push({ axis: "v", pos: vRoads[rng.int(1, vRoads.length - 2)] });
   if (hRoads.length > 2 && rng.chance(0.75)) skytrains.push({ axis: "h", pos: hRoads[rng.int(1, hRoads.length - 2)] });
 
-  return { seed, tiles, height, bstyle, laneDir, decos, props, crossing, lamps, roundabouts, vRoads, hRoads, skytrains };
+  return { seed, tiles, height, bstyle, laneDir, decos, props, parking: bays, crossing, lamps, roundabouts, vRoads, hRoads, skytrains };
 }
 
 // Recursively split a block into lots separated by 4-tile alleys, then raise

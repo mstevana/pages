@@ -1,6 +1,6 @@
 // SYND service worker: cache app shell, network-first for the bundle so
 // updates land, cache-first fallback for offline play.
-const CACHE = "synd-v2";
+const CACHE = "synd-v3";
 const SHELL = ["./", "index.html", "dist/synd.js", "manifest.webmanifest", "icon-192.png", "icon-512.png"];
 
 self.addEventListener("install", (e) => {

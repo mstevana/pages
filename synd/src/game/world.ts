@@ -1,7 +1,7 @@
 // The live mission world: pedestrians, cops, enemy agents, cars, projectiles,
 // dropped items, objectives, and all the AI that drives them.
 
-import { City, T_ROAD, DBIT, DX, DY, idx, inGrid, isRoad, isWalkable } from "../city/citygen";
+import { City, ParkSpot, T_ROAD, DBIT, DX, DY, idx, inGrid, isRoad, isWalkable } from "../city/citygen";
 import { AudioEngine } from "../engine/audio";
 import { Rng } from "../engine/rng";
 import { GRID, Weather, clamp, dist, dist2 } from "../engine/util";
@@ -59,9 +59,10 @@ export interface Car {
   angle: number;          // rendered angle in *screen* space
   dir: number;            // current lane dir 0..3 (N,E,S,W)
   speed: number;
-  color: string;
   hp: number;
-  state: "drive" | "stopping" | "parked" | "player" | "wreck";
+  state: "drive" | "stopping" | "parked" | "player" | "wreck" | "launching" | "docking";
+  model: number;          // which of the 24 chassis designs
+  glide: { x: number; y: number; a: number } | null; // kerb <-> lane manoeuvre
   path: { x: number; y: number }[] | null;
   pathIdx: number;
   pilotOut: boolean;
@@ -180,6 +181,15 @@ export class World {
     // the city into blocks, and one officer is assigned to every two of them
     const blocks = (city.vRoads.length + 1) * (city.hRoads.length + 1);
     this.policeTotal = Math.max(4, Math.round(blocks / 2));
+
+    // every bay the city laid out starts with a car standing in it
+    for (const b of city.parking) {
+      const car = this.spawnCar(b.px, b.py, b.axis === 1 ? 2 : 1);
+      car.state = "parked";
+      car.pilotOut = true;
+      car.angle = b.axis === 1 ? Math.PI / 2 : 0;
+      if (this.rng.chance(0.5)) car.angle += Math.PI;
+    }
 
     this.mission = this.setupMission(kind, start);
     // persuade missions: issue a persuadertron to the first living agent
@@ -324,7 +334,7 @@ export class World {
   spawnCar(x: number, y: number, dir: number): Car {
     const car: Car = {
       id: nextId++, x, y, angle: Math.atan2(DY[dir], DX[dir]), dir, speed: 0,
-      color: this.rng.pick(["#3a5a72", "#7a3050", "#4a7a3a", "#5a5a70", "#8a5a28", "#2a5a8a", "#8a8a92", "#7a2828"]),
+      model: this.rng.int(0, 23), glide: null,
       hp: 90, state: "drive", path: null, pathIdx: 0, pilotOut: false, occupants: [], waitT: 0,
     };
     this.cars.push(car);
@@ -359,7 +369,11 @@ export class World {
       const s = this.ringSpawnRoad(cx, cy, 18, 45);
       if (s) {
         let clear = true;
-        for (const o of this.cars) if (dist2(o.x, o.y, s.x, s.y) < 7 * 7) { clear = false; break; }
+        // kerbside cars sit off the carriageway, so they never veto a spawn
+        for (const o of this.cars) {
+          if (o.state === "parked" && !isRoad(this.city, o.x | 0, o.y | 0)) continue;
+          if (dist2(o.x, o.y, s.x, s.y) < 7 * 7) { clear = false; break; }
+        }
         if (!clear) continue;
         const bits = this.city.laneDir[idx(s.x | 0, s.y | 0)];
         for (let d = 0; d < 4; d++) if (bits & DBIT[d]) { this.spawnCar(s.x, s.y, d); break; }
@@ -497,7 +511,7 @@ export class World {
 
   cmdBoardCar(sel: boolean[], carId: number): void {
     const car = this.cars.find((c) => c.id === carId);
-    if (!car || !(car.state === "parked" || car.state === "player")) return;
+    if (!car || car.state === "wreck" || car.state === "drive" || car.state === "stopping") return;
     for (const a of this.selectedAgents(sel)) {
       if (a.carId !== null) continue;
       a.boardOrder = carId; a.dropOrder = null; a.pickOrder = null; a.giveOrder = null;
@@ -506,13 +520,40 @@ export class World {
     }
   }
 
+  // the closest kerbside bay with nothing already standing in it
+  private freeParkingNear(x: number, y: number, selfId: number): ParkSpot | null {
+    let best: ParkSpot | null = null;
+    let bd = 60 * 60;
+    for (const b of this.city.parking) {
+      const d = dist2(b.px, b.py, x, y);
+      if (d >= bd) continue;
+      let occupied = false;
+      for (const o of this.cars) {
+        if (o.state === "wreck" || o.id === selfId) continue;
+        if (dist2(o.x, o.y, b.px, b.py) < 1.2 * 1.2) { occupied = true; break; }
+      }
+      if (occupied) continue;
+      bd = d; best = b;
+    }
+    return best;
+  }
+
   cmdExitCar(sel: boolean[]): void {
     for (const a of this.selectedAgents(sel)) {
       if (a.carId === null) continue;
       const car = this.cars.find((c) => c.id === a.carId);
       if (!car) { a.carId = null; continue; }
       car.occupants = car.occupants.filter((o) => o !== a.id);
-      if (car.occupants.length === 0) { car.state = "parked"; car.path = null; car.speed = 0; }
+      if (car.occupants.length === 0) {
+        car.path = null; car.speed = 0;
+        const bay = this.freeParkingNear(car.x, car.y, car.id);
+        if (bay) {
+          car.glide = { x: bay.px, y: bay.py, a: bay.axis === 1 ? Math.PI / 2 : 0 };
+          car.state = "docking";
+        } else {
+          car.state = "parked";
+        }
+      }
       a.carId = null;
       const n = this.pf.nearestWalkable((car.x | 0) - 1, (car.y | 0) - 1, 4);
       if (n) { a.x = n.x + 0.5; a.y = n.y + 0.5; } else { a.x = car.x; a.y = car.y; }
@@ -675,15 +716,23 @@ export class World {
   // is another car in this car's path? (cars never overlap: they stop and wait)
   private carBlocked(c: Car, range: number): Car | null {
     const fx = Math.cos(c.angle), fy = Math.sin(c.angle);
+    let near: Car | null = null;
     for (const o of this.cars) {
       if (o === c || o.state === "wreck") continue;
+      // a car sitting on the kerb is scenery, not an obstacle in the lane
+      if (!isRoad(this.city, o.x | 0, o.y | 0)) continue;
       const relx = o.x - c.x, rely = o.y - c.y;
       const along = relx * fx + rely * fy;
-      if (along < 0.2 || along > range) continue;
       const lat = Math.abs(relx * -fy + rely * fx);
-      if (lat < 0.95) return o;
+      if (along >= 0.2 && along <= range && lat < 0.95) return o;
+      // merging traffic: at a junction two cars close on each other from
+      // outside the forward cone. Whoever holds the higher id gives way -
+      // and everyone gives way to the player - so a pair never deadlocks.
+      const d2o = relx * relx + rely * rely;
+      if (!near && along > -0.6 && d2o < 1.5 * 1.5 && d2o > 0.9 * 0.9
+          && (o.state === "player" || (c.state !== "player" && o.id < c.id))) near = o;
     }
-    return null;
+    return near;
   }
 
   // anyone on foot standing in this car's path (NPC traffic yields to them)
@@ -849,6 +898,7 @@ export class World {
     this.updateMission(dt, viewRadius);
     for (const p of this.peds) this.updatePed(p, dt);
     for (const c of this.cars) this.updateCar(c, dt);
+    this.separateCars(dt);
     this.cars = this.cars.filter((c) => c.waitT < 1e8);
     this.updateProjectiles(dt);
 
@@ -1006,12 +1056,26 @@ export class World {
     if (p.boardOrder !== null) {
       const car = this.cars.find((c) => c.id === p.boardOrder);
       p.boardOrder = null;
-      if (car && (car.state === "parked" || car.state === "player") && dist2(car.x, car.y, p.x, p.y) < 2.5 * 2.5 && car.occupants.length < 4) {
+      if (car && car.state !== "wreck" && car.state !== "drive" && car.state !== "stopping"
+          && dist2(car.x, car.y, p.x, p.y) < 2.5 * 2.5 && car.occupants.length < 4) {
         car.occupants.push(p.id);
-        car.state = "player";
         p.carId = car.id;
         p.path = null;
         this.audio.carStart();
+        if (car.state === "parked" || car.state === "docking") {
+          // pull out of the bay and settle into the nearest lane
+          const lane = this.pf.nearestRoad(car.x | 0, car.y | 0, 6);
+          if (lane) {
+            const bits = this.city.laneDir[idx(lane.x, lane.y)];
+            let d = car.dir;
+            for (let k = 0; k < 4; k++) if (bits & DBIT[k]) { d = k; break; }
+            car.dir = d;
+            car.glide = { x: lane.x + 0.5, y: lane.y + 0.5, a: Math.atan2(DY[d], DX[d]) };
+            car.state = "launching";
+          } else {
+            car.state = "player";
+          }
+        }
       }
     }
   }
@@ -1215,8 +1279,59 @@ export class World {
     }
   }
 
+  // Two cars that have already ended up on top of one another - merging at a
+  // junction, or shoved by a collision - would sit there forever if both were
+  // waiting for the other. Ease them apart instead.
+  private separateCars(dt: number): void {
+    const live = this.cars.filter((c) => c.state === "drive" || c.state === "player" || c.state === "stopping");
+    for (let i = 0; i < live.length; i++) {
+      for (let j = i + 1; j < live.length; j++) {
+        const a = live[i], b = live[j];
+        let dx = b.x - a.x, dy = b.y - a.y;
+        const d = Math.hypot(dx, dy);
+        if (d >= 1.05) continue;
+        if (d < 1e-3) { dx = 0.01; dy = 0; }
+        const push = (1.05 - d) * Math.min(1, dt * 6) * 0.5;
+        const ux = dx / (d || 1), uy = dy / (d || 1);
+        for (const [car, sgn] of [[a, -1], [b, 1]] as [Car, number][]) {
+          const nx = car.x + ux * push * sgn, ny = car.y + uy * push * sgn;
+          if (!isRoad(this.city, nx | 0, ny | 0)) continue;
+          // never shove a car into oncoming traffic to make room
+          const bits = this.city.laneDir[idx(nx | 0, ny | 0)];
+          if (bits !== 0 && !(bits & DBIT[car.dir])) continue;
+          car.x = nx; car.y = ny;
+        }
+      }
+    }
+  }
+
   private updateCar(c: Car, dt: number): void {
     if (c.state === "wreck" || c.state === "parked") return;
+    if (c.state === "launching" || c.state === "docking") {
+      const g = c.glide;
+      if (!g) { c.state = c.state === "launching" ? "player" : "parked"; return; }
+      const dx = g.x - c.x, dy = g.y - c.y;
+      const d = Math.hypot(dx, dy);
+      const step = 3.2 * dt;
+      if (d > 0.04) {
+        c.x += (dx / d) * Math.min(step, d);
+        c.y += (dy / d) * Math.min(step, d);
+      }
+      let da = g.a - c.angle;
+      while (da > Math.PI) da -= Math.PI * 2;
+      while (da < -Math.PI) da += Math.PI * 2;
+      c.angle += da * Math.min(1, dt * 5);
+      c.speed = Math.min(2, d * 2);
+      for (const oid of c.occupants) {
+        const rider = this.peds.find((q) => q.id === oid);
+        if (rider) { rider.x = c.x; rider.y = c.y; }
+      }
+      if (d <= 0.04 && Math.abs(da) < 0.08) {
+        c.x = g.x; c.y = g.y; c.angle = g.a; c.glide = null; c.speed = 0;
+        c.state = c.state === "launching" ? "player" : "parked";
+      }
+      return;
+    }
     if (c.state === "stopping") {
       c.speed = Math.max(0, c.speed - dt * 12);
       if (c.speed <= 0.01 && !c.pilotOut) {
