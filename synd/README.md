@@ -77,10 +77,13 @@ offline after the first load.
 | **Escort** | Reach a VIP on the far side of the map and bring them back to the insertion point under attack. |
 | **Purge sector** | 30 rival syndicate agents are hunting you. Kill them all. |
 
-Each sector has a **finite police force** — a fixed roster of officers
-(larger on assassination contracts). Officers you kill are gone for good, and
-once the roster is empty no more arrive. The objectives screen tracks how many
-are left.
+Each sector has a **finite police force**, sized by the city itself: one
+officer for every two blocks the avenues carve out (about fifty in a typical
+sector). Officers you kill are gone for good, and once the roster is empty no
+more arrive — the objectives screen tracks how many are left. On assassination
+contracts every officer is hostile, but they hold their beat: they shoot what
+they can actually see rather than hunting you across the map. Shoot at one,
+though, and that officer will come after you.
 
 ## Campaign
 

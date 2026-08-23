@@ -176,9 +176,10 @@ export class World {
       this.peds.push(p);
     }
 
-    // a fixed roster of officers patrols this sector - heavier for contracts
-    // that put the police on our backs from the outset
-    this.policeTotal = Math.min(24, kind === "assassinate" ? 14 + missionNo : 8 + Math.floor(missionNo / 2));
+    // the sector is policed by density, not by a flat quota: the avenues carve
+    // the city into blocks, and one officer is assigned to every two of them
+    const blocks = (city.vRoads.length + 1) * (city.hRoads.length + 1);
+    this.policeTotal = Math.max(4, Math.round(blocks / 2));
 
     this.mission = this.setupMission(kind, start);
     // persuade missions: issue a persuadertron to the first living agent
@@ -1127,7 +1128,11 @@ export class World {
   }
 
   private updateCop(p: Ped, dt: number): void {
-    const hostile = p.hostileCop || this.mission.kind === "assassinate";
+    // An officer we have actually provoked hunts us down. One merely on alert
+    // because a hit has been called stays on his beat: he opens fire on what
+    // he can see, but never goes looking.
+    const provoked = p.hostileCop;
+    const hostile = provoked || this.mission.kind === "assassinate";
     if (hostile) {
       let best: Ped | null = null; let bd = 1e9;
       for (const a of this.agents) {
@@ -1149,12 +1154,15 @@ export class World {
             this.fireWeapon(p, null, "gun", best.x + this.rng.float(-j, j), best.y + this.rng.float(-j, j), NPC_SPREAD_MULT, NPC_RANGE_MULT);
             p.fireCd *= NPC_FIRE_MULT;
           }
-        } else if (p.thinkT <= 0) {
+          return;
+        }
+        if (provoked && p.thinkT <= 0) {
           p.thinkT = 1.2;
           const path = this.pf.walkPath(p.x, p.y, best.x, best.y);
           if (path) { p.path = path; p.pathIdx = 0; p.state = "walk"; }
+          return;
         }
-        return;
+        if (provoked) return; // closing in - hold the current route
       }
     }
     // patrol
