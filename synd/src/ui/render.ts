@@ -876,7 +876,6 @@ export class Renderer {
     };
     const fx = Math.cos(c.angle), fy = Math.sin(c.angle);
     const rx = -fy, ry = fx;
-    // project a world point at a given lift (px above ground) to screen
     const px = (df: number, dr: number, lift: number): [number, number] => {
       const wx = c.x + fx * df + rx * dr, wy = c.y + fy * df + ry * dr;
       return [SX(wx, wy), SY(wx, wy) - lift];
@@ -889,75 +888,154 @@ export class Renderer {
       g.closePath();
       g.fill();
     };
-    // a box footprint [f0..f1] x [-w..w], lifted from h0 to h1:
-    // draw back-to-front side faces then the top
-    const box = (f0: number, f1: number, w: number, h0: number, h1: number, col: string, topCol: string) => {
-      const base: [number, number][] = [px(f1, w, h0), px(f1, -w, h0), px(-0 + f0, -w, h0), px(f0, w, h0)];
-      const top: [number, number][] = [px(f1, w, h1), px(f1, -w, h1), px(f0, -w, h1), px(f0, w, h1)];
-      const edges = [[0, 1], [1, 2], [2, 3], [3, 0]];
-      const order = edges
-        .map((e, i) => ({ e, i, midY: (base[e[0]][1] + base[e[1]][1]) / 2 }))
-        .sort((a, b) => a.midY - b.midY);
-      for (const { e, midY } of order) {
-        const centerY = (base[0][1] + base[2][1]) / 2;
-        const bright = midY > centerY ? 0.82 : 0.55; // light from the front-facing side
-        quad([base[e[0]], base[e[1]], top[e[1]], top[e[0]]], shade(col, bright));
+    // extrude a convex footprint (body-space points) between two heights;
+    // side brightness rolls smoothly toward the camera for a rounded hull
+    const extrude = (pts: [number, number][], h0: number, h1: number, col: string, topCol: string | null) => {
+      const base = pts.map(([df, dr]) => px(df, dr, h0));
+      const top = pts.map(([df, dr]) => px(df, dr, h1));
+      const n = pts.length;
+      let minY = 1e9, maxY = -1e9;
+      for (const p of base) { minY = Math.min(minY, p[1]); maxY = Math.max(maxY, p[1]); }
+      const span = Math.max(1, maxY - minY);
+      const order: { i: number; midY: number }[] = [];
+      for (let i = 0; i < n; i++) order.push({ i, midY: (base[i][1] + base[(i + 1) % n][1]) / 2 });
+      order.sort((a, b) => a.midY - b.midY);
+      for (const { i, midY } of order) {
+        const j = (i + 1) % n;
+        const t = (midY - minY) / span; // 0 back .. 1 camera-facing
+        quad([base[i], base[j], top[j], top[i]], shade(col, 0.5 + 0.42 * t));
       }
-      quad(top, topCol);
+      if (topCol) quad(top, topCol);
     };
 
+    // ---- shadow, oriented along the projected body axis ----
+    const bt = c.id % 3; // body type: 0 speeder, 1 sports wedge, 2 cargo van
+    const L = bt === 2 ? 1.3 : bt === 1 ? 1.22 : 1.15;
+    const W = bt === 2 ? 0.48 : 0.42;
     const sx = SX(c.x, c.y), sy = SY(c.x, c.y);
-    const L = 1.15, W = 0.44;
-    // shadow, oriented along the projected body axis (an axis-aligned
-    // ellipse under a diagonal car reads as the car sitting sideways)
     const nose = px(L, 0, 0), tail = px(-L, 0, 0);
     const bodyAngle = Math.atan2(nose[1] - tail[1], nose[0] - tail[0]);
     const bodyLen = Math.hypot(nose[0] - tail[0], nose[1] - tail[1]);
     g.fillStyle = "rgba(0,0,0,0.45)";
     g.beginPath();
-    g.ellipse(sx, sy, bodyLen * 0.62, 7 * z, bodyAngle, 0, Math.PI * 2);
+    g.ellipse(sx, sy, bodyLen * 0.6, 7 * z, bodyAngle, 0, Math.PI * 2);
     g.fill();
 
     if (c.state === "wreck") {
-      box(-L, L, W, 0, 3 * z, "#1c1c1e", "#2c2c2e");
-      g.fillStyle = "#3a3a3c";
-      g.fillRect(sx - 4 * z, sy - 6 * z, 8 * z, 3 * z);
+      extrude([[L * 0.9, W * 0.5], [L * 0.6, W], [-L * 0.9, W], [-L, W * 0.5], [-L, -W * 0.5], [-L * 0.9, -W], [L * 0.6, -W], [L * 0.9, -W * 0.5]], 0, 3.5 * z, "#1a1a1c", "#2a2a2c");
+      g.fillStyle = "#0e0e10"; // burst canopy
+      g.fillRect(sx - 5 * z, sy - 6 * z, 9 * z, 4 * z);
       return;
     }
+
+    const accent = ["#25e0ff", "#ff2fa0", "#ffe32f", "#7dff3f", "#ff7a1f", "#b06bff"][c.id % 6];
+    const lift = 2 * z;
+    const hullH = bt === 2 ? 9 * z : bt === 1 ? 5.5 * z : 6.5 * z;
+    const glass = night ? "#31434f" : "#6fa8c2";
+    const glassTop = night ? "#243038" : "#54889e";
 
     // headlight cone on the ground at night
     if (night && c.speed > 0.5) {
       quad([px(L, -W * 0.7, 0), px(L, W * 0.7, 0), px(L + 2.6, W * 1.8, 0), px(L + 2.6, -W * 1.8, 0)], "rgba(255,245,200,0.09)");
     }
-    // hover underglow
+    // hover underglow in the car's accent color
     if (night) {
       g.globalCompositeOperation = "lighter";
-      quad([px(L * 1.05, W * 1.15, 1 * z), px(L * 1.05, -W * 1.15, 1 * z), px(-L * 1.05, -W * 1.15, 1 * z), px(-L * 1.05, W * 1.15, 1 * z)], "rgba(50,160,255,0.16)");
+      const n = parseInt(accent.slice(1), 16);
+      quad(
+        [px(L * 1.02, W * 1.2, 0.8 * z), px(L * 1.02, -W * 1.2, 0.8 * z), px(-L * 1.02, -W * 1.2, 0.8 * z), px(-L * 1.02, W * 1.2, 0.8 * z)],
+        `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},0.14)`
+      );
       g.globalCompositeOperation = "source-over";
     }
-    // hull: hovers slightly off the ground
-    const lift = 2 * z, bodyH = 7 * z, cabinH = 12 * z;
-    box(-L, L, W, lift, bodyH, c.color, shade(c.color, 1.15));
-    // nose accent stripe on the roof
-    quad([px(L * 0.95, W * 0.8, bodyH + 0.1), px(L * 0.95, -W * 0.8, bodyH + 0.1), px(L * 0.62, -W * 0.8, bodyH + 0.1), px(L * 0.62, W * 0.8, bodyH + 0.1)], shade(c.color, 1.45));
-    // cabin: glass canopy set back from the nose
-    const glass = night ? "#31434f" : "#6fa8c2";
-    box(-L * 0.55, L * 0.28, W * 0.7, bodyH, cabinH, glass, night ? "#243038" : "#54889e");
+
+    // ---- hull: chamfered, nose-tapered footprint ----
+    const hull: [number, number][] = bt === 2
+      ? [[L, W * 0.55], [L * 0.72, W], [-L * 0.85, W], [-L, W * 0.65], [-L, -W * 0.65], [-L * 0.85, -W], [L * 0.72, -W], [L, -W * 0.55]]
+      : [[L, W * 0.32], [L * 0.62, W], [-L * 0.78, W], [-L, W * 0.55], [-L, -W * 0.55], [-L * 0.78, -W], [L * 0.62, -W], [L, -W * 0.32]];
+    extrude(hull, lift, lift + hullH, c.color, shade(c.color, 1.12));
+
+    // deck details on the roof
+    g.strokeStyle = shade(c.color, 0.7); // panel seams
+    g.lineWidth = Math.max(1, z * 0.5);
+    g.beginPath();
+    const s1 = px(L * 0.55, W * 0.85, lift + hullH + 0.1), s2 = px(L * 0.55, -W * 0.85, lift + hullH + 0.1);
+    g.moveTo(s1[0], s1[1]); g.lineTo(s2[0], s2[1]);
+    const s3 = px(-L * 0.7, W * 0.85, lift + hullH + 0.1), s4 = px(-L * 0.7, -W * 0.85, lift + hullH + 0.1);
+    g.moveTo(s3[0], s3[1]); g.lineTo(s4[0], s4[1]);
+    g.stroke();
+    // nose chevron in the accent color
+    quad([px(L * 0.92, W * 0.28, lift + hullH + 0.1), px(L * 0.92, -W * 0.28, lift + hullH + 0.1), px(L * 0.78, -W * 0.42, lift + hullH + 0.1), px(L * 0.78, W * 0.42, lift + hullH + 0.1)], accent);
+
+    // ---- canopy: tapered glass with a raked windshield ----
+    const cF = bt === 2 ? L * 0.55 : bt === 1 ? L * 0.45 : L * 0.35; // canopy front
+    const cB = bt === 2 ? -L * 0.1 : -L * 0.62;                      // canopy back
+    const cw = W * (bt === 2 ? 0.8 : 0.72);
+    const cH = bt === 1 ? 8.5 * z : bt === 2 ? 13.5 * z : 11 * z;    // canopy roof height
+    const canopy: [number, number][] = [[cF, cw * 0.62], [cB + 0.12, cw], [cB, cw * 0.8], [cB, -cw * 0.8], [cB + 0.12, -cw], [cF, -cw * 0.62]];
+    extrude(canopy, lift + hullH, lift + cH, glass, glassTop);
+    // raked windshield from the hull deck up to the canopy roof lip
+    quad([
+      px(cF + 0.24, cw * 0.5, lift + hullH + 0.1), px(cF + 0.24, -cw * 0.5, lift + hullH + 0.1),
+      px(cF - 0.05, -cw * 0.58, lift + cH), px(cF - 0.05, cw * 0.58, lift + cH),
+    ], night ? "#3a505e" : "#8cc2da");
     // canopy highlight
-    quad([px(L * 0.3, W * 0.55, cabinH + 0.1), px(L * 0.3, -W * 0.55, cabinH + 0.1), px(L * 0.05, -W * 0.55, cabinH + 0.1), px(L * 0.05, W * 0.55, cabinH + 0.1)], "rgba(230,245,255,0.35)");
-    // headlights on the nose face
-    const hl = night ? "#fff8c8" : "#e8e8d0";
-    quad([px(L, W * 0.75, lift + 2 * z), px(L, W * 0.35, lift + 2 * z), px(L, W * 0.35, lift + 3.6 * z), px(L, W * 0.75, lift + 3.6 * z)], hl);
-    quad([px(L, -W * 0.35, lift + 2 * z), px(L, -W * 0.75, lift + 2 * z), px(L, -W * 0.75, lift + 3.6 * z), px(L, -W * 0.35, lift + 3.6 * z)], hl);
-    // taillight strip across the rear face
-    quad([px(-L, W * 0.8, lift + 2 * z), px(-L, -W * 0.8, lift + 2 * z), px(-L, -W * 0.8, lift + 3.4 * z), px(-L, W * 0.8, lift + 3.4 * z)], night ? "#ff3048" : "#c02838");
-    // bloom for the light fixtures via the shared emissive pass
-    for (const s of [0.55, -0.55]) {
-      const hp = px(L, W * s, lift + 2.8 * z);
-      this.glow(hp[0], hp[1], 7 * z, "#fff4be", night ? 0.5 : 0.1);
+    quad([px(cF - 0.06, cw * 0.42, lift + cH + 0.1), px(cF - 0.06, -cw * 0.42, lift + cH + 0.1), px(cF - 0.3, -cw * 0.5, lift + cH + 0.1), px(cF - 0.3, cw * 0.5, lift + cH + 0.1)], "rgba(230,245,255,0.35)");
+    if (bt === 2) { // van roof marker lights
+      g.fillStyle = night ? "#ffb060" : "#c08040";
+      for (const [df, dr] of [[cF - 0.1, cw * 0.6], [cF - 0.1, -cw * 0.6]] as const) {
+        const p = px(df, dr, lift + cH + 0.5 * z);
+        g.fillRect(p[0] - z * 0.7, p[1] - z * 0.7, 1.4 * z, 1.4 * z);
+      }
     }
-    const tp = px(-L, 0, lift + 2.7 * z);
+
+    // ---- neon side strip along the camera-facing skirt ----
+    const centerScreenY = sy;
+    for (const s of [1, -1]) {
+      const mid = px(0, W * s, lift + 1.2 * z);
+      if (mid[1] <= centerScreenY) continue; // far side, hidden by the hull
+      g.globalAlpha = night ? 0.95 : 0.55;
+      quad([px(L * 0.55, W * s, lift + 1 * z), px(-L * 0.72, W * s, lift + 1 * z), px(-L * 0.72, W * s, lift + 1.9 * z), px(L * 0.55, W * s, lift + 1.9 * z)], accent);
+      g.globalAlpha = 1;
+    }
+
+    // ---- tail fin (speeder & sports) ----
+    if (bt !== 2) {
+      const f1 = px(-L * 0.68, 0, lift + hullH), f2 = px(-L * 0.95, 0, lift + hullH);
+      const f3 = px(-L * 0.95, 0, lift + hullH + 5 * z);
+      quad([f1, f2, f3], shade(c.color, 0.75));
+      g.fillStyle = accent;
+      g.fillRect(f3[0] - z * 0.6, f3[1] - z * 0.6, 1.2 * z, 2.2 * z);
+    }
+
+    // ---- light bar across the nose + taillight strip ----
+    const hl = night ? "#fff8c8" : "#e8e8d0";
+    quad([px(L, W * 0.32, lift + hullH * 0.55), px(L, -W * 0.32, lift + hullH * 0.55), px(L * 0.98, -W * 0.32, lift + hullH * 0.8), px(L * 0.98, W * 0.32, lift + hullH * 0.8)], hl);
+    quad([px(-L, W * 0.5, lift + hullH * 0.45), px(-L, -W * 0.5, lift + hullH * 0.45), px(-L, -W * 0.5, lift + hullH * 0.72), px(-L, W * 0.5, lift + hullH * 0.72)], night ? "#ff3048" : "#c02838");
+    // bloom via the shared emissive pass
+    const hp = px(L, 0, lift + hullH * 0.68);
+    this.glow(hp[0], hp[1], 8 * z, "#fff4be", night ? 0.5 : 0.1);
+    const tp = px(-L, 0, lift + hullH * 0.58);
     this.glow(tp[0], tp[1], 6.5 * z, "#ff3048", night ? 0.4 : 0.14);
+
+    // ---- rear hover thrusters with exhaust when moving ----
+    for (const s of [0.55, -0.55]) {
+      const t0 = px(-L * 1.0, W * s, lift + 2 * z);
+      g.fillStyle = shade(c.color, 0.5);
+      g.fillRect(t0[0] - 1.4 * z, t0[1] - 1.4 * z, 2.8 * z, 2.8 * z);
+      g.fillStyle = c.speed > 0.5 ? "#9fe8ff" : "#3a606c";
+      g.fillRect(t0[0] - 0.8 * z, t0[1] - 0.8 * z, 1.6 * z, 1.6 * z);
+      if (c.speed > 0.5) {
+        this.glow(t0[0], t0[1], 5 * z, "#9fe8ff", night ? 0.4 : 0.16);
+        // exhaust streak scales with speed
+        const len = 0.25 + (c.speed / 9) * 0.8;
+        g.globalCompositeOperation = "lighter";
+        g.globalAlpha = 0.3;
+        quad([px(-L, W * s + 0.05, lift + 2 * z), px(-L, W * s - 0.05, lift + 2 * z), px(-L - len, W * s - 0.02, lift + 2 * z), px(-L - len, W * s + 0.02, lift + 2 * z)], "#9fe8ff");
+        g.globalAlpha = 1;
+        g.globalCompositeOperation = "source-over";
+      }
+    }
 
     if (c.state === "player") {
       g.strokeStyle = "rgba(120,255,190,0.8)";
