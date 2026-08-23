@@ -4,7 +4,7 @@ A mobile-first, browser-based squad tactics game in the style of Bullfrog's
 **Syndicate** (1993) and its expansion **American Revolt**. Command up to four
 cyborg agents in a procedurally generated, neon-drenched cyberpunk metropolis.
 
-Everything is generated in code at load time: the 512×512 city grid, the pixel
+Everything is generated in code at load time: the 256×256 city grid, the pixel
 sprite sheets (30 civilian designs + police + rival agents, each with 8-direction
 walk / flee / die animations), the animated ad videowalls, the neon signs, and
 all audio (Web Audio synthesis — no asset files at all).

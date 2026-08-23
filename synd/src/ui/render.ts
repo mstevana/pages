@@ -337,13 +337,8 @@ export class Renderer {
           g.closePath();
         };
         if (cut) {
-          if (t === T_BUILDING) {
-            // interior: the exposed floor of the room
-            g.fillStyle = art.cutFloor;
-            diamond(gy);
-            g.fill();
-            continue;
-          }
+          // every column of the building - walls and interior alike - becomes a
+          // solid one-storey mass, so the slice exposes fill rather than a void
           const one = art.block(1, packed & 15, packed >> 4, (tx * 31 + ty * 17) % 3);
           const syOne = gy - STORY_H * z;
           g.drawImage(one, sx, syOne, tw, th + STORY_H * z);
@@ -512,33 +507,85 @@ export class Renderer {
       g.fillStyle = ITEMS[pr.type]?.color ?? "#ffe";
       g.fillRect(sx - z, sy - z, 2 * z, 2 * z);
     }
+    // beams and weapon trails
+    g.globalCompositeOperation = "lighter";
     for (const b of world.beams) {
       g.strokeStyle = b.color;
-      g.globalAlpha = Math.min(1, b.life / 0.12);
-      g.lineWidth = 2 * z;
+      g.globalAlpha = Math.min(1, b.life / b.maxLife);
+      g.lineWidth = b.w * z;
+      g.lineCap = "round";
       g.beginPath();
       g.moveTo(SX(b.x0, b.y0), SY(b.x0, b.y0) - 6 * z);
       g.lineTo(SX(b.x1, b.y1), SY(b.x1, b.y1) - 6 * z);
       g.stroke();
       g.globalAlpha = 1;
     }
-    g.globalCompositeOperation = "lighter";
+    g.lineCap = "butt";
+    // muzzle flashes and explosion light
     for (const f of world.flashes) {
+      const t = Math.max(0, f.life / f.maxLife);
       const sx = SX(f.x, f.y), sy = SY(f.x, f.y) - 6 * z;
-      const r = 10 * z * (f.life / 0.06);
+      if (f.ring) {
+        const rr = f.r * z * (1 - t) * 1.1;
+        g.strokeStyle = `rgba(255,190,110,${t * 0.55})`;
+        g.lineWidth = Math.max(1, 3 * z * t);
+        g.beginPath();
+        g.ellipse(sx, sy, rr, rr * 0.5, 0, 0, Math.PI * 2);
+        g.stroke();
+      } else {
+        const r = f.r * z * (0.35 + 0.65 * t);
+        const gr = g.createRadialGradient(sx, sy, 0, sx, sy, r);
+        gr.addColorStop(0, `rgba(255,245,210,${0.85 * t})`);
+        gr.addColorStop(0.45, `rgba(255,170,60,${0.5 * t})`);
+        gr.addColorStop(1, "rgba(255,120,20,0)");
+        g.fillStyle = gr;
+        g.fillRect(sx - r, sy - r, r * 2, r * 2);
+      }
+    }
+    g.globalCompositeOperation = "source-over";
+
+    // smoke sits behind the flames, so draw it first and unlit
+    for (const pt of world.particles) {
+      if (pt.kind !== "smoke") continue;
+      const t = Math.max(0, pt.life / pt.maxLife);
+      const sx = SX(pt.x, pt.y), sy = SY(pt.x, pt.y) - 4 * z - pt.lift * z;
+      const r = pt.size * z;
       const gr = g.createRadialGradient(sx, sy, 0, sx, sy, r);
-      gr.addColorStop(0, "rgba(255,240,180,0.8)");
-      gr.addColorStop(1, "rgba(255,240,180,0)");
+      gr.addColorStop(0, `rgba(58,58,66,${0.45 * t})`);
+      gr.addColorStop(1, "rgba(40,40,48,0)");
+      g.fillStyle = gr;
+      g.fillRect(sx - r, sy - r, r * 2, r * 2);
+    }
+    // solid bits: blood and debris
+    for (const pt of world.particles) {
+      if (pt.kind !== "blood" && pt.kind !== "debris") continue;
+      g.globalAlpha = Math.max(0, pt.life / pt.maxLife);
+      g.fillStyle = pt.color;
+      const sx = SX(pt.x, pt.y), sy = SY(pt.x, pt.y) - 4 * z - pt.lift * z;
+      g.fillRect(sx, sy, pt.size * z, pt.size * z);
+    }
+    g.globalAlpha = 1;
+    // fire and sparks burn additively, cooling white -> yellow -> orange -> red
+    g.globalCompositeOperation = "lighter";
+    for (const pt of world.particles) {
+      if (pt.kind !== "fire" && pt.kind !== "spark") continue;
+      const t = Math.max(0, pt.life / pt.maxLife);
+      const sx = SX(pt.x, pt.y), sy = SY(pt.x, pt.y) - 4 * z - pt.lift * z;
+      const c = t > 0.8 ? "255,250,225" : t > 0.55 ? "255,222,120" : t > 0.3 ? "255,140,45" : "205,55,20";
+      if (pt.kind === "spark") {
+        g.fillStyle = `rgba(${c},${t})`;
+        g.fillRect(sx - z * 0.5, sy - z * 0.5, pt.size * z, pt.size * z);
+        continue;
+      }
+      const r = Math.max(1, pt.size * z);
+      const gr = g.createRadialGradient(sx, sy, 0, sx, sy, r);
+      gr.addColorStop(0, `rgba(${c},${0.9 * t})`);
+      gr.addColorStop(0.5, `rgba(${c},${0.4 * t})`);
+      gr.addColorStop(1, `rgba(${c},0)`);
       g.fillStyle = gr;
       g.fillRect(sx - r, sy - r, r * 2, r * 2);
     }
     g.globalCompositeOperation = "source-over";
-    for (const pt of world.particles) {
-      g.globalAlpha = Math.max(0, pt.life / pt.maxLife);
-      g.fillStyle = pt.color;
-      const sx = SX(pt.x, pt.y), sy = SY(pt.x, pt.y) - 4 * z;
-      g.fillRect(sx, sy, pt.size * z, pt.size * z);
-    }
     g.globalAlpha = 1;
 
     // ---- emissive pass: shared additive bloom for every light source ----

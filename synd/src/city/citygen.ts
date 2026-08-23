@@ -273,8 +273,8 @@ export function generateCity(seed: number): City {
         }
         // street level: a lit shop window, otherwise an entrance
         if (!groundTaken.has(key)) {
-          if (onStreet && rng.chance(0.22)) {
-            decos.push({ x, y, face, kind: "shopwin", variant: rng.int(0, 7), level: 0 });
+          if (onStreet && rng.chance(0.66)) {
+            decos.push({ x, y, face, kind: "shopwin", variant: rng.int(0, 23), level: 0 });
             groundTaken.add(key);
           } else if (((x * 3 + y * 5) % 4 === 0) && rng.chance(0.35)) {
             decos.push({ x, y, face, kind: "door", variant: rng.int(0, 3), level: 0 });

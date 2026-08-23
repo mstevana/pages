@@ -555,41 +555,93 @@ export function buildTileArt(seed: number, weather: Weather): TileArt {
     billboards.push(c);
   }
 
-  // ---- shop windows: lit display plus a neon sign above (24 x 22) ----
+  // ---- shop windows: 24 designs - three sign styles x four shopfronts,
+  // each with its own trade name and neon colour (24 x 22) ----
   const SH_W = 24, SH_H = 22;
-  const shopNames = ["RAMEN", "TECH", "AMMO", "MEDS", "BAR", "CHIP", "WEAR", "CASH"];
+  const shopNames = ["RAMEN", "TECH", "AMMO", "MEDS", "BAR", "CHIP", "WEAR", "CASH",
+                     "SUSHI", "INK", "PAWN", "CLINIC", "VR", "GRILL", "PARTS", "SOY",
+                     "NOIR", "CYBER", "TEA", "ARMS", "LOAN", "DYE", "FUEL", "MASK"];
   const shops: HTMLCanvasElement[] = [];
-  for (let v = 0; v < 8; v++) {
+  for (let v = 0; v < 24; v++) {
     const c = makeCanvas(SH_W, SH_H);
     const g = ctx2d(c);
     const sign = adCols[(v + 5) % adCols.length];
-    // neon sign board
+    const signStyle = v % 3;
+    const winStyle = Math.floor(v / 3) % 4;
+    const name = shopNames[v % shopNames.length];
+    const frame = tint("#20242c", ambient, blue);
+    const trim = tint("#3a3f47", ambient, blue);
+    const glow = night ? "#ffe9b0" : "#cfe4ee";
+
+    // --- sign board ---
     g.shadowColor = sign;
     g.shadowBlur = night ? 4 : 0;
     g.strokeStyle = sign;
-    g.lineWidth = 1;
-    g.strokeRect(1.5, 1.5, SH_W - 3, 7);
     g.fillStyle = sign;
-    g.font = "bold 5px monospace";
-    g.textAlign = "center";
-    g.fillText(shopNames[v], SH_W / 2, 7);
+    g.lineWidth = 1;
+    if (signStyle === 0) {            // boxed fascia
+      g.strokeRect(1.5, 1.5, SH_W - 3, 7);
+      g.font = "bold 5px monospace"; g.textAlign = "center";
+      g.fillText(name.slice(0, 7), SH_W / 2, 7);
+    } else if (signStyle === 1) {     // rounded lozenge
+      g.beginPath();
+      g.ellipse(SH_W / 2, 5, SH_W / 2 - 2, 4.2, 0, 0, Math.PI * 2);
+      g.stroke();
+      g.font = "bold 5px monospace"; g.textAlign = "center";
+      g.fillText(name.slice(0, 6), SH_W / 2, 7);
+    } else {                          // vertical banner down one side
+      g.strokeRect(SH_W - 7.5, 1.5, 6, SH_H - 5);
+      g.font = "bold 4px monospace"; g.textAlign = "center";
+      for (let k = 0; k < Math.min(4, name.length); k++) g.fillText(name[k], SH_W - 4.5, 6 + k * 4.2);
+    }
     g.textAlign = "left";
     g.shadowBlur = 0;
-    // display window
-    const glow = night ? "#ffe9b0" : "#cfe4ee";
-    g.fillStyle = tint("#20242c", ambient, blue);
-    g.fillRect(0, 10, SH_W, SH_H - 10);
-    g.fillStyle = glow;
-    g.fillRect(2, 12, SH_W - 4, SH_H - 15);
-    // goods on show
-    g.fillStyle = "rgba(20,22,30,0.85)";
-    for (let k = 0; k < 3; k++) {
-      const gw = 3 + ((v + k) % 3);
-      g.fillRect(4 + k * 6, SH_H - 6 - gw, gw, gw);
+
+    // --- shopfront ---
+    const wx = 1, ww = signStyle === 2 ? SH_W - 9 : SH_W - 2;
+    const wy = signStyle === 2 ? 2 : 10;
+    const wh = SH_H - wy - 2;
+    g.fillStyle = frame;
+    g.fillRect(wx - 1, wy - 1, ww + 2, wh + 2);
+    if (winStyle === 2) {             // roller shutter, shop closed
+      g.fillStyle = tint("#4a4e57", ambient, blue);
+      g.fillRect(wx, wy, ww, wh);
+      g.fillStyle = tint("#33373f", ambient, blue);
+      for (let ly = wy + 1; ly < wy + wh; ly += 3) g.fillRect(wx, ly, ww, 1);
+      g.fillStyle = sign;             // small tag light stays on
+      g.fillRect(wx + 1, wy + wh - 3, 2, 2);
+    } else {
+      g.fillStyle = glow;
+      g.fillRect(wx, wy, ww, wh);
+      g.fillStyle = "rgba(20,22,30,0.85)";
+      if (winStyle === 0) {           // goods on a shelf
+        for (let k = 0; k < 3; k++) {
+          const gw = 3 + ((v + k) % 3);
+          g.fillRect(wx + 2 + k * 6, wy + wh - 1 - gw, gw, gw);
+        }
+      } else if (winStyle === 1) {    // split panes with a hanging item
+        g.fillRect(wx + ww / 2 - 0.5, wy, 1, wh);
+        g.fillRect(wx + 3, wy + 1, 3, 5);
+        g.fillRect(wx + ww - 7, wy + 2, 4, 4);
+      } else {                        // open counter with produce
+        g.fillRect(wx, wy + wh - 4, ww, 4);
+        for (let k = 0; k < 4; k++) {
+          g.fillStyle = k % 2 ? tint("#c0623a", ambient, blue) : tint("#3a8a5a", ambient, blue);
+          g.fillRect(wx + 1 + k * 5, wy + wh - 6, 3, 2);
+        }
+      }
+      g.fillStyle = "rgba(255,255,255,0.16)";  // glass reflection
+      g.fillRect(wx, wy, ww, 2);
     }
-    g.fillStyle = tint("#3a3f47", ambient, blue);
-    g.fillRect(SH_W / 2 - 1, 12, 1, SH_H - 15); // mullion
-    g.fillRect(0, SH_H - 3, SH_W, 3);           // sill
+    // awning on half the designs
+    if (v % 2 === 0 && signStyle !== 2) {
+      for (let k = 0; k < 6; k++) {
+        g.fillStyle = k % 2 ? sign : tint("#e8e2d8", ambient, blue);
+        g.fillRect(wx + k * 4, wy - 2, 4, 2);
+      }
+    }
+    g.fillStyle = trim;
+    g.fillRect(0, SH_H - 3, SH_W, 3);        // sill
     shops.push(c);
   }
 

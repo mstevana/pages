@@ -1,6 +1,6 @@
 // Fullscreen DOM overlays: menu, briefing, armory, debrief, game over, objectives.
 
-import { Weather } from "../engine/util";
+import { GRID, Weather } from "../engine/util";
 import { ITEMS, ItemType, newItem, reloadCost, sellValue } from "../game/items";
 import { itemIconUrls } from "../sprites/icons";
 import { SaveData, newAgentName } from "../game/save";
@@ -290,5 +290,5 @@ export function showPause(onResume: () => void, onAbort: () => void): void {
 
 export function showLoading(text: string): void {
   clearScreens();
-  screen(`<h2>${text}</h2><p class="dim">GENERATING SECTOR GRID 512&times;512</p>`);
+  screen(`<h2>${text}</h2><p class="dim">GENERATING SECTOR GRID ${GRID}&times;${GRID}</p>`);
 }

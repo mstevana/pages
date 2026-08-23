@@ -78,10 +78,15 @@ export interface Projectile {
   type: ItemType;
 }
 
-export interface Beam { x0: number; y0: number; x1: number; y1: number; life: number; color: string; }
+export interface Beam { x0: number; y0: number; x1: number; y1: number; life: number; maxLife: number; color: string; w: number; }
 export interface Drop { id: number; x: number; y: number; item: ItemStack; }
-export interface Particle { x: number; y: number; vx: number; vy: number; life: number; maxLife: number; color: string; size: number; }
-export interface Flash { x: number; y: number; life: number; }
+export type FxKind = "blood" | "fire" | "smoke" | "spark" | "debris";
+export interface Particle {
+  x: number; y: number; vx: number; vy: number;
+  life: number; maxLife: number; color: string; size: number;
+  kind: FxKind; lift: number; liftV: number; grow: number; drag: number;
+}
+export interface Flash { x: number; y: number; life: number; maxLife: number; r: number; ring: boolean; }
 export interface Ping { x: number; y: number; life: number; maxLife: number; ok: boolean; }
 
 export interface Mission {
@@ -199,12 +204,12 @@ export class World {
       const vertical = this.rng.chance(0.5);
       if (vertical && c.vRoads.length > 0) {
         const rx = this.rng.pick(c.vRoads);
-        const ry = this.rng.chance(0.5) ? this.rng.int(14, 60) : this.rng.int(GRID - 60, GRID - 14);
+        const ry = this.rng.chance(0.5) ? this.rng.int(12, 44) : this.rng.int(GRID - 44, GRID - 12);
         const sx = this.rng.chance(0.5) ? rx - 1 : rx + 2;
         if (isWalkable(c, sx, ry)) return { x: sx + 0.5, y: ry + 0.5 };
       } else if (c.hRoads.length > 0) {
         const ry = this.rng.pick(c.hRoads);
-        const rx = this.rng.chance(0.5) ? this.rng.int(14, 60) : this.rng.int(GRID - 60, GRID - 14);
+        const rx = this.rng.chance(0.5) ? this.rng.int(12, 44) : this.rng.int(GRID - 44, GRID - 12);
         const sy = this.rng.chance(0.5) ? ry - 1 : ry + 2;
         if (isWalkable(c, rx, sy)) return { x: rx + 0.5, y: sy + 0.5 };
       }
@@ -232,7 +237,7 @@ export class World {
     };
     switch (kind) {
       case "assassinate": {
-        const p = this.farPoint(start, 320);
+        const p = this.farPoint(start, GRID * 0.62);
         const vip = this.spawnCiv(p.x, p.y, true);
         vip.vip = true; vip.maxHp = vip.hp = 70;
         m.targetId = vip.id;
@@ -241,7 +246,7 @@ export class World {
         break;
       }
       case "persuade": {
-        const p = this.farPoint(start, 320);
+        const p = this.farPoint(start, GRID * 0.62);
         const vip = this.spawnCiv(p.x, p.y, true);
         vip.vip = true; vip.maxHp = vip.hp = 60;
         m.targetId = vip.id;
@@ -250,7 +255,7 @@ export class World {
         break;
       }
       case "escort": {
-        const p = this.farPoint(start, 320);
+        const p = this.farPoint(start, GRID * 0.62);
         const vip = this.spawnCiv(p.x, p.y, true);
         vip.vip = true; vip.maxHp = vip.hp = 60;
         m.targetId = vip.id;
@@ -263,7 +268,7 @@ export class World {
         const count = 30;
         m.enemiesLeft = count;
         for (let i = 0; i < count; i++) {
-          const p = this.farPoint(start, 60 + this.rng.int(0, 200));
+          const p = this.farPoint(start, 40 + this.rng.int(0, 110));
           this.spawnEnemy(p.x, p.y);
         }
         m.text = "ELIMINATE all 30 rival syndicate agents operating in this sector. They are hunting you too.";
@@ -560,7 +565,7 @@ export class World {
     const len = Math.max(0.001, Math.sqrt(dx * dx + dy * dy));
     const baseA = Math.atan2(dy, dx);
     this.audio.shoot(wType);
-    this.flashes.push({ x: shooter.x, y: shooter.y, life: 0.06 });
+    this.flashes.push({ x: shooter.x, y: shooter.y, life: 0.06, maxLife: 0.06, r: 10, ring: false });
     this.alertArea(shooter.x, shooter.y, 14, shooter);
     if (wType === "laser") {
       // hitscan beam, pierces peds, stops at walls
@@ -572,7 +577,7 @@ export class World {
         const py = shooter.y + (dy / len) * (maxR * i / steps);
         if (!this.pf.losShot(shooter.x, shooter.y, px, py)) { ex = px; ey = py; break; }
       }
-      this.beams.push({ x0: shooter.x, y0: shooter.y, x1: ex, y1: ey, life: 0.12, color: def.color });
+      this.beams.push({ x0: shooter.x, y0: shooter.y, x1: ex, y1: ey, life: 0.12, maxLife: 0.12, color: def.color, w: 2 });
       for (const p of this.peds) {
         if (p === shooter || p.state === "dead" || p.carId !== null) continue;
         if (this.pointSegDist(p.x, p.y, shooter.x, shooter.y, ex, ey) < 0.5) {
@@ -711,7 +716,7 @@ export class World {
       this.damagePed(p, 500, driver);
       for (let i = 0; i < 6; i++) {
         const a = this.rng.float(0, Math.PI * 2), s = this.rng.float(1, 4);
-        this.particles.push({ x: p.x, y: p.y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life: 0.5, maxLife: 0.5, color: "#a01020", size: 1 });
+        this.fx(p.x, p.y, Math.cos(a) * s, Math.sin(a) * s, 0.5, "#a01020", 1, "blood");
       }
     }
   }
@@ -748,10 +753,35 @@ export class World {
 
   private explode(x: number, y: number, from: Ped | null): void {
     this.audio.explosion();
+    // white-hot flash and a shockwave ring
+    this.flashes.push({ x, y, life: 0.22, maxLife: 0.22, r: 34, ring: false });
+    this.flashes.push({ x, y, life: 0.5, maxLife: 0.5, r: 46, ring: true });
+    // fireball: fast, short-lived, rising and swelling
     for (let i = 0; i < 26; i++) {
       const a = this.rng.float(0, Math.PI * 2);
-      const s = this.rng.float(1, 7);
-      this.particles.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life: 0.7, maxLife: 0.7, color: this.rng.pick(["#ff9b2f", "#ffdf6b", "#ff4d2f", "#888"]), size: 2 });
+      const s = this.rng.float(1.5, 8);
+      this.fx(x, y, Math.cos(a) * s, Math.sin(a) * s,
+        this.rng.float(0.35, 0.7), "#fff0b0", this.rng.float(2.5, 5), "fire",
+        this.rng.float(6, 18), this.rng.float(8, 20), 0.86);
+    }
+    // smoke: slow, long-lived, climbing and spreading
+    for (let i = 0; i < 18; i++) {
+      const a = this.rng.float(0, Math.PI * 2);
+      const s = this.rng.float(0.3, 2.2);
+      this.fx(x, y, Math.cos(a) * s, Math.sin(a) * s,
+        this.rng.float(1.1, 2.2), "#4a4a52", this.rng.float(3, 6), "smoke",
+        this.rng.float(10, 22), this.rng.float(6, 14), 0.94);
+    }
+    // sparks and debris thrown clear
+    for (let i = 0; i < 16; i++) {
+      const a = this.rng.float(0, Math.PI * 2);
+      const s = this.rng.float(6, 15);
+      this.fx(x, y, Math.cos(a) * s, Math.sin(a) * s, this.rng.float(0.3, 0.8), "#ffd27a", 1.2, "spark", this.rng.float(4, 14), 0, 0.9);
+    }
+    for (let i = 0; i < 8; i++) {
+      const a = this.rng.float(0, Math.PI * 2);
+      const s = this.rng.float(2, 7);
+      this.fx(x, y, Math.cos(a) * s, Math.sin(a) * s, this.rng.float(0.5, 1.0), "#26262c", 2, "debris", this.rng.float(8, 20), 0, 0.9);
     }
     for (const p of this.peds) {
       if (p.state === "dead") continue;
@@ -761,11 +791,18 @@ export class World {
     this.alertArea(x, y, 18, from);
   }
 
+  private fx(
+    x: number, y: number, vx: number, vy: number, life: number,
+    color: string, size: number, kind: FxKind, liftV = 0, grow = 0, drag = 0.92
+  ): void {
+    this.particles.push({ x, y, vx, vy, life, maxLife: life, color, size, kind, lift: 0, liftV, grow, drag });
+  }
+
   private bloodBurst(x: number, y: number, n: number): void {
     for (let i = 0; i < n; i++) {
       const a = this.rng.float(0, Math.PI * 2);
       const s = this.rng.float(0.4, 2.4);
-      this.particles.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life: 0.5, maxLife: 0.5, color: "#a01020", size: 1 });
+      this.fx(x, y, Math.cos(a) * s, Math.sin(a) * s, 0.5, "#a01020", 1, "blood");
     }
   }
 
@@ -822,7 +859,10 @@ export class World {
     this.pings = this.pings.filter((pg) => pg.life > 0);
     for (const pt of this.particles) {
       pt.x += pt.vx * dt; pt.y += pt.vy * dt;
-      pt.vx *= 0.92; pt.vy *= 0.92;
+      pt.vx *= pt.drag; pt.vy *= pt.drag;
+      pt.lift += pt.liftV * dt;
+      pt.liftV *= 0.96;
+      pt.size += pt.grow * dt;
       pt.life -= dt;
     }
     this.particles = this.particles.filter((p) => p.life > 0);
@@ -1281,6 +1321,7 @@ export class World {
 
   private updateProjectiles(dt: number): void {
     for (const pr of this.projectiles) {
+      const tx0 = pr.x, ty0 = pr.y;
       const steps = Math.ceil(Math.max(1, (Math.abs(pr.vx) + Math.abs(pr.vy)) * dt * 2));
       for (let s = 0; s < steps && pr.life > 0; s++) {
         const sdt = dt / steps;
@@ -1291,7 +1332,7 @@ export class World {
         const t = this.city.tiles[idx(txi, tyi)];
         if (t === 3 || t === 4) { // wall / building
           pr.life = 0;
-          this.particles.push({ x: pr.x, y: pr.y, vx: 0, vy: 0, life: 0.15, maxLife: 0.15, color: "#ccc", size: 1 });
+          this.fx(pr.x, pr.y, 0, 0, 0.15, "#ccc", 1, "spark");
           break;
         }
         // hit peds
@@ -1323,8 +1364,9 @@ export class World {
           }
         }
       }
-      if (pr.life <= 0 && pr.type === "gauss" && inGrid(pr.x | 0, pr.y | 0)) {
-        // gauss round detonates at end of flight even without a direct hit
+      if (pr.type === "gauss" && (pr.x !== tx0 || pr.y !== ty0)) {
+        // the slug leaves a bright wake that fades in a fraction of a second
+        this.beams.push({ x0: tx0, y0: ty0, x1: pr.x, y1: pr.y, life: 0.28, maxLife: 0.28, color: "#9fe8ff", w: 2.6 });
       }
     }
     this.projectiles = this.projectiles.filter((p) => p.life > 0);
