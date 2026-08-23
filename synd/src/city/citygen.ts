@@ -253,31 +253,43 @@ export function generateCity(seed: number): City {
   return { seed, tiles, height, bstyle, laneDir, decos, lamps, roundabouts, vRoads, hRoads, skytrains };
 }
 
-// Recursively split a block into lots separated by 2-tile alleys, then raise
+// Recursively split a block into lots separated by 4-tile alleys, then raise
 // buildings with a facade style, or lay out parks and sunken pits.
+// Invariant: two buildings are never closer than 4 tiles (alleys are 4 wide,
+// and street corridors are curb+road+road+curb = 4 tiles wall to wall).
 function fillBlock(tiles: Uint8Array, height: Uint8Array, bstyle: Uint8Array, rng: Rng, x0: number, y0: number, x1: number, y1: number): void {
   const w = x1 - x0 + 1, h = y1 - y0 + 1;
   if (w < 4 || h < 4) return;
-  if (w > 11 && (w >= h || h <= 11)) {
-    const cut = x0 + rng.int(5, w - 7);
+  if (w > 13 && (w >= h || h <= 13)) {
+    const cut = x0 + rng.int(5, w - 9); // 4-tile alley keeps both halves >= 5 wide
     fillBlock(tiles, height, bstyle, rng, x0, y0, cut - 1, y1);
-    fillBlock(tiles, height, bstyle, rng, cut + 2, y0, x1, y1);
+    fillBlock(tiles, height, bstyle, rng, cut + 4, y0, x1, y1);
     return;
   }
-  if (h > 11) {
-    const cut = y0 + rng.int(5, h - 7);
+  if (h > 13) {
+    const cut = y0 + rng.int(5, h - 9);
     fillBlock(tiles, height, bstyle, rng, x0, y0, x1, cut - 1);
-    fillBlock(tiles, height, bstyle, rng, x0, cut + 2, x1, y1);
+    fillBlock(tiles, height, bstyle, rng, x0, cut + 4, x1, y1);
     return;
   }
   // lot: park / sunken pit / building
   if (rng.chance(0.22)) {
-    for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) tiles[idx(x, y)] = T_PARK;
+    // parks only claim untouched ground, so stub roads survive
+    for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
+      if (tiles[idx(x, y)] === T_GROUND) tiles[idx(x, y)] = T_PARK;
+    }
     // some plazas hold a sunken pit (vent shaft / excavation) with a walkable rim
     if (rng.chance(0.35) && w >= 6 && h >= 6) {
-      for (let y = y0 + 2; y <= y1 - 2; y++) for (let x = x0 + 2; x <= x1 - 2; x++) tiles[idx(x, y)] = T_PIT;
+      for (let y = y0 + 2; y <= y1 - 2; y++) for (let x = x0 + 2; x <= x1 - 2; x++) {
+        if (tiles[idx(x, y)] === T_PARK) tiles[idx(x, y)] = T_PIT;
+      }
     }
     return;
+  }
+  // a building lot must sit on clear ground - never pave over a stub road
+  // or roundabout that was carved through this block earlier
+  for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
+    if (tiles[idx(x, y)] !== T_GROUND) return;
   }
   // facade style: pick by lot, tall lots lean toward glass towers
   const stories = rng.chance(0.08) ? rng.int(5, 7) : rng.int(1, 4);
