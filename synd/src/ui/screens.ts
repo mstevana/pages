@@ -85,6 +85,9 @@ export function showArmory(save: SaveData, onDone: () => void): void {
   clearScreens();
   let agentIdx = save.agents.findIndex((a) => a.alive);
   if (agentIdx < 0) agentIdx = 0;
+  // nothing is bought or sold by tapping the grid - picking an item only
+  // selects it, and the action bar carries thumb-sized buttons
+  let pick: { where: "inv" | "shop"; idx: number; type?: ItemType } | null = null;
 
   const BUY: ItemType[] = ["gun", "uzi", "shotgun", "minigun", "laser", "gauss", "shield", "medkit", "persuadertron"];
   const HIRE_COST = 1200;
@@ -93,11 +96,12 @@ export function showArmory(save: SaveData, onDone: () => void): void {
   const render = () => {
     clearScreens();
     const a = save.agents[agentIdx];
+    if (pick && pick.where === "inv" && (!a.alive || pick.idx >= a.inv.length)) pick = null;
+
     const tabs = save.agents.map((ag, i) =>
       `<button class="agent-tab ${i === agentIdx ? "" : "ghost"}" data-i="${i}">${ag.name}${ag.alive ? "" : " &dagger;"}</button>`
     ).join("");
 
-    // loadout: eight compact slots, tap one to sell it
     let slots = "";
     if (!a.alive) {
       slots = `<div class="arm-sec">AGENT DECEASED</div>
@@ -106,33 +110,51 @@ export function showArmory(save: SaveData, onDone: () => void): void {
       const cells = [];
       for (let i = 0; i < 8; i++) {
         const it = a.inv[i];
-        if (!it) { cells.push(`<div class="arm-slot empty"><img src="${icons.gun}" style="visibility:hidden"><span class="arm-act">&nbsp;</span><span class="arm-act">&nbsp;</span></div>`); continue; }
+        if (!it) { cells.push(`<div class="arm-slot empty"><img src="${icons.gun}" style="visibility:hidden"><span class="arm-bar"></span></div>`); continue; }
         const def = ITEMS[it.type];
         const frac = Math.max(0, Math.min(1, it.charge / def.charge));
-        const rl = reloadCost(it);
-        const rlRow = rl > 0
-          ? `<span class="arm-act rld ${save.credits >= rl ? "" : "poor"}" data-i="${i}">&#8635;${rl}</span>`
-          : `<span class="arm-act poor">&#8635;&mdash;</span>`;
+        const on = pick && pick.where === "inv" && pick.idx === i ? "on" : "";
         cells.push(
-          `<div class="arm-slot" title="${def.name}">
+          `<div class="arm-slot pickinv ${on}" data-i="${i}" title="${def.name}">
              <img src="${icons[it.type]}" alt="${def.name}">
              <span class="arm-bar"><i style="width:${(frac * 100).toFixed(0)}%;background:${frac > 0.25 ? def.color : "#e04040"}"></i></span>
-             ${rlRow}
-             <span class="arm-act sell" data-i="${i}">+${sellValue(it)}</span>
            </div>`
         );
       }
       slots = `<div class="arm-slots">${cells.join("")}</div>`;
     }
 
-    const market = BUY.map((t) => {
-      const afford = save.credits >= ITEMS[t].price && a.alive && a.inv.length < 8;
-      return `<div class="arm-card ${afford ? "afford buy" : "poor"}" data-t="${t}" title="${ITEMS[t].name}">
+    const market = BUY.map((t, i) => {
+      const on = pick && pick.where === "shop" && pick.idx === i ? "on" : "";
+      const afford = save.credits >= ITEMS[t].price;
+      return `<div class="arm-card pickshop ${on} ${afford ? "afford" : "poor"}" data-i="${i}" data-t="${t}" title="${ITEMS[t].name}">
                 <img src="${icons[t]}" alt="${ITEMS[t].name}">
                 <span class="arm-name">${ITEMS[t].short}</span>
                 <span class="arm-cost">${ITEMS[t].price}</span>
               </div>`;
     }).join("");
+
+    // ---- action bar ----
+    let bar = `<span class="arm-info dim">SELECT AN ITEM TO BUY, RELOAD OR SELL</span>`;
+    if (pick && pick.where === "inv" && a.alive) {
+      const it = a.inv[pick.idx];
+      const def = ITEMS[it.type];
+      const rl = reloadCost(it);
+      const rlBtn = rl > 0
+        ? `<button id="act-rld" class="${save.credits >= rl ? "rld" : "ghost"}">RELOAD &minus;${rl}</button>`
+        : "";
+      bar = `<span class="arm-info">${def.name} &middot; ${Math.ceil(it.charge)}/${def.charge}${rl > 0 ? "" : " &middot; FULL"}</span>
+             ${rlBtn}
+             <button id="act-sell" class="sell">SELL +${sellValue(it)}</button>`;
+    } else if (pick && pick.where === "shop") {
+      const t = BUY[pick.idx];
+      const def = ITEMS[t];
+      const full = a.alive && a.inv.length >= 8;
+      const broke = save.credits < def.price;
+      const why = !a.alive ? "AGENT DECEASED" : full ? "NO FREE SLOTS" : broke ? "NOT ENOUGH CREDITS" : "";
+      bar = `<span class="arm-info">${def.name} &middot; ${def.price}cr &middot; ${def.charge} charge${why ? ` &middot; <b style="color:#e04040">${why}</b>` : ""}</span>
+             <button id="act-buy" class="${why ? "ghost" : "buy"}">BUY &minus;${def.price}</button>`;
+    }
 
     const s = screen(`
       <div class="arm-top">
@@ -142,49 +164,54 @@ export function showArmory(save: SaveData, onDone: () => void): void {
         <button id="done">Back</button>
       </div>
       <div class="arm-tabs">${tabs}</div>
-      <div class="arm-sec">LOADOUT &middot; ${a.name} &middot; &#8635; RELOAD &middot; + SELL (spent gear fetches less)</div>
+      <div class="arm-sec">LOADOUT &middot; ${a.name}</div>
       ${slots}
-      <div class="arm-sec">MARKET &middot; TAP TO BUY</div>
+      <div class="arm-sec">MARKET</div>
       <div class="arm-market">${market}</div>
+      <div class="arm-actbar">${bar}</div>
     `);
     s.classList.add("armory");
 
     s.querySelectorAll(".agent-tab").forEach((el) =>
-      el.addEventListener("click", () => { agentIdx = Number((el as HTMLElement).dataset.i); render(); })
+      el.addEventListener("click", () => { agentIdx = Number((el as HTMLElement).dataset.i); pick = null; render(); })
     );
-    s.querySelectorAll(".arm-card.buy").forEach((el) =>
+    s.querySelectorAll(".arm-slot.pickinv").forEach((el) =>
+      el.addEventListener("click", () => { pick = { where: "inv", idx: Number((el as HTMLElement).dataset.i) }; render(); })
+    );
+    s.querySelectorAll(".arm-card.pickshop").forEach((el) =>
       el.addEventListener("click", () => {
-        const t = (el as HTMLElement).dataset.t as ItemType;
-        const ag = save.agents[agentIdx];
-        if (!ag.alive || ag.inv.length >= 8 || save.credits < ITEMS[t].price) return;
-        save.credits -= ITEMS[t].price;
-        ag.inv.push(newItem(t));
+        const e = el as HTMLElement;
+        pick = { where: "shop", idx: Number(e.dataset.i), type: e.dataset.t as ItemType };
         render();
       })
     );
-    s.querySelectorAll(".arm-act.sell").forEach((el) =>
-      el.addEventListener("click", () => {
-        const i = Number((el as HTMLElement).dataset.i);
-        const ag = save.agents[agentIdx];
-        if (!ag.alive || i >= ag.inv.length) return;
-        const [it] = ag.inv.splice(i, 1);
-        save.credits += sellValue(it);
-        render();
-      })
-    );
-    s.querySelectorAll(".arm-act.rld:not(.poor)").forEach((el) =>
-      el.addEventListener("click", () => {
-        const i = Number((el as HTMLElement).dataset.i);
-        const ag = save.agents[agentIdx];
-        if (!ag.alive || i >= ag.inv.length) return;
-        const it = ag.inv[i];
-        const cost = reloadCost(it);
-        if (cost <= 0 || save.credits < cost) return;
-        save.credits -= cost;
-        it.charge = ITEMS[it.type].charge;
-        render();
-      })
-    );
+    on(s, "#act-sell", () => {
+      const ag = save.agents[agentIdx];
+      if (!pick || pick.where !== "inv" || !ag.alive || pick.idx >= ag.inv.length) return;
+      const [it] = ag.inv.splice(pick.idx, 1);
+      save.credits += sellValue(it);
+      pick = null;
+      render();
+    });
+    on(s, "#act-rld", () => {
+      const ag = save.agents[agentIdx];
+      if (!pick || pick.where !== "inv" || !ag.alive || pick.idx >= ag.inv.length) return;
+      const it = ag.inv[pick.idx];
+      const cost = reloadCost(it);
+      if (cost <= 0 || save.credits < cost) return;
+      save.credits -= cost;
+      it.charge = ITEMS[it.type].charge;
+      render();
+    });
+    on(s, "#act-buy", () => {
+      const ag = save.agents[agentIdx];
+      if (!pick || pick.where !== "shop" || !ag.alive) return;
+      const t = BUY[pick.idx];
+      if (ag.inv.length >= 8 || save.credits < ITEMS[t].price) return;
+      save.credits -= ITEMS[t].price;
+      ag.inv.push(newItem(t));
+      render();
+    });
     on(s, "#hire", () => {
       if (save.credits < HIRE_COST) return;
       save.credits -= HIRE_COST;

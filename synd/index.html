@@ -67,7 +67,7 @@
   .arm-sec { color:#5f7d8c; font-size: clamp(8px, 1.8vmin, 13px); letter-spacing:0.12em; margin:1vmin 0 0.4vmin; }
   .arm-slots { display:flex; gap:0.8vmin; flex-wrap:wrap; justify-content:center; }
   .arm-slot {
-    width: clamp(38px, 8.4vmin, 66px); padding:0.5vmin 0; border:1px solid #2c2f3e;
+    width: clamp(42px, 9vmin, 70px); padding:0.7vmin 0; border:1px solid #2c2f3e;
     background:#101218; border-radius:2px; text-align:center; cursor:pointer;
   }
   .arm-slot.empty { border-style:dashed; opacity:0.4; cursor:default; }
@@ -76,12 +76,24 @@
   .arm-bar { display:block; height:3px; margin:0.3vmin 12%; background:#0a0b10; overflow:hidden; }
   .arm-bar i { display:block; height:3px; }
   .arm-price { display:block; font-size: clamp(7px, 1.6vmin, 12px); color:#4fdc6a; }
-  .arm-act { display:block; font-size: clamp(7px, 1.6vmin, 12px); cursor:pointer; line-height:1.35; }
-  .arm-act.rld { color:#ff9b2f; }
-  .arm-act.sell { color:#4fdc6a; }
-  .arm-act:hover { background:#232633; }
-  .arm-act.poor { opacity:0.3; cursor:default; }
-  .arm-act.poor:hover { background:none; }
+  .arm-slot.on, .arm-card.on { border-color:#ff9b2f; background:#3a2410; }
+  .arm-slot.on img, .arm-card.on img { filter: drop-shadow(0 0 3px #ff9b2f); }
+  /* action bar: the only place a purchase actually happens, with targets
+     big enough for a thumb */
+  .arm-actbar {
+    display:flex; align-items:center; gap:1.5vmin; margin-top:1.4vmin;
+    width:100%; max-width:1100px; min-height: 34px;
+    border:1px solid #2c2f3e; background:#0e1015; border-radius:3px; padding:0.6vmin 1.4vmin;
+    box-sizing:border-box;
+  }
+  .arm-info { flex:1; text-align:left; color:#c3ccd6; font-size: clamp(9px, 2vmin, 15px); }
+  .arm-info.dim { color:#5f7d8c; letter-spacing:0.12em; }
+  #ui .screen.armory .arm-actbar button {
+    min-height: 30px; padding: 0.6vmin 3vmin; font-size: clamp(10px, 2.1vmin, 16px);
+  }
+  #ui .screen.armory .arm-actbar button.rld { background:#ff9b2f; }
+  #ui .screen.armory .arm-actbar button.sell { background:#4fdc6a; border-color:#a8f0ba; }
+  #ui .screen.armory .arm-actbar button.buy { background:#25e0ff; border-color:#a8eeff; }
   .arm-market { display:grid; grid-template-columns: repeat(9, 1fr); gap:0.8vmin; width:100%; max-width:1100px; }
   @media (max-aspect-ratio: 8/5) { .arm-market { grid-template-columns: repeat(5, 1fr); } }
   .arm-card {

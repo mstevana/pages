@@ -88,7 +88,9 @@ Progress persists in `localStorage`: your agents, their gear, credits and the
 mission counter. Cops usually drop a gun (occasionally better); rival agents
 drop from the full arsenal: gun, uzi, shotgun, minigun, laser, gauss gun,
 shield belt, medkit, persuadertron. Between missions the **Armory** sells all
-of it and lets you hire replacements for fallen agents. Selling pays 40% of
+of it and lets you hire replacements for fallen agents. Tap an item in your loadout or in the market to
+select it, then use the buttons in the bar below to buy, reload or sell it.
+Selling pays 40% of
 list price for fully loaded gear, scaling down to half that for something
 completely spent. Spent weapons can also be **reloaded** there — a full load
 costs half the item's list price, charged only for the ammo actually missing,
