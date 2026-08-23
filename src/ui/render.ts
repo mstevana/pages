@@ -1,7 +1,8 @@
 // Isometric world renderer: diagonal-row painter's algorithm so tall building
-// blocks correctly occlude people and cars behind them.
+// blocks correctly occlude people and cars behind them. Also draws the static
+// street furniture (fences, doors, pit rails) and the elevated skytrain.
 
-import { City, Deco, T_BUILDING, T_ISLAND, T_PARK, T_ROAD, T_SIDEWALK, T_WALL, D_S, D_W, idx } from "../city/citygen";
+import { City, Deco, T_BUILDING, T_GROUND, T_ISLAND, T_PARK, T_PIT, T_ROAD, T_SIDEWALK, T_WALL, D_S, D_W, idx, inGrid } from "../city/citygen";
 import { GRID, STORY_H, TILE_H, TILE_W, isNight, isRain, isoX, isoY } from "../engine/util";
 import { PeopleAtlas, FW, FH } from "../sprites/people";
 import { TileArt } from "../sprites/tiles";
@@ -13,17 +14,35 @@ export interface Camera {
   zoom: number;
 }
 
+const TRAIN_ELEV = 64;   // px above ground at zoom 1
+const PED_SCALE = 1.2;   // people vs the 30px story: roughly one story tall
+
 interface Entity {
   s: number;    // depth key = tx + ty
-  kind: "ped" | "car" | "drop" | "lamp";
+  kind: "ped" | "car" | "drop" | "lamp" | "fence" | "pylon" | "deck" | "train";
   ped?: Ped;
   car?: Car;
   drop?: { x: number; y: number; item: { type: string } };
+  fence?: FenceEdge;
+  train?: TrainSeg;
+  deckAxis?: "v" | "h";
   x: number; y: number;
 }
 
+interface FenceEdge {
+  x: number; y: number;
+  edge: 0 | 1 | 2 | 3;   // 0 NW, 1 NE, 2 SE, 3 SW (tile edge)
+  hazard: boolean;       // yellow pit railing vs park fence
+}
+
+interface TrainSeg { wx: number; wy: number; angle: number; head: boolean; }
+
+interface DeckTile { x: number; y: number; axis: "v" | "h"; pylon: boolean; }
+
 export class Renderer {
   private decoIndex = new Map<number, Deco[]>();
+  private fences: FenceEdge[] = [];
+  private decks: DeckTile[] = [];
   rainDrops: { x: number; y: number; v: number }[] = [];
 
   constructor(private city: City) {
@@ -32,6 +51,49 @@ export class Renderer {
       let arr = this.decoIndex.get(k);
       if (!arr) { arr = []; this.decoIndex.set(k, arr); }
       arr.push(d);
+    }
+    this.buildFences();
+    this.buildDecks();
+  }
+
+  private buildFences(): void {
+    const t = this.city.tiles;
+    const walkOpen = (x: number, y: number) => {
+      if (!inGrid(x, y)) return false;
+      const v = t[idx(x, y)];
+      return v === T_SIDEWALK || v === T_GROUND || v === T_ROAD;
+    };
+    for (let y = 1; y < GRID - 1; y++) {
+      for (let x = 1; x < GRID - 1; x++) {
+        const v = t[idx(x, y)];
+        if (v === T_PIT) {
+          // hazard railing wherever the pit borders walkable ground
+          const nbr: [number, number, 0 | 1 | 2 | 3][] = [[x - 1, y, 0], [x, y - 1, 1], [x + 1, y, 2], [x, y + 1, 3]];
+          for (const [nx, ny, edge] of nbr) {
+            if (t[idx(nx, ny)] !== T_PIT) this.fences.push({ x, y, edge, hazard: true });
+          }
+        } else if (v === T_PARK) {
+          // some parks get street-side fences, with gaps for gates
+          if (((x * 13 + y * 29) & 7) === 0) continue; // gate gap
+          if (((x >> 3) * 31 + (y >> 3) * 17) % 3 === 0) continue; // unfenced lot-ish region
+          if (walkOpen(x, y + 1) && t[idx(x, y + 1)] === T_SIDEWALK) this.fences.push({ x, y, edge: 3, hazard: false });
+          if (walkOpen(x + 1, y) && t[idx(x + 1, y)] === T_SIDEWALK) this.fences.push({ x, y, edge: 2, hazard: false });
+        }
+      }
+    }
+  }
+
+  private buildDecks(): void {
+    for (const line of this.city.skytrains) {
+      if (line.axis === "v") {
+        for (let y = 1; y < GRID - 1; y++) {
+          this.decks.push({ x: line.pos, y, axis: "v", pylon: y % 5 === 2 });
+        }
+      } else {
+        for (let x = 1; x < GRID - 1; x++) {
+          this.decks.push({ x, y: line.pos, axis: "h", pylon: x % 5 === 2 });
+        }
+      }
     }
   }
 
@@ -47,7 +109,6 @@ export class Renderer {
     const z = cam.zoom;
     const cx = vx + vw / 2, cy = vy + vh / 2;
     const camPX = isoX(cam.x, cam.y), camPY = isoY(cam.x, cam.y);
-    // world tile -> screen
     const SX = (tx: number, ty: number) => cx + (isoX(tx, ty) - camPX) * z;
     const SY = (tx: number, ty: number) => cy + (isoY(tx, ty) - camPY) * z;
 
@@ -59,10 +120,10 @@ export class Renderer {
     g.fillRect(vx, vy, vw, vh);
     g.imageSmoothingEnabled = false;
 
-    // visible tile bounds from the 4 viewport corners (with margin for tall buildings)
-    const margin = 14;
+    // visible tile bounds (margin for tall buildings + elevated track)
+    const maxRise = 8 * STORY_H * z;
     const corners = [
-      [vx, vy], [vx + vw, vy], [vx, vy + vh + 12 * STORY_H * z], [vx + vw, vy + vh + 12 * STORY_H * z],
+      [vx, vy], [vx + vw, vy], [vx, vy + vh + maxRise], [vx + vw, vy + vh + maxRise],
     ];
     let txMin = 1e9, txMax = -1e9, tyMin = 1e9, tyMax = -1e9;
     for (const [px, py] of corners) {
@@ -71,19 +132,26 @@ export class Renderer {
       txMin = Math.min(txMin, tx); txMax = Math.max(txMax, tx);
       tyMin = Math.min(tyMin, ty); tyMax = Math.max(tyMax, ty);
     }
-    const x0 = Math.max(0, Math.floor(txMin) - 2), x1 = Math.min(GRID - 1, Math.ceil(txMax) + 2);
-    const y0 = Math.max(0, Math.floor(tyMin) - margin), y1 = Math.min(GRID - 1, Math.ceil(tyMax) + 2);
+    const x0 = Math.max(0, Math.floor(txMin) - 3), x1 = Math.min(GRID - 1, Math.ceil(txMax) + 3);
+    const y0 = Math.max(0, Math.floor(tyMin) - 12), y1 = Math.min(GRID - 1, Math.ceil(tyMax) + 3);
 
-    const tiles = this.city.tiles, hArr = this.city.height, lane = this.city.laneDir;
+    const tiles = this.city.tiles, hArr = this.city.height, lane = this.city.laneDir, styleArr = this.city.bstyle;
     const tw = TILE_W * z, th = TILE_H * z;
 
-    // ---- pass 1: flat ground ----
+    // ---- pass 1: flat ground + pits ----
     for (let ty = y0; ty <= y1; ty++) {
       for (let tx = x0; tx <= x1; tx++) {
         const t = tiles[idx(tx, ty)];
         if (t === T_WALL || t === T_BUILDING) continue;
         const sx = SX(tx, ty) - tw / 2, sy = SY(tx, ty);
-        if (sx > vx + vw || sx + tw < vx || sy > vy + vh || sy + th < vy) continue;
+        if (sx > vx + vw || sx + tw < vx || sy > vy + vh || sy + th + 12 * z < vy) continue;
+        if (t === T_PIT) {
+          const ph = th + 10 * z;
+          g.drawImage(art.pitFloor, sx, sy, tw, ph);
+          if (tiles[idx(tx - 1, ty)] !== T_PIT) g.drawImage(art.pitWallNW, sx, sy, tw, ph);
+          if (tiles[idx(tx, ty - 1)] !== T_PIT) g.drawImage(art.pitWallNE, sx, sy, tw, ph);
+          continue;
+        }
         let img: HTMLCanvasElement;
         switch (t) {
           case T_ROAD: {
@@ -126,6 +194,33 @@ export class Renderer {
       if (l.x < x0 || l.x > x1 || l.y < y0 || l.y > y1) continue;
       push({ s: l.x + l.y, kind: "lamp", x: l.x + 0.5, y: l.y + 0.5 });
     }
+    for (const f of this.fences) {
+      if (f.x < x0 || f.x > x1 || f.y < y0 || f.y > y1) continue;
+      push({ s: f.x + f.y, kind: "fence", fence: f, x: f.x + 0.5, y: f.y + 0.5 });
+    }
+    for (const d of this.decks) {
+      if (d.x < x0 - 1 || d.x > x1 || d.y < y0 - 1 || d.y > y1) continue;
+      if (d.pylon) push({ s: d.x + d.y + 1, kind: "pylon", x: d.x + 1, y: d.y + 1, deckAxis: d.axis });
+      push({ s: d.x + d.y + 1, kind: "deck", x: d.x + 1, y: d.y + (d.axis === "v" ? 0.5 : 1), deckAxis: d.axis });
+    }
+    // trains: two per line, opposite directions, deterministic from time
+    for (const line of this.city.skytrains) {
+      const segLen = 1.9, nSeg = 4, span = GRID + nSeg * segLen + 8;
+      for (let tr = 0; tr < 2; tr++) {
+        const speed = 14 + tr * 3;
+        const dirSign = tr === 0 ? 1 : -1;
+        const head = ((time * speed + tr * 217) % span);
+        for (let k = 0; k < nSeg; k++) {
+          const u = dirSign > 0 ? head - k * segLen : GRID - (head - k * segLen);
+          if (u < -2 || u > GRID + 2) continue;
+          const wx = line.axis === "v" ? line.pos + 1 : u;
+          const wy = line.axis === "v" ? u : line.pos + 1;
+          if (wx < x0 || wx > x1 || wy < y0 || wy > y1) continue;
+          const angle = line.axis === "v" ? Math.atan2(dirSign, 0) : Math.atan2(0, dirSign);
+          push({ s: Math.floor(wx) + Math.floor(wy), kind: "train", x: wx, y: wy, train: { wx, wy, angle, head: k === 0 } });
+        }
+      }
+    }
 
     // ---- pass 2: blocks + entities in depth order ----
     const adFrame = Math.floor(time * 2.2);
@@ -136,33 +231,63 @@ export class Renderer {
         const t = tiles[i];
         if (t !== T_WALL && t !== T_BUILDING) continue;
         const stories = hArr[i] || 1;
-        const block = art.blocks[Math.min(11, stories - 1)][(tx * 31 + ty * 17) % 3];
+        const packed = styleArr[i];
+        const block = art.block(stories, packed & 15, packed >> 4, (tx * 31 + ty * 17) % 3);
         const sx = SX(tx, ty) - tw / 2;
         const syTop = SY(tx, ty) - stories * STORY_H * z;
         if (sx > vx + vw || sx + tw < vx || syTop > vy + vh || syTop + th + stories * STORY_H * z < vy) continue;
         g.drawImage(block, sx, syTop, tw, th + stories * STORY_H * z);
-        // decorations on this wall
+        // sparse roof furniture (interior roof tiles only, so it never tiles)
+        if (t === T_BUILDING) {
+          const h = (((tx * 73856093) ^ (ty * 19349663)) >>> 0) % 89;
+          const rcx = sx + tw / 2, rcy = syTop + th / 2;
+          if (h < 3) { // antenna mast + aircraft light
+            g.fillStyle = art.night ? "#6a6a76" : "#9a9aa2";
+            g.fillRect(rcx, rcy - 11 * z, z, 11 * z);
+            g.fillStyle = `rgba(255,48,72,${0.5 + 0.5 * Math.sin(time * 4 + tx)})`;
+            g.fillRect(rcx - z, rcy - 13 * z, 2.5 * z, 2.5 * z);
+          } else if (h < 7) { // water tank
+            g.fillStyle = art.night ? "#4a4a54" : "#707078";
+            g.fillRect(rcx - 4 * z, rcy - 8 * z, 8 * z, 7 * z);
+            g.fillStyle = art.night ? "#5e5e6a" : "#8a8a92";
+            g.fillRect(rcx - 4 * z, rcy - 8 * z, 8 * z, 2 * z);
+          } else if (h < 11) { // vent boxes
+            g.fillStyle = art.night ? "#3c3c46" : "#5c5c66";
+            g.fillRect(rcx - 5 * z, rcy - 3 * z, 6 * z, 4 * z);
+            g.fillRect(rcx + 2 * z, rcy - 1 * z, 4 * z, 3 * z);
+          } else if (h === 20 && stories >= 5) { // helipad
+            const hc = art.night ? "#8a8a30" : "#c8c840";
+            g.strokeStyle = hc;
+            g.lineWidth = Math.max(1, z * 0.8);
+            g.beginPath(); g.ellipse(rcx, rcy, 10 * z, 5 * z, 0, 0, Math.PI * 2); g.stroke();
+            g.fillStyle = hc;
+            g.fillRect(rcx - z, rcy - 2.5 * z, 2 * z, 5 * z);
+          }
+        }
         const decs = this.decoIndex.get(i);
         if (decs) {
           const groundY = SY(tx, ty);
           for (const d of decs) {
+            if (d.kind === "door") {
+              this.drawDoor(g, d, sx, groundY, tw, z, art);
+              continue;
+            }
             const level = Math.min(d.level, stories - 1);
-            // top of story `level` band on each face (see block sprite geometry)
             const img = d.kind === "videowall"
               ? art.ads[d.variant % art.ads.length][(adFrame + d.variant) % 4]
               : art.neons[d.variant % art.neons.length];
-            const inset = (TILE_W - 4 - img.width) / 2 + 2; // sprite px from face edge
+            const sxAd = d.kind === "videowall" ? 1.2 : 1.1;
+            const syAd = d.kind === "videowall" ? 1.7 : 1.5;
+            const inset = 2;
             g.save();
             if (d.face === 0) {
-              // SW face: top edge slopes +0.5 starting at the left vertex
               const ax = sx + inset * z;
-              const ay = groundY + (TILE_H / 2) * z - (level + 1) * STORY_H * z + (inset * 0.5 + 1) * z;
-              g.transform(z, 0.5 * z, 0, z, ax, ay);
+              const ay = groundY + (TILE_H / 2) * z - (level + 1) * STORY_H * z + (inset * 0.5 + 3) * z;
+              g.transform(z * sxAd, 0.5 * z * sxAd, 0, z * syAd, ax, ay);
             } else {
-              // SE face: top edge slopes -0.5 starting at the bottom vertex
               const ax = sx + tw / 2 + inset * z;
-              const ay = groundY + TILE_H * z - (level + 1) * STORY_H * z + (1 - inset * 0.5) * z;
-              g.transform(z, -0.5 * z, 0, z, ax, ay);
+              const ay = groundY + TILE_H * z - (level + 1) * STORY_H * z + (3 - inset * 0.5) * z;
+              g.transform(z * sxAd, -0.5 * z * sxAd, 0, z * syAd, ax, ay);
             }
             g.drawImage(img, 0, 0);
             if (d.kind === "videowall" && isNight(art.weather)) {
@@ -192,13 +317,11 @@ export class Renderer {
     g.globalAlpha = 1;
 
     // ---- effects ----
-    // projectiles
     for (const pr of world.projectiles) {
       const sx = SX(pr.x, pr.y), sy = SY(pr.x, pr.y) - 6 * z;
       g.fillStyle = ITEMS[pr.type]?.color ?? "#ffe";
       g.fillRect(sx - z, sy - z, 2 * z, 2 * z);
     }
-    // beams
     for (const b of world.beams) {
       g.strokeStyle = b.color;
       g.globalAlpha = Math.min(1, b.life / 0.12);
@@ -209,7 +332,6 @@ export class Renderer {
       g.stroke();
       g.globalAlpha = 1;
     }
-    // muzzle flashes / explosions glow
     g.globalCompositeOperation = "lighter";
     for (const f of world.flashes) {
       const sx = SX(f.x, f.y), sy = SY(f.x, f.y) - 6 * z;
@@ -221,7 +343,6 @@ export class Renderer {
       g.fillRect(sx - r, sy - r, r * 2, r * 2);
     }
     g.globalCompositeOperation = "source-over";
-    // particles
     for (const pt of world.particles) {
       g.globalAlpha = Math.max(0, pt.life / pt.maxLife);
       g.fillStyle = pt.color;
@@ -295,6 +416,59 @@ export class Renderer {
     g.restore();
   }
 
+  // door + stoop steps on a wall face at street level
+  private drawDoor(
+    g: CanvasRenderingContext2D, d: Deco, sx: number, groundY: number, tw: number, z: number, art: TileArt
+  ): void {
+    const doorW = 9, doorH = 20;
+    const doorCols = ["#2a2e38", "#3a2c28", "#26323a", "#32283a"];
+    const col = doorCols[d.variant % doorCols.length];
+    g.save();
+    if (d.face === 0) {
+      const ax = sx + 3.5 * z;
+      const ay = groundY + (TILE_H / 2) * z + 3.5 * 0.5 * z - doorH * z + (STORY_H - 30) * z;
+      g.transform(z, 0.5 * z, 0, z, ax, ay);
+    } else {
+      const ax = sx + tw / 2 + 3.5 * z;
+      const ay = groundY + TILE_H * z - 3.5 * 0.5 * z - doorH * z;
+      g.transform(z, -0.5 * z, 0, z, ax, ay);
+    }
+    // frame, door, lit lintel sign
+    g.fillStyle = "rgba(0,0,0,0.45)";
+    g.fillRect(-1, -1, doorW + 2, doorH + 1);
+    g.fillStyle = col;
+    g.fillRect(0, 0, doorW, doorH);
+    g.fillStyle = "rgba(255,255,255,0.12)";
+    g.fillRect(0, 0, doorW, 1.5);
+    g.fillStyle = art.night ? "#7dff9f" : "#3a5a44";
+    g.fillRect(doorW - 2.5, 8, 1.5, 3); // keypad glow
+    if (d.variant % 2 === 0) { // split doors
+      g.fillStyle = "rgba(0,0,0,0.5)";
+      g.fillRect(doorW / 2 - 0.5, 0, 1, doorH);
+    }
+    g.restore();
+    // stoop steps out onto the pavement
+    const stepCol = "rgba(255,255,255,0.14)";
+    const stepDark = "rgba(0,0,0,0.3)";
+    if (d.face === 0) {
+      const bx = sx + 3.5 * z, by = groundY + (TILE_H / 2) * z + 2 * z;
+      g.fillStyle = stepDark;
+      g.fillRect(bx, by + 2.5 * z, 10 * z, 3 * z);
+      g.fillStyle = stepCol;
+      g.fillRect(bx, by + 2 * z, 10 * z, 1.2 * z);
+      g.fillStyle = stepDark;
+      g.fillRect(bx + z, by + 5.5 * z, 8 * z, 2.4 * z);
+      g.fillStyle = stepCol;
+      g.fillRect(bx + z, by + 5 * z, 8 * z, z);
+    } else {
+      const bx = sx + tw / 2 + 4 * z, by = groundY + (TILE_H / 2) * z + 2 * z;
+      g.fillStyle = stepDark;
+      g.fillRect(bx, by + 2.5 * z, 10 * z, 3 * z);
+      g.fillStyle = stepCol;
+      g.fillRect(bx, by + 2 * z, 10 * z, 1.2 * z);
+    }
+  }
+
   private drawEntity(
     g: CanvasRenderingContext2D, e: Entity, world: World, art: TileArt, people: PeopleAtlas,
     SX: (x: number, y: number) => number, SY: (x: number, y: number) => number, z: number, time: number
@@ -302,6 +476,22 @@ export class Renderer {
     if (e.kind === "lamp") {
       const sx = SX(e.x, e.y), sy = SY(e.x, e.y);
       g.drawImage(art.lamp, sx - 4 * z, sy - 38 * z, 16 * z, 40 * z);
+      return;
+    }
+    if (e.kind === "fence" && e.fence) {
+      this.drawFence(g, e.fence, art, SX, SY, z);
+      return;
+    }
+    if (e.kind === "pylon") {
+      this.drawPylon(g, e, art, SX, SY, z);
+      return;
+    }
+    if (e.kind === "deck") {
+      this.drawDeck(g, e, art, SX, SY, z, time);
+      return;
+    }
+    if (e.kind === "train" && e.train) {
+      this.drawTrain(g, e.train, art, SX, SY, z);
       return;
     }
     if (e.kind === "drop" && e.drop) {
@@ -326,12 +516,149 @@ export class Renderer {
     }
   }
 
+  // tile-edge fence: posts + rails (park) or hazard railing (pit rim)
+  private drawFence(
+    g: CanvasRenderingContext2D, f: FenceEdge, art: TileArt,
+    SX: (x: number, y: number) => number, SY: (x: number, y: number) => number, z: number
+  ): void {
+    // edge endpoints (tile corner coordinates)
+    let ax: number, ay: number, bx: number, by: number;
+    switch (f.edge) {
+      case 0: ax = f.x; ay = f.y; bx = f.x; by = f.y + 1; break;       // NW
+      case 1: ax = f.x; ay = f.y; bx = f.x + 1; by = f.y; break;       // NE
+      case 2: ax = f.x + 1; ay = f.y; bx = f.x + 1; by = f.y + 1; break; // SE
+      default: ax = f.x; ay = f.y + 1; bx = f.x + 1; by = f.y + 1;     // SW
+    }
+    const x0 = SX(ax, ay), yy0 = SY(ax, ay), x1 = SX(bx, by), yy1 = SY(bx, by);
+    const hgt = (f.hazard ? 6 : 8) * z;
+    const postCol = f.hazard ? "#26262c" : (art.night ? "#3c444c" : "#4a545c");
+    const railCol = f.hazard ? "#e0c020" : (art.night ? "#5a666e" : "#6e7a82");
+    g.lineWidth = Math.max(1, z * 0.8);
+    // posts
+    g.strokeStyle = postCol;
+    g.beginPath();
+    for (const t of [0.12, 0.5, 0.88]) {
+      const px = x0 + (x1 - x0) * t, py = yy0 + (yy1 - yy0) * t;
+      g.moveTo(px, py);
+      g.lineTo(px, py - hgt);
+    }
+    g.stroke();
+    // top rail
+    g.strokeStyle = railCol;
+    g.beginPath();
+    g.moveTo(x0, yy0 - hgt); g.lineTo(x1, yy1 - hgt);
+    g.stroke();
+    // second rail
+    g.strokeStyle = f.hazard ? "#8a7a18" : postCol;
+    g.beginPath();
+    g.moveTo(x0, yy0 - hgt * 0.5); g.lineTo(x1, yy1 - hgt * 0.5);
+    g.stroke();
+  }
+
+  private drawPylon(
+    g: CanvasRenderingContext2D, e: Entity, art: TileArt,
+    SX: (x: number, y: number) => number, SY: (x: number, y: number) => number, z: number
+  ): void {
+    const sx = SX(e.x, e.y), sy = SY(e.x, e.y);
+    const top = sy - TRAIN_ELEV * z;
+    g.fillStyle = "rgba(0,0,0,0.35)";
+    g.beginPath(); g.ellipse(sx, sy, 5 * z, 2.2 * z, 0, 0, Math.PI * 2); g.fill();
+    g.fillStyle = art.night ? "#2e323c" : "#4c525c";
+    g.fillRect(sx - 1.8 * z, top + 4 * z, 3.6 * z, TRAIN_ELEV * z - 4 * z);
+    g.fillStyle = art.night ? "#3c424e" : "#5c646e";
+    g.fillRect(sx - 1.8 * z, top + 4 * z, 1.2 * z, TRAIN_ELEV * z - 4 * z);
+    // cross arm under the deck
+    g.fillStyle = art.night ? "#343a46" : "#545c66";
+    g.fillRect(sx - 9 * z, top + 3 * z, 18 * z, 2.5 * z);
+  }
+
+  private drawDeck(
+    g: CanvasRenderingContext2D, e: Entity, art: TileArt,
+    SX: (x: number, y: number) => number, SY: (x: number, y: number) => number, z: number, time: number
+  ): void {
+    const cxp = SX(e.x, e.y), cyp = SY(e.x, e.y) - TRAIN_ELEV * z;
+    // direction of one tile step along the line, in screen px
+    const dxs = e.deckAxis === "v" ? isoX(0, 1) * z : isoX(1, 0) * z;
+    const dys = e.deckAxis === "v" ? isoY(0, 1) * z : isoY(1, 0) * z;
+    // width basis = the other iso axis, scaled to deck width
+    const wxs = (e.deckAxis === "v" ? isoX(1, 0) : isoX(0, 1)) * z * 0.34;
+    const wys = (e.deckAxis === "v" ? isoY(1, 0) : isoY(0, 1)) * z * 0.34;
+    const hx = dxs / 2, hy = dys / 2;
+    // top slab
+    g.fillStyle = art.night ? "#39404c" : "#5a626e";
+    g.beginPath();
+    g.moveTo(cxp - hx - wxs, cyp - hy - wys);
+    g.lineTo(cxp + hx - wxs, cyp + hy - wys);
+    g.lineTo(cxp + hx + wxs, cyp + hy + wys);
+    g.lineTo(cxp - hx + wxs, cyp - hy + wys);
+    g.closePath(); g.fill();
+    // front skirt (thickness)
+    const skirt = 5 * z;
+    g.fillStyle = art.night ? "#262b34" : "#454c56";
+    g.beginPath();
+    g.moveTo(cxp - hx + wxs, cyp - hy + wys);
+    g.lineTo(cxp + hx + wxs, cyp + hy + wys);
+    g.lineTo(cxp + hx + wxs, cyp + hy + wys + skirt);
+    g.lineTo(cxp - hx + wxs, cyp - hy + wys + skirt);
+    g.closePath(); g.fill();
+    // rails
+    g.strokeStyle = art.night ? "#141821" : "#31363e";
+    g.lineWidth = Math.max(1, z * 0.7);
+    g.beginPath();
+    g.moveTo(cxp - hx - wxs * 0.45, cyp - hy - wys * 0.45);
+    g.lineTo(cxp + hx - wxs * 0.45, cyp + hy - wys * 0.45);
+    g.moveTo(cxp - hx + wxs * 0.45, cyp - hy + wys * 0.45);
+    g.lineTo(cxp + hx + wxs * 0.45, cyp + hy + wys * 0.45);
+    g.stroke();
+    // guide light
+    if (art.night && ((e.x + e.y) & 3) === 0) {
+      const blink = 0.55 + 0.45 * Math.sin(time * 3 + e.x + e.y);
+      g.fillStyle = `rgba(60,220,255,${blink})`;
+      g.fillRect(cxp + wxs - z, cyp + wys - z, 2 * z, 2 * z);
+    }
+  }
+
+  private drawTrain(
+    g: CanvasRenderingContext2D, t: TrainSeg, art: TileArt,
+    SX: (x: number, y: number) => number, SY: (x: number, y: number) => number, z: number
+  ): void {
+    const sx = SX(t.wx, t.wy), sy = SY(t.wx, t.wy) - TRAIN_ELEV * z;
+    g.save();
+    g.transform(
+      (TILE_W / 2) * z, (TILE_H / 2) * z,
+      -(TILE_W / 2) * z, (TILE_H / 2) * z,
+      sx, sy - 4 * z
+    );
+    g.rotate(t.angle);
+    const L = 0.9, W = 0.3;
+    g.fillStyle = art.night ? "#3a4552" : "#6a7480";
+    g.fillRect(-L, -W, L * 2, W * 2);
+    // lit window band
+    g.fillStyle = art.night ? "#9fe8ff" : "#c8dae2";
+    g.fillRect(-L * 0.85, -W * 0.55, L * 1.7, W * 1.1);
+    g.fillStyle = art.night ? "#3a4552" : "#6a7480";
+    for (let wx = -L * 0.8; wx < L * 0.8; wx += 0.24) g.fillRect(wx, -W * 0.55, 0.06, W * 1.1);
+    if (t.head) {
+      g.fillStyle = "#fff8c8";
+      g.fillRect(L * 0.9, -W * 0.5, 0.1, W);
+    }
+    g.restore();
+    if (art.night) {
+      g.globalCompositeOperation = "lighter";
+      const gr = g.createRadialGradient(sx, sy, 0, sx, sy, 20 * z);
+      gr.addColorStop(0, "rgba(120,200,255,0.12)");
+      gr.addColorStop(1, "rgba(120,200,255,0)");
+      g.fillStyle = gr;
+      g.fillRect(sx - 20 * z, sy - 20 * z, 40 * z, 40 * z);
+      g.globalCompositeOperation = "source-over";
+    }
+  }
+
   private drawCar(
     g: CanvasRenderingContext2D, c: Car, art: TileArt,
     SX: (x: number, y: number) => number, SY: (x: number, y: number) => number, z: number
   ): void {
     const sx = SX(c.x, c.y), sy = SY(c.x, c.y);
-    // shadow
     g.fillStyle = "rgba(0,0,0,0.45)";
     g.beginPath(); g.ellipse(sx, sy, 16 * z, 7 * z, 0, 0, Math.PI * 2); g.fill();
     g.save();
@@ -350,7 +677,6 @@ export class Renderer {
       g.fillStyle = "#333";
       g.fillRect(-L * 0.5, -W * 0.7, L, W * 1.4);
     } else {
-      // hover glow
       const night = isNight(art.weather);
       if (night && c.speed > 0.5) {
         g.fillStyle = "rgba(255,245,200,0.10)";
@@ -364,17 +690,13 @@ export class Renderer {
       }
       g.fillStyle = c.color;
       g.fillRect(-L, -W, L * 2, W * 2);
-      // cabin
       g.fillStyle = "rgba(140,220,255,0.85)";
       g.fillRect(-L * 0.35, -W * 0.72, L * 0.75, W * 1.44);
-      // nose stripe
       g.fillStyle = "rgba(255,255,255,0.25)";
       g.fillRect(L * 0.55, -W, L * 0.2, W * 2);
-      // headlights
       g.fillStyle = night ? "#fff8c8" : "#d8d8c0";
       g.fillRect(L * 0.92, -W * 0.8, 0.08, W * 0.35);
       g.fillRect(L * 0.92, W * 0.45, 0.08, W * 0.35);
-      // tail
       g.fillStyle = "#ff3048";
       g.fillRect(-L, -W * 0.8, 0.06, W * 0.3);
       g.fillRect(-L, W * 0.5, 0.06, W * 0.3);
@@ -406,18 +728,16 @@ export class Renderer {
       col = 1 + (Math.floor(p.animT * (2.4 * p.speed)) % 4);
     }
     const sx = SX(p.x, p.y), sy = SY(p.x, p.y);
-    const s = 1.35 * z;
+    const s = PED_SCALE * z;
     if (p.state !== "dead") {
       g.fillStyle = "rgba(0,0,0,0.4)";
       g.beginPath(); g.ellipse(sx, sy, 5 * z, 2.2 * z, 0, 0, Math.PI * 2); g.fill();
     }
-    // selection ring for player agents
     if (p.team === "player" && p.agentIdx >= 0 && world.uiSelected[p.agentIdx] && p.state !== "dead") {
       g.strokeStyle = "rgba(255,155,47,0.9)";
       g.lineWidth = 1.5;
       g.beginPath(); g.ellipse(sx, sy, 6.5 * z, 3 * z, 0, 0, Math.PI * 2); g.stroke();
     }
-    // vip marker
     if (p.vip && p.state !== "dead") {
       g.fillStyle = `rgba(255,255,255,${0.5 + 0.5 * Math.sin(time * 5)})`;
       g.beginPath();
@@ -434,7 +754,6 @@ export class Renderer {
       sheet, col * FW, p.dir * FH, FW, FH,
       sx - (FW / 2) * s, sy - (FH - 2) * s, FW * s, FH * s
     );
-    // shield shimmer
     if (p.team === "player" && p.shieldOn && p.state !== "dead") {
       g.strokeStyle = `rgba(122,255,200,${0.4 + 0.3 * Math.sin(time * 8)})`;
       g.lineWidth = 1.5;
@@ -442,7 +761,6 @@ export class Renderer {
       g.ellipse(sx, sy - 10 * z, 8 * z, 14 * z, 0, 0, Math.PI * 2);
       g.stroke();
     }
-    // health bar for hurt actors
     if (p.state !== "dead" && p.hp < p.maxHp && (p.team === "player" || p.vip)) {
       const w = 14 * z;
       g.fillStyle = "#300";

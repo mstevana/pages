@@ -1,6 +1,6 @@
 // SYND: bootstrap, game state machine, input, camera, and the main loop.
 
-import { City, T_BUILDING, T_ISLAND, T_PARK, T_ROAD, T_SIDEWALK, T_WALL, generateCity, idx } from "./city/citygen";
+import { City, T_BUILDING, T_ISLAND, T_PARK, T_PIT, T_ROAD, T_SIDEWALK, T_WALL, generateCity, idx } from "./city/citygen";
 import { AudioEngine } from "./engine/audio";
 import { GRID, PANEL_FRAC, TILE_H, TILE_W, WEATHERS, Weather, clamp, ctx2d, isRain, isoX, isoY, lerp, makeCanvas } from "./engine/util";
 import { ITEMS } from "./game/items";
@@ -137,7 +137,18 @@ function buildMapBase(c: City): HTMLCanvasElement {
       case T_BUILDING: put(i, 38, 40, 52); break;
       case T_PARK: put(i, 26, 48, 36); break;
       case T_ISLAND: put(i, 46, 48, 58); break;
+      case T_PIT: put(i, 8, 8, 12); break;
       default: put(i, 20, 21, 27);
+    }
+  }
+  mg.putImageData(img, 0, 0);
+  // skytrain lines as thin cyan traces
+  for (const line of c.skytrains) {
+    for (let u = 0; u < GRID; u++) {
+      const x = line.axis === "v" ? line.pos + 1 : u;
+      const y = line.axis === "v" ? u : line.pos + 1;
+      const i = idx(x, y);
+      img.data[i * 4] = 40; img.data[i * 4 + 1] = 140; img.data[i * 4 + 2] = 160; img.data[i * 4 + 3] = 255;
     }
   }
   mg.putImageData(img, 0, 0);

@@ -3,7 +3,7 @@
 export const GRID = 512;          // city is GRID x GRID tiles
 export const TILE_W = 32;         // on-screen tile width at zoom 1
 export const TILE_H = 16;         // on-screen tile height at zoom 1
-export const STORY_H = 14;        // pixel height of one building story at zoom 1
+export const STORY_H = 30;        // pixel height of one building story at zoom 1 (~an agent's height)
 export const PANEL_FRAC = 0.2;    // control panel takes the left 1/5 of the screen
 
 export type Weather = "day" | "night" | "rainday" | "rainnight";

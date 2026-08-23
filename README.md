@@ -9,6 +9,14 @@ sprite sheets (30 civilian designs + police + rival agents, each with 8-directio
 walk / flee / die animations), the animated ad videowalls, the neon signs, and
 all audio (Web Audio synthesis — no asset files at all).
 
+Buildings are architecture-styled, at human scale (stories and windows sized
+against the agents): concrete slabs, glass curtain-wall towers, industrial
+sheds with roller shutters and fire escapes, neon-banded commercial fronts,
+balconied residential blocks, and columned facades — in varied heights and
+palettes, with entrance doors and stoop steps, fenced parks, hazard-railed
+sunken pits, roof furniture (antennas, water tanks, vents, helipads), and
+elevated skytrain lines running above the avenues with moving trains.
+
 ## Play
 
 Serve the repo root over HTTP (or open the GitHub Pages deployment) on a phone

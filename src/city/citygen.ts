@@ -12,6 +12,11 @@ export const T_WALL = 3;     // building perimeter (blocks movement, has height)
 export const T_BUILDING = 4; // building interior (roof visible, blocks movement)
 export const T_ISLAND = 5;   // roundabout center island (blocks cars, not peds)
 export const T_PARK = 6;     // small plaza/park (walkable)
+export const T_PIT = 7;      // sunken excavation/vent shaft (blocks movement, not bullets)
+
+// building facade styles
+export const NSTYLES = 6;
+export const S_CONCRETE = 0, S_GLASS = 1, S_INDUSTRIAL = 2, S_COMMERCIAL = 3, S_BALCONY = 4, S_COLUMNS = 5;
 
 // Lane direction bits (grid space): N = -y, E = +x, S = +y, W = -x
 export const D_N = 1, D_E = 2, D_S = 4, D_W = 8;
@@ -22,21 +27,28 @@ export const DBIT = [D_N, D_E, D_S, D_W];
 export interface Deco {
   x: number; y: number;      // wall tile carrying the deco
   face: 0 | 1;               // 0 = SW face (south neighbor open), 1 = SE face (east neighbor open)
-  kind: "videowall" | "neon";
-  variant: number;           // which ad / sign design
+  kind: "videowall" | "neon" | "door";
+  variant: number;           // which ad / sign / door design
   level: number;             // story on the wall (0-based)
+}
+
+export interface Skytrain {
+  axis: "v" | "h";
+  pos: number;               // x (axis v) or y (axis h) of the left/top lane tile
 }
 
 export interface City {
   seed: number;
   tiles: Uint8Array;
   height: Uint8Array;        // stories, for WALL/BUILDING tiles
+  bstyle: Uint8Array;        // low nibble: facade style, high nibble: hue variant
   laneDir: Uint8Array;       // bitmask of allowed exits for cars
   decos: Deco[];
   lamps: { x: number; y: number }[];
   roundabouts: { x: number; y: number }[]; // centers
   vRoads: number[];          // x of left lane of each vertical avenue
   hRoads: number[];          // y of top lane of each horizontal avenue
+  skytrains: Skytrain[];     // elevated rail lines running above avenues
 }
 
 export function idx(x: number, y: number): number { return y * GRID + x; }
@@ -55,6 +67,7 @@ export function generateCity(seed: number): City {
   const rng = new Rng(seed);
   const tiles = new Uint8Array(GRID * GRID); // all T_GROUND
   const height = new Uint8Array(GRID * GRID);
+  const bstyle = new Uint8Array(GRID * GRID);
   const laneDir = new Uint8Array(GRID * GRID);
 
   // ---- 1. Avenue grid (full-length roads guarantee connectivity) ----
@@ -185,7 +198,7 @@ export function generateCity(seed: number): City {
       const x0 = vEdges[bi] + 3, x1 = vEdges[bi + 1] - 2;      // inside the sidewalks
       const y0 = hEdges[bj] + 3, y1 = hEdges[bj + 1] - 2;
       if (x1 - x0 < 5 || y1 - y0 < 5) continue;
-      fillBlock(tiles, height, rng, Math.max(1, x0), Math.max(1, y0), Math.min(GRID - 2, x1), Math.min(GRID - 2, y1));
+      fillBlock(tiles, height, bstyle, rng, Math.max(1, x0), Math.max(1, y0), Math.min(GRID - 2, x1), Math.min(GRID - 2, y1));
     }
   }
 
@@ -207,6 +220,22 @@ export function generateCity(seed: number): City {
       }
     }
   }
+  // entrance doors with stoop steps on ground-level street-facing walls
+  for (let y = 2; y < GRID - 2; y++) {
+    for (let x = 2; x < GRID - 2; x++) {
+      const i = idx(x, y);
+      if (tiles[i] !== T_WALL) continue;
+      const ts = tiles[idx(x, y + 1)], te = tiles[idx(x + 1, y)];
+      const openS = ts === T_SIDEWALK || ts === T_GROUND || ts === T_PARK;
+      const openE = te === T_SIDEWALK || te === T_GROUND || te === T_PARK;
+      // spaced out so doors don't stack on adjacent tiles
+      if (openS && (x * 3 + y * 5) % 4 === 0 && rng.chance(0.35)) {
+        decos.push({ x, y, face: 0, kind: "door", variant: rng.int(0, 3), level: 0 });
+      } else if (openE && (x * 5 + y * 3) % 4 === 0 && rng.chance(0.35)) {
+        decos.push({ x, y, face: 1, kind: "door", variant: rng.int(0, 3), level: 0 });
+      }
+    }
+  }
 
   // ---- 5. Street lamps at intersection corners ----
   const lamps: { x: number; y: number }[] = [];
@@ -216,36 +245,54 @@ export function generateCity(seed: number): City {
     }
   }
 
-  return { seed, tiles, height, laneDir, decos, lamps, roundabouts, vRoads, hRoads };
+  // ---- 6. Elevated skytrain lines above a couple of avenues ----
+  const skytrains: Skytrain[] = [];
+  if (vRoads.length > 2) skytrains.push({ axis: "v", pos: vRoads[rng.int(1, vRoads.length - 2)] });
+  if (hRoads.length > 2 && rng.chance(0.75)) skytrains.push({ axis: "h", pos: hRoads[rng.int(1, hRoads.length - 2)] });
+
+  return { seed, tiles, height, bstyle, laneDir, decos, lamps, roundabouts, vRoads, hRoads, skytrains };
 }
 
-// Recursively split a block into lots separated by 2-tile alleys, then raise buildings.
-function fillBlock(tiles: Uint8Array, height: Uint8Array, rng: Rng, x0: number, y0: number, x1: number, y1: number): void {
+// Recursively split a block into lots separated by 2-tile alleys, then raise
+// buildings with a facade style, or lay out parks and sunken pits.
+function fillBlock(tiles: Uint8Array, height: Uint8Array, bstyle: Uint8Array, rng: Rng, x0: number, y0: number, x1: number, y1: number): void {
   const w = x1 - x0 + 1, h = y1 - y0 + 1;
   if (w < 4 || h < 4) return;
   if (w > 11 && (w >= h || h <= 11)) {
     const cut = x0 + rng.int(5, w - 7);
-    fillBlock(tiles, height, rng, x0, y0, cut - 1, y1);
-    fillBlock(tiles, height, rng, cut + 2, y0, x1, y1);
+    fillBlock(tiles, height, bstyle, rng, x0, y0, cut - 1, y1);
+    fillBlock(tiles, height, bstyle, rng, cut + 2, y0, x1, y1);
     return;
   }
   if (h > 11) {
     const cut = y0 + rng.int(5, h - 7);
-    fillBlock(tiles, height, rng, x0, y0, x1, cut - 1);
-    fillBlock(tiles, height, rng, x0, cut + 2, x1, y1);
+    fillBlock(tiles, height, bstyle, rng, x0, y0, x1, cut - 1);
+    fillBlock(tiles, height, bstyle, rng, x0, cut + 2, x1, y1);
     return;
   }
-  // lot: park/plaza or a building
+  // lot: park / sunken pit / building
   if (rng.chance(0.22)) {
     for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) tiles[idx(x, y)] = T_PARK;
+    // some plazas hold a sunken pit (vent shaft / excavation) with a walkable rim
+    if (rng.chance(0.35) && w >= 6 && h >= 6) {
+      for (let y = y0 + 2; y <= y1 - 2; y++) for (let x = x0 + 2; x <= x1 - 2; x++) tiles[idx(x, y)] = T_PIT;
+    }
     return;
   }
-  const stories = rng.chance(0.1) ? rng.int(6, 9) : rng.int(2, 5);
+  // facade style: pick by lot, tall lots lean toward glass towers
+  const stories = rng.chance(0.08) ? rng.int(5, 7) : rng.int(1, 4);
+  let style: number;
+  if (stories >= 5) style = rng.chance(0.6) ? S_GLASS : rng.pick([S_CONCRETE, S_COLUMNS, S_COMMERCIAL]);
+  else if (stories === 1) style = rng.pick([S_INDUSTRIAL, S_COMMERCIAL, S_CONCRETE]);
+  else style = rng.pick([S_CONCRETE, S_INDUSTRIAL, S_COMMERCIAL, S_BALCONY, S_BALCONY, S_COLUMNS]);
+  const hue = rng.int(0, 2);
+  const packed = (hue << 4) | style;
   for (let y = y0; y <= y1; y++) {
     for (let x = x0; x <= x1; x++) {
       const edge = x === x0 || x === x1 || y === y0 || y === y1;
       tiles[idx(x, y)] = edge ? T_WALL : T_BUILDING;
       height[idx(x, y)] = stories;
+      bstyle[idx(x, y)] = packed;
     }
   }
 }
