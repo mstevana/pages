@@ -1044,8 +1044,9 @@ export class World {
       }
     }
     c.x = nx; c.y = ny;
-    const sdx = DX[c.dir] - DY[c.dir], sdy = (DX[c.dir] + DY[c.dir]) * 0.5;
-    const target = Math.atan2(sdy, sdx);
+    // world-space heading (the renderer projects it; screen-space here made
+    // traffic render rotated off its lane)
+    const target = Math.atan2(DY[c.dir], DX[c.dir]);
     let da = target - c.angle;
     while (da > Math.PI) da -= Math.PI * 2;
     while (da < -Math.PI) da += Math.PI * 2;

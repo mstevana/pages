@@ -186,10 +186,6 @@ export class Renderer {
       if (c.x < x0 || c.x > x1 || c.y < y0 || c.y > y1) continue;
       push({ s: Math.floor(c.x) + Math.floor(c.y), kind: "car", car: c, x: c.x, y: c.y });
     }
-    for (const d of world.drops) {
-      if (d.x < x0 || d.x > x1 || d.y < y0 || d.y > y1) continue;
-      push({ s: Math.floor(d.x) + Math.floor(d.y), kind: "drop", drop: d, x: d.x, y: d.y });
-    }
     for (const l of this.city.lamps) {
       if (l.x < x0 || l.x > x1 || l.y < y0 || l.y > y1) continue;
       push({ s: l.x + l.y, kind: "lamp", x: l.x + 0.5, y: l.y + 0.5 });
@@ -315,6 +311,50 @@ export class Renderer {
       if (p.team === "player" || p.vip) this.drawPed(g, p, world, people, SX, SY, z, time);
     }
     g.globalAlpha = 1;
+
+    // ---- loot beacons: drawn over everything so drops behind buildings
+    // stay visible (and taps hit-test by world distance, so they stay usable)
+    for (const d of world.drops) {
+      if (d.x < x0 || d.x > x1 || d.y < y0 || d.y > y1) continue;
+      const sx = SX(d.x, d.y), sy = SY(d.x, d.y);
+      const def = ITEMS[d.item.type];
+      const bob = Math.sin(time * 3 + d.x) * 1.5 * z;
+      const pulse = 0.55 + 0.45 * Math.sin(time * 4 + d.y);
+      // light pillar
+      g.globalCompositeOperation = "lighter";
+      const beamH = 34 * z;
+      const grad = g.createLinearGradient(sx, sy, sx, sy - beamH);
+      grad.addColorStop(0, def.color);
+      grad.addColorStop(1, "rgba(0,0,0,0)");
+      g.globalAlpha = 0.6 * pulse;
+      g.fillStyle = grad;
+      g.fillRect(sx - 2 * z, sy - beamH, 4 * z, beamH);
+      g.globalAlpha = 1;
+      g.globalCompositeOperation = "source-over";
+      // ground shadow + item box (dark outer + light inner outline for contrast)
+      g.fillStyle = "rgba(0,0,0,0.4)";
+      g.beginPath(); g.ellipse(sx, sy, 5 * z, 2 * z, 0, 0, Math.PI * 2); g.fill();
+      g.strokeStyle = "rgba(0,0,0,0.8)";
+      g.lineWidth = 3;
+      g.strokeRect(sx - 3 * z, sy - 6 * z + bob, 6 * z, 4 * z);
+      g.fillStyle = def.color;
+      g.fillRect(sx - 3 * z, sy - 6 * z + bob, 6 * z, 4 * z);
+      g.strokeStyle = "rgba(255,255,255,0.9)";
+      g.lineWidth = 1;
+      g.strokeRect(sx - 3 * z, sy - 6 * z + bob, 6 * z, 4 * z);
+      // bouncing chevron above the beam
+      const chy = sy - beamH - 2 * z + bob;
+      g.fillStyle = "#fff";
+      g.beginPath();
+      g.moveTo(sx, chy + 4 * z);
+      g.lineTo(sx - 3.2 * z, chy);
+      g.lineTo(sx - 1.4 * z, chy);
+      g.lineTo(sx, chy + 1.8 * z);
+      g.lineTo(sx + 1.4 * z, chy);
+      g.lineTo(sx + 3.2 * z, chy);
+      g.closePath();
+      g.fill();
+    }
 
     // ---- effects ----
     for (const pr of world.projectiles) {
@@ -494,19 +534,6 @@ export class Renderer {
       this.drawTrain(g, e.train, art, SX, SY, z);
       return;
     }
-    if (e.kind === "drop" && e.drop) {
-      const sx = SX(e.x, e.y), sy = SY(e.x, e.y);
-      const bob = Math.sin(time * 3 + e.x) * 1.5 * z;
-      const def = ITEMS[e.drop.item.type as keyof typeof ITEMS];
-      g.fillStyle = "rgba(0,0,0,0.4)";
-      g.beginPath(); g.ellipse(sx, sy, 5 * z, 2 * z, 0, 0, Math.PI * 2); g.fill();
-      g.fillStyle = def.color;
-      g.fillRect(sx - 3 * z, sy - 6 * z + bob, 6 * z, 4 * z);
-      g.strokeStyle = "rgba(255,255,255,0.7)";
-      g.lineWidth = 1;
-      g.strokeRect(sx - 3 * z, sy - 6 * z + bob, 6 * z, 4 * z);
-      return;
-    }
     if (e.kind === "car" && e.car) {
       this.drawCar(g, e.car, art, SX, SY, z);
       return;
@@ -658,54 +685,94 @@ export class Renderer {
     g: CanvasRenderingContext2D, c: Car, art: TileArt,
     SX: (x: number, y: number) => number, SY: (x: number, y: number) => number, z: number
   ): void {
+    const night = isNight(art.weather);
+    const shade = (hex: string, f: number): string => {
+      const n = parseInt(hex.slice(1), 16);
+      const r = Math.min(255, (((n >> 16) & 255) * f) | 0);
+      const gg = Math.min(255, (((n >> 8) & 255) * f) | 0);
+      const b = Math.min(255, ((n & 255) * f) | 0);
+      return `rgb(${r},${gg},${b})`;
+    };
+    const fx = Math.cos(c.angle), fy = Math.sin(c.angle);
+    const rx = -fy, ry = fx;
+    // project a world point at a given lift (px above ground) to screen
+    const px = (df: number, dr: number, lift: number): [number, number] => {
+      const wx = c.x + fx * df + rx * dr, wy = c.y + fy * df + ry * dr;
+      return [SX(wx, wy), SY(wx, wy) - lift];
+    };
+    const quad = (pts: [number, number][], col: string) => {
+      g.fillStyle = col;
+      g.beginPath();
+      g.moveTo(pts[0][0], pts[0][1]);
+      for (let i = 1; i < pts.length; i++) g.lineTo(pts[i][0], pts[i][1]);
+      g.closePath();
+      g.fill();
+    };
+    // a box footprint [f0..f1] x [-w..w], lifted from h0 to h1:
+    // draw back-to-front side faces then the top
+    const box = (f0: number, f1: number, w: number, h0: number, h1: number, col: string, topCol: string) => {
+      const base: [number, number][] = [px(f1, w, h0), px(f1, -w, h0), px(-0 + f0, -w, h0), px(f0, w, h0)];
+      const top: [number, number][] = [px(f1, w, h1), px(f1, -w, h1), px(f0, -w, h1), px(f0, w, h1)];
+      const edges = [[0, 1], [1, 2], [2, 3], [3, 0]];
+      const order = edges
+        .map((e, i) => ({ e, i, midY: (base[e[0]][1] + base[e[1]][1]) / 2 }))
+        .sort((a, b) => a.midY - b.midY);
+      for (const { e, midY } of order) {
+        const centerY = (base[0][1] + base[2][1]) / 2;
+        const bright = midY > centerY ? 0.82 : 0.55; // light from the front-facing side
+        quad([base[e[0]], base[e[1]], top[e[1]], top[e[0]]], shade(col, bright));
+      }
+      quad(top, topCol);
+    };
+
     const sx = SX(c.x, c.y), sy = SY(c.x, c.y);
+    const L = 1.15, W = 0.5;
+    // shadow
     g.fillStyle = "rgba(0,0,0,0.45)";
-    g.beginPath(); g.ellipse(sx, sy, 16 * z, 7 * z, 0, 0, Math.PI * 2); g.fill();
-    g.save();
-    // tile-space -> screen-space basis so the box is naturally isometric
-    // (transform() composes with the DPR matrix; setTransform would clobber it)
-    g.transform(
-      (TILE_W / 2) * z, (TILE_H / 2) * z,
-      -(TILE_W / 2) * z, (TILE_H / 2) * z,
-      sx, sy - 3 * z
-    );
-    g.rotate(c.angle);
-    const L = 1.25, W = 0.52;
+    g.beginPath();
+    g.ellipse(sx, sy, 17 * z, 7.5 * z, 0, 0, Math.PI * 2);
+    g.fill();
+
     if (c.state === "wreck") {
-      g.fillStyle = "#1a1a1c";
-      g.fillRect(-L, -W, L * 2, W * 2);
-      g.fillStyle = "#333";
-      g.fillRect(-L * 0.5, -W * 0.7, L, W * 1.4);
-    } else {
-      const night = isNight(art.weather);
-      if (night && c.speed > 0.5) {
-        g.fillStyle = "rgba(255,245,200,0.10)";
-        g.beginPath();
-        g.moveTo(L, -W * 0.6); g.lineTo(L + 2.6, -W * 1.8); g.lineTo(L + 2.6, W * 1.8); g.lineTo(L, W * 0.6);
-        g.closePath(); g.fill();
-      }
-      if (night) {
-        g.fillStyle = "rgba(60,180,255,0.25)";
-        g.fillRect(-L - 0.08, -W - 0.08, (L + 0.08) * 2, (W + 0.08) * 2);
-      }
-      g.fillStyle = c.color;
-      g.fillRect(-L, -W, L * 2, W * 2);
-      g.fillStyle = "rgba(140,220,255,0.85)";
-      g.fillRect(-L * 0.35, -W * 0.72, L * 0.75, W * 1.44);
-      g.fillStyle = "rgba(255,255,255,0.25)";
-      g.fillRect(L * 0.55, -W, L * 0.2, W * 2);
-      g.fillStyle = night ? "#fff8c8" : "#d8d8c0";
-      g.fillRect(L * 0.92, -W * 0.8, 0.08, W * 0.35);
-      g.fillRect(L * 0.92, W * 0.45, 0.08, W * 0.35);
-      g.fillStyle = "#ff3048";
-      g.fillRect(-L, -W * 0.8, 0.06, W * 0.3);
-      g.fillRect(-L, W * 0.5, 0.06, W * 0.3);
+      box(-L, L, W, 0, 3 * z, "#1c1c1e", "#2c2c2e");
+      g.fillStyle = "#3a3a3c";
+      g.fillRect(sx - 4 * z, sy - 6 * z, 8 * z, 3 * z);
+      return;
     }
-    g.restore();
+
+    // headlight cone on the ground at night
+    if (night && c.speed > 0.5) {
+      quad([px(L, -W * 0.7, 0), px(L, W * 0.7, 0), px(L + 2.6, W * 1.8, 0), px(L + 2.6, -W * 1.8, 0)], "rgba(255,245,200,0.09)");
+    }
+    // hover underglow
+    if (night) {
+      g.globalCompositeOperation = "lighter";
+      quad([px(L * 1.05, W * 1.15, 1 * z), px(L * 1.05, -W * 1.15, 1 * z), px(-L * 1.05, -W * 1.15, 1 * z), px(-L * 1.05, W * 1.15, 1 * z)], "rgba(50,160,255,0.16)");
+      g.globalCompositeOperation = "source-over";
+    }
+    // hull: hovers slightly off the ground
+    const lift = 2 * z, bodyH = 7 * z, cabinH = 12 * z;
+    box(-L, L, W, lift, bodyH, c.color, shade(c.color, 1.15));
+    // nose accent stripe on the roof
+    quad([px(L * 0.95, W * 0.8, bodyH + 0.1), px(L * 0.95, -W * 0.8, bodyH + 0.1), px(L * 0.62, -W * 0.8, bodyH + 0.1), px(L * 0.62, W * 0.8, bodyH + 0.1)], shade(c.color, 1.45));
+    // cabin: glass canopy set back from the nose
+    const glass = night ? "#31434f" : "#6fa8c2";
+    box(-L * 0.55, L * 0.28, W * 0.7, bodyH, cabinH, glass, night ? "#243038" : "#54889e");
+    // canopy highlight
+    quad([px(L * 0.3, W * 0.55, cabinH + 0.1), px(L * 0.3, -W * 0.55, cabinH + 0.1), px(L * 0.05, -W * 0.55, cabinH + 0.1), px(L * 0.05, W * 0.55, cabinH + 0.1)], "rgba(230,245,255,0.35)");
+    // headlights on the nose face
+    const hl = night ? "#fff8c8" : "#e8e8d0";
+    quad([px(L, W * 0.75, lift + 2 * z), px(L, W * 0.35, lift + 2 * z), px(L, W * 0.35, lift + 3.6 * z), px(L, W * 0.75, lift + 3.6 * z)], hl);
+    quad([px(L, -W * 0.35, lift + 2 * z), px(L, -W * 0.75, lift + 2 * z), px(L, -W * 0.75, lift + 3.6 * z), px(L, -W * 0.35, lift + 3.6 * z)], hl);
+    // taillight strip across the rear face
+    quad([px(-L, W * 0.8, lift + 2 * z), px(-L, -W * 0.8, lift + 2 * z), px(-L, -W * 0.8, lift + 3.4 * z), px(-L, W * 0.8, lift + 3.4 * z)], night ? "#ff3048" : "#c02838");
+
     if (c.state === "player") {
       g.strokeStyle = "rgba(120,255,190,0.8)";
       g.lineWidth = 1.5;
-      g.beginPath(); g.ellipse(sx, sy, 18 * z, 8 * z, 0, 0, Math.PI * 2); g.stroke();
+      g.beginPath();
+      g.ellipse(sx, sy, 19 * z, 8.5 * z, 0, 0, Math.PI * 2);
+      g.stroke();
     }
   }
 

@@ -288,7 +288,7 @@ function pointerEnd(ev: PointerEvent): void {
     return;
   }
   // walk mode: pickups and cars take priority
-  let bestDrop = -1, bdd = 1.4 * 1.4;
+  let bestDrop = -1, bdd = 1.9 * 1.9; // generous tap radius - loot may sit behind a building
   for (const d of w.drops) {
     const dd = (d.x - t.x) ** 2 + (d.y - t.y) ** 2;
     if (dd < bdd) { bdd = dd; bestDrop = d.id; }
