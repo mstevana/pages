@@ -39,7 +39,10 @@ offline after the first load.
     - **WALK** — tap the viewport and the selected agents path there. Tap a
       dropped item to collect it, tap a stopped, pilotless car to board it.
     - **SHOOT** — tap to fire in that direction; agents keep walking while
-      firing, and auto-engage hostiles that come into range.
+      firing, and auto-engage hostiles that come into range. Hostiles take
+      about three quarters of a second to draw a bead on a target, and shoot
+      15% shorter and 15% wider than you do — open fire first and you win
+      the exchange.
 - **Cars**: shoot a passing car to force it to stop — its pilot bails out and
   flees. Board it with your squad, then tap anywhere on the road network to
   drive there. Every lane is strictly one-way: traffic turns and U-turns only at the

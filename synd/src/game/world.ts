@@ -31,6 +31,8 @@ export interface Ped {
   thinkT: number;         // AI repath/decide timer
   fleeFrom: { x: number; y: number } | null;
   fireCd: number;
+  aimT: number;              // reaction delay remaining before the first shot
+  aimTargetId: number | null; // who this NPC is currently drawing a bead on
   weapon: ItemType | null; // for cops/enemies
   // player agents only
   agentIdx: number;        // 0..3, -1 otherwise
@@ -106,7 +108,11 @@ const AGENT_HP = 100;
 const CIV_LIMIT = 90;
 const CAR_LIMIT = 7;
 const COP_LIMIT = 4;
-const NPC_FIRE_MULT = 2.1; // NPCs shoot slower than player agents
+const NPC_FIRE_MULT = 2.1;        // NPCs shoot slower than player agents
+const NPC_RANGE_MULT = 0.85;      // hostiles engage 15% closer than the weapon's reach
+const NPC_ACCURACY = 0.85;        // ...and are 15% less accurate (wider cone)
+const NPC_SPREAD_MULT = 1 / NPC_ACCURACY;
+const NPC_AIM_MIN = 0.55, NPC_AIM_MAX = 0.95; // reaction time before the first shot
 
 export class World {
   rng: Rng;
@@ -265,7 +271,7 @@ export class World {
       id: nextId++, team, model: 0, x, y, dir: 0,
       hp: 30, maxHp: 30, state: "idle", path: null, pathIdx: 0,
       speed: 2.2, animT: 0, deadT: 0, thinkT: this.rng.float(0, 2),
-      fleeFrom: null, fireCd: 0, weapon: null,
+      fleeFrom: null, fireCd: 0, aimT: 0, aimTargetId: null, weapon: null,
       agentIdx: -1, inv: [], sel: -1, shieldOn: false, shield: 0,
       fireAt: null, dropOrder: null, pickOrder: null, giveOrder: null, carId: null, boardOrder: null,
       vip: false, persuaded: false, followId: null, hostileCop: false,
@@ -505,7 +511,10 @@ export class World {
 
   // ---------- combat ----------
 
-  private fireWeapon(shooter: Ped, item: ItemStack | null, wType: ItemType, tx: number, ty: number): void {
+  private fireWeapon(
+    shooter: Ped, item: ItemStack | null, wType: ItemType, tx: number, ty: number,
+    spreadMult = 1, rangeMult = 1
+  ): void {
     const def = ITEMS[wType];
     if (item && item.charge <= 0) return;
     if (item) item.charge--;
@@ -518,7 +527,7 @@ export class World {
     this.alertArea(shooter.x, shooter.y, 14, shooter);
     if (wType === "laser") {
       // hitscan beam, pierces peds, stops at walls
-      const maxR = def.range;
+      const maxR = def.range * rangeMult;
       let ex = shooter.x + (dx / len) * maxR, ey = shooter.y + (dy / len) * maxR;
       const steps = Math.ceil(maxR * 3);
       for (let i = 1; i <= steps; i++) {
@@ -539,11 +548,11 @@ export class World {
       return;
     }
     for (let i = 0; i < def.pellets; i++) {
-      const a = baseA + (this.rng.next() - 0.5) * def.spread * 2;
+      const a = baseA + (this.rng.next() - 0.5) * def.spread * spreadMult * 2;
       this.projectiles.push({
         x: shooter.x, y: shooter.y,
         vx: Math.cos(a) * def.speed, vy: Math.sin(a) * def.speed,
-        dmg: def.damage, team: shooter.team, life: def.range / def.speed, type: wType,
+        dmg: def.damage, team: shooter.team, life: (def.range * rangeMult) / def.speed, type: wType,
       });
     }
   }
@@ -793,6 +802,7 @@ export class World {
     if (p.carId !== null) return; // riding
     p.animT += dt;
     p.fireCd = Math.max(0, p.fireCd - dt);
+    p.aimT = Math.max(0, p.aimT - dt);
     p.thinkT -= dt;
 
     if (p.team === "player") this.updateAgent(p, dt);
@@ -995,11 +1005,16 @@ export class World {
       }
       if (best) {
         const d = Math.sqrt(bd);
-        if (d < 8 && this.pf.losShot(p.x, p.y, best.x, best.y)) {
+        const canShoot = d < ITEMS.gun.range * NPC_RANGE_MULT && this.pf.losShot(p.x, p.y, best.x, best.y);
+        if (!canShoot) p.aimTargetId = null; // breaking the shot forfeits the draw
+        if (canShoot) {
           p.path = null; p.state = "idle";
           p.dir = this.dirOf(best.x - p.x, best.y - p.y);
-          if (p.fireCd <= 0) {
-            this.fireWeapon(p, null, "gun", best.x + this.rng.float(-0.7, 0.7), best.y + this.rng.float(-0.7, 0.7));
+          // freshly acquired target: take a beat to draw before firing
+          if (p.aimTargetId !== best.id) { p.aimTargetId = best.id; p.aimT = this.rng.float(NPC_AIM_MIN, NPC_AIM_MAX); }
+          if (p.aimT <= 0 && p.fireCd <= 0) {
+            const j = 0.7 * NPC_SPREAD_MULT;
+            this.fireWeapon(p, null, "gun", best.x + this.rng.float(-j, j), best.y + this.rng.float(-j, j), NPC_SPREAD_MULT, NPC_RANGE_MULT);
             p.fireCd *= NPC_FIRE_MULT;
           }
         } else if (p.thinkT <= 0) {
@@ -1035,11 +1050,16 @@ export class World {
     const d = Math.sqrt(bd);
     const wdef = ITEMS[p.weapon ?? "gun"];
     const hunting = m.kind === "killall" ? d < 55 || this.rng.chance(0.001) : true;
-    if (d < wdef.range * 0.9 && this.pf.losShot(p.x, p.y, best.x, best.y)) {
+    const canShoot = d < wdef.range * NPC_RANGE_MULT && this.pf.losShot(p.x, p.y, best.x, best.y);
+    if (!canShoot) p.aimTargetId = null; // breaking the shot forfeits the draw
+    if (canShoot) {
       p.path = null; p.state = "idle";
       p.dir = this.dirOf(best.x - p.x, best.y - p.y);
-      if (p.fireCd <= 0) {
-        this.fireWeapon(p, null, p.weapon ?? "gun", best.x + this.rng.float(-0.5, 0.5), best.y + this.rng.float(-0.5, 0.5));
+      // freshly acquired target: take a beat to draw before firing
+      if (p.aimTargetId !== best.id) { p.aimTargetId = best.id; p.aimT = this.rng.float(NPC_AIM_MIN, NPC_AIM_MAX); }
+      if (p.aimT <= 0 && p.fireCd <= 0) {
+        const j = 0.5 * NPC_SPREAD_MULT;
+        this.fireWeapon(p, null, p.weapon ?? "gun", best.x + this.rng.float(-j, j), best.y + this.rng.float(-j, j), NPC_SPREAD_MULT, NPC_RANGE_MULT);
         p.fireCd *= NPC_FIRE_MULT * 0.75; // rival agents shoot faster than cops
       }
     } else if (hunting && p.thinkT <= 0) {
