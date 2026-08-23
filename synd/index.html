@@ -55,6 +55,37 @@
   }
   @media (orientation: portrait) { #rotate { display: flex; } }
   .hidden { display: none !important; }
+
+  /* ---- armory: compact, fits a landscape phone without scrolling ---- */
+  #ui .screen.armory { justify-content: safe center; padding: 1.2vmin 2vmin; }
+  .arm-top { display:flex; align-items:center; gap:2vmin; width:100%; max-width:1100px; }
+  .arm-top h2 { margin:0; font-size: clamp(13px, 3.2vmin, 22px); }
+  .arm-funds { color:#ff9b2f; font-weight:bold; font-size: clamp(11px, 2.6vmin, 18px); }
+  .arm-spacer { flex:1; }
+  #ui .screen.armory button { margin:0; padding: 0.7vmin 1.8vmin; font-size: clamp(9px, 2vmin, 15px); }
+  .arm-tabs { display:flex; gap:1vmin; margin:1vmin 0 0.4vmin; flex-wrap:wrap; }
+  .arm-sec { color:#5f7d8c; font-size: clamp(8px, 1.8vmin, 13px); letter-spacing:0.12em; margin:1vmin 0 0.4vmin; }
+  .arm-slots { display:flex; gap:0.8vmin; flex-wrap:wrap; justify-content:center; }
+  .arm-slot {
+    width: clamp(38px, 8.4vmin, 66px); padding:0.5vmin 0; border:1px solid #2c2f3e;
+    background:#101218; border-radius:2px; text-align:center; cursor:pointer;
+  }
+  .arm-slot.empty { border-style:dashed; opacity:0.4; cursor:default; }
+  .arm-slot:not(.empty):hover { border-color:#ff9b2f; }
+  .arm-slot img, .arm-card img { width: clamp(18px, 4vmin, 30px); height: clamp(18px, 4vmin, 30px); image-rendering: pixelated; display:block; margin:0 auto; }
+  .arm-bar { display:block; height:3px; margin:0.3vmin 12%; background:#0a0b10; overflow:hidden; }
+  .arm-bar i { display:block; height:3px; }
+  .arm-price { display:block; font-size: clamp(7px, 1.6vmin, 12px); color:#4fdc6a; }
+  .arm-market { display:grid; grid-template-columns: repeat(9, 1fr); gap:0.8vmin; width:100%; max-width:1100px; }
+  @media (max-aspect-ratio: 8/5) { .arm-market { grid-template-columns: repeat(5, 1fr); } }
+  .arm-card {
+    border:1px solid #2c2f3e; background:#101218; border-radius:2px;
+    padding:0.5vmin 0.2vmin; text-align:center; cursor:pointer;
+  }
+  .arm-card.afford:hover { border-color:#ff9b2f; }
+  .arm-card.poor { opacity:0.38; cursor:default; }
+  .arm-name { display:block; font-size: clamp(7px, 1.5vmin, 11px); color:#c3ccd6; letter-spacing:0.05em; }
+  .arm-cost { display:block; font-size: clamp(7px, 1.6vmin, 12px); color:#ff9b2f; }
 </style>
 </head>
 <body>

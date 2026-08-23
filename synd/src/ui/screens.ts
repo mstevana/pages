@@ -1,7 +1,8 @@
 // Fullscreen DOM overlays: menu, briefing, armory, debrief, game over, objectives.
 
 import { Weather } from "../engine/util";
-import { ITEMS, ItemType, newItem } from "../game/items";
+import { ITEMS, ItemType, newItem, sellValue } from "../game/items";
+import { itemIconUrls } from "../sprites/icons";
 import { SaveData, newAgentName } from "../game/save";
 import { MissionResult, ObjectiveKind } from "../game/world";
 
@@ -87,37 +88,66 @@ export function showArmory(save: SaveData, onDone: () => void): void {
 
   const BUY: ItemType[] = ["gun", "uzi", "shotgun", "minigun", "laser", "gauss", "shield", "medkit", "persuadertron"];
   const HIRE_COST = 1200;
+  const icons = itemIconUrls();
 
   const render = () => {
     clearScreens();
-    const tabs = save.agents.map((a, i) =>
-      `<button class="agent-tab ${i === agentIdx ? "" : "ghost"}" data-i="${i}">${a.name}${a.alive ? "" : " (KIA)"}</button>`
-    ).join("");
     const a = save.agents[agentIdx];
-    const inv = a.alive
-      ? (a.inv.map((it, i) =>
-          `<tr><td>${ITEMS[it.type].name}</td><td>${Math.ceil(it.charge)}/${ITEMS[it.type].charge}</td>
-           <td><button class="ghost sell" data-i="${i}">SELL +${Math.floor(ITEMS[it.type].price * 0.4)}</button></td></tr>`
-        ).join("") || "<tr><td colspan='3'>EMPTY</td></tr>")
-      : `<tr><td colspan="3">AGENT DECEASED - <button id="hire">HIRE REPLACEMENT (${HIRE_COST}cr)</button></td></tr>`;
-    const shop = BUY.map((t) =>
-      `<tr><td>${ITEMS[t].name}</td><td>${ITEMS[t].price}cr</td>
-       <td><button class="buy ${save.credits >= ITEMS[t].price && a.alive && a.inv.length < 8 ? "" : "ghost"}" data-t="${t}">BUY</button></td></tr>`
+    const tabs = save.agents.map((ag, i) =>
+      `<button class="agent-tab ${i === agentIdx ? "" : "ghost"}" data-i="${i}">${ag.name}${ag.alive ? "" : " &dagger;"}</button>`
     ).join("");
+
+    // loadout: eight compact slots, tap one to sell it
+    let slots = "";
+    if (!a.alive) {
+      slots = `<div class="arm-sec">AGENT DECEASED</div>
+        <button id="hire" class="${save.credits >= HIRE_COST ? "" : "ghost"}">HIRE REPLACEMENT &middot; ${HIRE_COST}cr</button>`;
+    } else {
+      const cells = [];
+      for (let i = 0; i < 8; i++) {
+        const it = a.inv[i];
+        if (!it) { cells.push(`<div class="arm-slot empty"><img src="${icons.gun}" style="visibility:hidden"><span class="arm-price">&nbsp;</span></div>`); continue; }
+        const def = ITEMS[it.type];
+        const frac = Math.max(0, Math.min(1, it.charge / def.charge));
+        cells.push(
+          `<div class="arm-slot sell" data-i="${i}" title="${def.name}">
+             <img src="${icons[it.type]}" alt="${def.name}">
+             <span class="arm-bar"><i style="width:${(frac * 100).toFixed(0)}%;background:${frac > 0.25 ? def.color : "#e04040"}"></i></span>
+             <span class="arm-price">+${sellValue(it)}</span>
+           </div>`
+        );
+      }
+      slots = `<div class="arm-slots">${cells.join("")}</div>`;
+    }
+
+    const market = BUY.map((t) => {
+      const afford = save.credits >= ITEMS[t].price && a.alive && a.inv.length < 8;
+      return `<div class="arm-card ${afford ? "afford buy" : "poor"}" data-t="${t}" title="${ITEMS[t].name}">
+                <img src="${icons[t]}" alt="${ITEMS[t].name}">
+                <span class="arm-name">${ITEMS[t].short}</span>
+                <span class="arm-cost">${ITEMS[t].price}</span>
+              </div>`;
+    }).join("");
+
     const s = screen(`
-      <h2>ARMORY</h2>
-      <p class="dim">FUNDS: <b style="color:#ff9b2f">${save.credits}cr</b> &middot; 8 slots per agent &middot; selling returns 40%</p>
-      <div>${tabs}</div>
-      <div style="display:flex;gap:3vmin;flex-wrap:wrap;justify-content:center">
-        <table><tr><th colspan="3">LOADOUT: ${a.name}</th></tr>${inv}</table>
-        <table><tr><th colspan="3">MARKET</th></tr>${shop}</table>
+      <div class="arm-top">
+        <h2>ARMORY</h2>
+        <span class="arm-funds">${save.credits}cr</span>
+        <span class="arm-spacer"></span>
+        <button id="done">Back</button>
       </div>
-      <button id="done">Back to Briefing</button>
+      <div class="arm-tabs">${tabs}</div>
+      <div class="arm-sec">LOADOUT &middot; ${a.name} &middot; TAP TO SELL (spent gear fetches less)</div>
+      ${slots}
+      <div class="arm-sec">MARKET &middot; TAP TO BUY</div>
+      <div class="arm-market">${market}</div>
     `);
+    s.classList.add("armory");
+
     s.querySelectorAll(".agent-tab").forEach((el) =>
       el.addEventListener("click", () => { agentIdx = Number((el as HTMLElement).dataset.i); render(); })
     );
-    s.querySelectorAll(".buy").forEach((el) =>
+    s.querySelectorAll(".arm-card.buy").forEach((el) =>
       el.addEventListener("click", () => {
         const t = (el as HTMLElement).dataset.t as ItemType;
         const ag = save.agents[agentIdx];
@@ -127,13 +157,13 @@ export function showArmory(save: SaveData, onDone: () => void): void {
         render();
       })
     );
-    s.querySelectorAll(".sell").forEach((el) =>
+    s.querySelectorAll(".arm-slot.sell").forEach((el) =>
       el.addEventListener("click", () => {
         const i = Number((el as HTMLElement).dataset.i);
         const ag = save.agents[agentIdx];
         if (!ag.alive || i >= ag.inv.length) return;
         const [it] = ag.inv.splice(i, 1);
-        save.credits += Math.floor(ITEMS[it.type].price * 0.4);
+        save.credits += sellValue(it);
         render();
       })
     );

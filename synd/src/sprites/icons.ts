@@ -214,3 +214,14 @@ export function itemIcons(): Record<ItemType, HTMLCanvasElement> {
 }
 
 export const ICON_SIZE = SZ;
+
+// data-URL variants for the DOM screens (armory, briefing)
+let urls: Record<ItemType, string> | null = null;
+export function itemIconUrls(): Record<ItemType, string> {
+  if (urls) return urls;
+  const ic = itemIcons();
+  const out = {} as Record<ItemType, string>;
+  for (const t of Object.keys(ic) as ItemType[]) out[t] = ic[t].toDataURL();
+  urls = out;
+  return out;
+}

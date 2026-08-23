@@ -41,6 +41,15 @@ export function newItem(type: ItemType): ItemStack {
   return { type, charge: ITEMS[type].charge };
 }
 
+// What the armory pays for an item. A fully spent one fetches half of what a
+// loaded one does, and anything in between scales with the charge remaining.
+export const SELL_RATE = 0.4;
+export function sellValue(it: ItemStack): number {
+  const def = ITEMS[it.type];
+  const frac = def.charge > 0 ? Math.max(0, Math.min(1, it.charge / def.charge)) : 1;
+  return Math.floor(def.price * SELL_RATE * (0.5 + 0.5 * frac));
+}
+
 // Rough sustained damage per second, used to rank weapons when an agent's
 // current gun runs dry and has to be swapped for the next best one.
 export function weaponDps(t: ItemType): number {
