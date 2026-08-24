@@ -75,6 +75,19 @@ export interface Station {
   level: number;             // the height its platform sits at
 }
 
+// One flight of steps joining two surfaces, with the ground it has to work
+// with. `run` is how many tiles of footprint it gets along the wall and
+// `side` which way the second tile lies; two tiles is what lets a flight
+// climb at a walkable pitch instead of nearly vertically.
+export interface StairRun {
+  x: number; y: number;      // the tile it starts from
+  rx: number; ry: number;    // the tile it arrives at
+  dx: number; dy: number;    // unit step from the start toward it
+  h: number; base: number;
+  run: number;
+  side: number;              // -1 or +1: where the second tile sits
+}
+
 export interface City {
   seed: number;
   tiles: Uint8Array;
@@ -94,6 +107,7 @@ export interface City {
   stations: Station[];       // platforms on those lines, every other block
   fittings: Fitting[];       // what furnishes the underground concourses
   garages: { x: number; y: number; w: number; h: number }[]; // parking floors under buildings
+  stairRuns: StairRun[];     // the footprint each flight of steps was given
 }
 
 // ---------------------------------------------------------------------------
@@ -789,7 +803,135 @@ export function generateCity(seed: number): City {
 
   const levels = lb.freeze(GRID * GRID);
 
-  return { seed, tiles, height, bstyle, laneDir, decos, props, crossing, streetUsed, levels, fittings, garages, lamps, roundabouts, vRoads, hRoads, skytrains, stations };
+  // ---- 7d. Give every flight of steps a two-tile footprint along the wall.
+  // A flight squeezed into one tile has to climb a whole storey in about two
+  // thirds of a tile, which draws as a ladder rather than a stair. Where a
+  // lamp post or a street tree stands in the way it is moved aside: the stair
+  // has to be there, the tree only wants to be. ----
+  const stairRuns = layOutStairs(levels, tiles, props, lamps, streetUsed);
+
+  return { seed, tiles, height, bstyle, laneDir, decos, props, crossing, streetUsed, levels, fittings, garages, lamps, roundabouts, vRoads, hRoads, skytrains, stations, stairRuns };
+}
+
+// Every stair in the level model gets two tiles of footprint along the wall it
+// is bolted to, so its flights can climb at a walkable pitch. The second tile
+// comes from whichever side of the foot is standable; where street furniture
+// stands there, the furniture moves.
+function layOutStairs(
+  levels: Levels, tiles: Uint8Array, props: Prop[],
+  lamps: { x: number; y: number }[], streetUsed: Uint8Array
+): StairRun[] {
+  const runs: StairRun[] = [];
+  // what a lamp or a tree is standing on, so it can be found and moved
+  const furniture = new Map<number, { move: (x: number, y: number) => void }>();
+  for (const pr of props) furniture.set(idx(pr.x, pr.y), { move: (x, y) => { pr.x = x; pr.y = y; } });
+  for (const l of lamps) furniture.set(idx(l.x, l.y), { move: (x, y) => { l.x = x; l.y = y; } });
+  // reserve every stair's own foot before anything moves, so a lamp shifted
+  // out of one flight's way cannot land under another's
+  const claimed = new Set<number>();
+  for (let a = 0; a < levels.count; a++) {
+    for (let e = levels.linkStart[a]; e < levels.linkStart[a + 1]; e++) {
+      if (levels.z[levels.linkTo[e]] > levels.z[a]) claimed.add(levels.tile[a]);
+    }
+  }
+
+  const standable = (x: number, y: number, base: number): boolean => {
+    if (!inGrid(x, y)) return false;
+    if (base < -0.1) return hollowFrom(levels, x, y, base);
+    const t = tiles[idx(x, y)];
+    return t === T_GROUND || t === T_SIDEWALK;
+  };
+
+  for (let a = 0; a < levels.count; a++) {
+    for (let e = levels.linkStart[a]; e < levels.linkStart[a + 1]; e++) {
+      const b = levels.linkTo[e];
+      if (levels.z[b] <= levels.z[a]) continue;        // take each pair once, going up
+      const x = levels.tile[a] % GRID, y = (levels.tile[a] / GRID) | 0;
+      const rx = levels.tile[b] % GRID, ry = (levels.tile[b] / GRID) | 0;
+      // a garage ramp may reach several tiles for its road mouth, so take a
+      // single step toward the far end rather than the whole offset
+      const ox = rx - x, oy = ry - y;
+      let dx = Math.abs(ox) >= Math.abs(oy) ? Math.sign(ox) : 0;
+      let dy = dx === 0 ? Math.sign(oy) : 0;
+      const base = levels.z[a];
+      if (dx === 0 && dy === 0) {
+        // a subway entrance can sit directly over its own landing, leaving no
+        // direction to read off the two ends. Face it into the concourse: the
+        // first way that has both a tile ahead and a tile beside it to build on
+        for (let d = 0; d < 4; d++) {
+          const fx = DX[d], fy = DY[d];
+          if (!standable(x + fx, y + fy, base)) continue;
+          if (!standable(x - fy, y + fx, base) && !standable(x + fy, y - fx, base)) continue;
+          dx = fx; dy = fy; break;
+        }
+      }
+      const ux = -dy, uy = dx;                          // along the wall face
+
+      // score each side: free ground beats ground with a lamp on it, and a
+      // tile another stair already claimed is no use at all
+      let best = 0, bestScore = -1;
+      for (const side of [1, -1]) {
+        const sx = x + ux * side, sy = y + uy * side;
+        if (!standable(sx, sy, base)) continue;
+        const i = idx(sx, sy);
+        if (claimed.has(i)) continue;
+        const score = furniture.has(i) ? 1 : 2;
+        // break ties by tile so the choice is stable but not always the same way
+        if (score > bestScore || (score === bestScore && (x * 7 + y * 13) % 2 === 0 && side === 1)) {
+          bestScore = score; best = side;
+        }
+      }
+      if (best === 0) continue;                         // hemmed in on both sides
+
+      const ex = x + ux * best, ey = y + uy * best, ei = idx(ex, ey);
+      claimed.add(ei);
+      const sitting = furniture.get(ei);
+      if (sitting !== undefined) {
+        // shift the lamp or tree to the nearest tile of its own kind of ground
+        let moved = false;
+        for (let r = 1; r <= 3 && !moved; r++) {
+          for (let oy2 = -r; oy2 <= r && !moved; oy2++) {
+            for (let ox2 = -r; ox2 <= r && !moved; ox2++) {
+              if (Math.max(Math.abs(ox2), Math.abs(oy2)) !== r) continue;
+              const nx = ex + ox2, ny = ey + oy2;
+              if (!inGrid(nx, ny)) continue;
+              const ni = idx(nx, ny);
+              const t = tiles[ni];
+              if (t !== T_GROUND && t !== T_SIDEWALK) continue;
+              if (streetUsed[ni] || claimed.has(ni) || furniture.has(ni)) continue;
+              sitting.move(nx, ny);
+              furniture.delete(ei);
+              furniture.set(ni, sitting);
+              streetUsed[ni] = 1;
+              streetUsed[ei] = 0;
+              moved = true;
+            }
+          }
+        }
+        if (!moved) {
+          // nowhere within reach: the stair wins, the decoration goes
+          const pi = props.findIndex((pr) => idx(pr.x, pr.y) === ei);
+          if (pi >= 0) props.splice(pi, 1);
+          const li = lamps.findIndex((l) => idx(l.x, l.y) === ei);
+          if (li >= 0) lamps.splice(li, 1);
+          furniture.delete(ei);
+          streetUsed[ei] = 0;
+        }
+      }
+
+      runs.push({ x, y, rx, ry, dx, dy, h: levels.z[b] - base, base, run: 2, side: best });
+    }
+  }
+  return runs;
+}
+
+// hollowAt works off a City; during generation only the level model exists yet
+function hollowFrom(levels: Levels, x: number, y: number, z: number): boolean {
+  const i = idx(x, y);
+  for (let s = levels.start[i]; s < levels.start[i + 1]; s++) {
+    if (levels.z[s] < -0.1 && Math.abs(levels.z[s] - z) <= 0.9) return true;
+  }
+  return false;
 }
 
 // Recursively split a block into lots separated by 4-tile alleys, then raise

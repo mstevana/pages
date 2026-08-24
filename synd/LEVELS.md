@@ -129,13 +129,25 @@ each flight so an agent can turn the corner onto the next. The pieces are
 painted back to front within the entity, because the two flights sit at
 different distances from the camera.
 
-The second tile of that footprint is chosen at render time, from whichever
-side of the foot tile is free -- open ground above the street, a hollow at
-the same depth below it -- and skipping anything a lamp post or street tree
-already occupies. Where both sides are built up the flight falls back to a
-single tile and climbs steeply; that is roughly one stair in forty. The
-whole two-tile run is what makes the pitch walkable: over one tile a flight
-climbs a storey at about 1.4 storeys per tile, over two at 0.64.
+The second tile of that footprint is chosen during generation, in
+`layOutStairs`, and stored on `City.stairRuns`; the renderer only reads it.
+It has to be there rather than in the renderer, because where a lamp post or
+a street tree stands in the way the furniture is moved aside -- the stair has
+to be where it is, the tree only wants to be. Nothing falls back to a single
+steep tile: every stair gets its two tiles. If a displaced lamp has nowhere
+within three tiles to go it is removed outright, though no seed has yet
+needed that. The whole two-tile run is what makes the pitch walkable: over
+one tile a flight climbs a storey at about 1.4 storeys per tile, over two at
+0.64.
+
+Two traps that pass live in there. Every stair's own foot tile is reserved
+before anything moves, or a lamp shifted out of one flight's way lands under
+another's. And a subway entrance can sit directly over its own landing, so
+the two ends of the link share a tile and there is no direction to read off
+them -- such a stair is faced into the concourse instead, by the first
+compass direction with both a tile ahead and a tile beside it to build on.
+Before that, those stairs drew with a zero direction vector, which collapsed
+the whole flight to a point.
 
 Decks are drawn as extruded boxes, not bare quads. A flat quad has no
 thickness to show, so from any angle that reveals its underside the whole

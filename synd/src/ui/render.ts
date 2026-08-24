@@ -2,7 +2,7 @@
 // blocks correctly occlude people and cars behind them. Also draws the static
 // street furniture (fences, doors, pit rails) and the elevated skytrain.
 
-import { City, Deco, Fitting, Prop, Station, TRAIN_LEVEL, hollowAt, surfaceUnder, T_BUILDING, T_GROUND, T_ISLAND, T_PARK, T_PIT, T_ROAD, T_SIDEWALK, T_WALL, D_S, D_W, idx, inGrid, isRoad } from "../city/citygen";
+import { City, Deco, Fitting, Prop, StairRun, Station, TRAIN_LEVEL, surfaceUnder, T_BUILDING, T_GROUND, T_ISLAND, T_PARK, T_PIT, T_ROAD, T_SIDEWALK, T_WALL, D_S, D_W, idx, inGrid, isRoad } from "../city/citygen";
 import { GRID, STORY_H, TILE_H, TILE_W, isNight, isRain, isoX, isoY } from "../engine/util";
 import { PeopleAtlas, FW, FH } from "../sprites/people";
 import { BENCH_H, BENCH_W, STALL_H, STALL_W, TREE_H, TREE_W } from "../sprites/props";
@@ -20,17 +20,6 @@ export interface Camera {
 const TRAIN_ELEV = TRAIN_LEVEL * STORY_H;   // px above ground at zoom 1
 const SECTION_LIP = 5;   // px of wall left standing above a sectioned floor
 const PED_SCALE = 1.2;   // people vs the 30px story: roughly one story tall
-
-// One flight of steps joining two surfaces. `run` is how many tiles of
-// footprint it has along the wall, and `side` which way the extra tile lies.
-interface StairRun {
-  x: number; y: number;      // the tile it starts from
-  rx: number; ry: number;    // the tile it arrives at
-  dx: number; dy: number;    // unit step from the start toward it
-  h: number; base: number;
-  run: number;               // 1 or 2 tiles along the wall
-  side: number;              // -1, 0 or +1: where the second tile sits
-}
 
 interface Entity {
   s: number;    // depth key = tx + ty
@@ -70,7 +59,6 @@ export class Renderer {
   readonly maxStories: number;    // ceiling of the tallest building in the sector
   readonly minLevel: number;      // floor of the deepest surface under the street
   private stairs: StairRun[] = [];
-  private stairBlocked = new Set<number>();
   // emissive sources gathered while drawing, blended additively later
   private lampGlows: { x: number; y: number; gy: number; phase: number }[] = [];
   private emissives: { x: number; y: number; r: number; col: [number, number, number]; i: number }[] = [];
@@ -152,49 +140,7 @@ export class Renderer {
   }
 
   private buildStairs(): void {
-    // a stair may not sprawl over a lamp post or a street tree
-    const taken = new Set<number>();
-    for (const pr of this.city.props) taken.add(idx(pr.x, pr.y));
-    for (const l of this.city.lamps) taken.add(idx(l.x, l.y));
-    this.stairBlocked = taken;
-    // every stair in the sector is a link in the level model; the ones that
-    // climb get a flight drawn up the wall they are bolted to
-    const L = this.city.levels;
-    for (let a = 0; a < L.count; a++) {
-      for (let e = L.linkStart[a]; e < L.linkStart[a + 1]; e++) {
-        const b = L.linkTo[e];
-        if (L.z[b] <= L.z[a]) continue;               // take each pair once, going up
-        const x = L.tile[a] % GRID, y = (L.tile[a] / GRID) | 0;
-        const rx = L.tile[b] % GRID, ry = (L.tile[b] / GRID) | 0;
-        // a garage ramp may reach several tiles for its road mouth, so take a
-        // single step toward the far end rather than the whole offset
-        const ox = rx - x, oy = ry - y;
-        const dx = Math.abs(ox) >= Math.abs(oy) ? Math.sign(ox) : 0;
-        const dy = dx === 0 ? Math.sign(oy) : 0;
-        const room = this.stairRoom(x, y, dx, dy, L.z[a]);
-        this.stairs.push({ x, y, rx, ry, dx, dy, h: L.z[b] - L.z[a], base: L.z[a],
-                           run: room.run, side: room.side });
-      }
-    }
-  }
-
-  // A flight wants two tiles of footprint along the wall so it can climb at a
-  // walkable pitch. Take the second tile from whichever side is free; if both
-  // sides are built up or in the roadway, fall back to a single steep tile.
-  private stairRoom(x: number, y: number, ax: number, ay: number, base: number): { run: number; side: number } {
-    const ux = -ay, uy = ax;                         // along the wall face
-    const free = (sx: number, sy: number): boolean => {
-      if (!inGrid(sx, sy)) return false;
-      if (this.stairBlocked.has(idx(sx, sy))) return false;
-      if (base < -0.1) return hollowAt(this.city, sx, sy, base);
-      const t = this.city.tiles[idx(sx, sy)];
-      return t === T_GROUND || t === T_SIDEWALK;
-    };
-    const plus = free(x + ux, y + uy), minus = free(x - ux, y - uy);
-    if (plus && minus) return { run: 2, side: (x * 7 + y * 13) % 2 === 0 ? 1 : -1 };
-    if (plus) return { run: 2, side: 1 };
-    if (minus) return { run: 2, side: -1 };
-    return { run: 1, side: 0 };
+    this.stairs = this.city.stairRuns;
   }
 
   private buildDecks(): void {
