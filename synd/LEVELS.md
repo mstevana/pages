@@ -220,6 +220,16 @@ own column instead of over its track.
 Its track edge carries a painted line rather than a railing, so nothing
 stands between the squad and the train they are about to board.
 
+A train's `u` is the middle of its set, not its nose, and the renderer places
+cars either side of that. Anchoring on the nose meant every car flipped to the
+far side of it the instant the line reversed -- the whole train jumping its own
+length at the terminus, which is a station. It also left the set trailing off
+one end of the platform; centred, it stops where the doors would be.
+
+It brakes along `sqrt(2*a*left)`, the fastest it could be going and still come
+to rest exactly at the platform. A fixed minimum approach speed instead left it
+crawling the last stretch at a constant rate and then stopping dead.
+
 A tap is hit-tested against the train's body as a solid object, at the
 track's height and again a little above it so tapping a car's roof counts.
 Tap the train to board, tap anywhere else to get off, and tapping the train

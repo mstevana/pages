@@ -135,6 +135,11 @@ const BLAST_R = 3.5;      // a wrecked car hurts everyone inside this radius
 const KERB_GAP = 3;       // clear length a car needs to itself at the kerb
 export const TRAIN_SEG = 1.9;   // length of one car, in tiles
 export const TRAIN_CARS = 4;    // cars in a set
+// A train's u is the middle of the set, not its nose. Tracking the nose meant
+// every car flipped to the far side of it the instant the line reversed, which
+// read as the whole train jumping the length of itself at the terminus.
+export const TRAIN_HALF = ((TRAIN_CARS - 1) * TRAIN_SEG) / 2;
+export const TRAIN_NOSE = TRAIN_HALF + TRAIN_SEG / 2;   // to the very front
 const TRAIN_DWELL = 5;    // seconds a train stands at each platform
 const TRAIN_CRUISE = 11;  // tiles a second at line speed
 const TRAIN_ACCEL = 6;    // tiles a second squared, braking and pulling away
@@ -715,8 +720,7 @@ export class World {
     const across = Math.abs((line.axis === "v" ? x : y) - trackCentre(line));
     if (across > 3.2) return false;
     const along = (line.axis === "v" ? y : x) - 0.5;
-    const back = (along - t.u) * -t.dir;
-    return back > -2.2 && back < (TRAIN_CARS - 1) * TRAIN_SEG + 2.2;
+    return Math.abs(along - t.u) < TRAIN_NOSE + 1.6;
   }
 
   // tiles to try when stepping off a train, nearest first: sideways onto the
@@ -1612,7 +1616,7 @@ export class World {
   }
 
   // where a train is in the world right now
-  // the head of the train, on the track it runs on - one tile clear of the
+  // the middle of the train, on the track it runs on - one tile clear of the
   // platform beside it
   trainPos(t: Train): { x: number; y: number } {
     const line = this.city.skytrains[t.line];
@@ -1630,8 +1634,7 @@ export class World {
       const across = (line.axis === "v" ? x : y) - trackCentre(line);
       if (Math.abs(across) > 0.6) continue;
       const along = (line.axis === "v" ? y : x) - 0.5;
-      const back = (along - t.u) * -t.dir;       // 0 at the nose, growing toward the tail
-      if (back < -1 || back > (TRAIN_CARS - 1) * TRAIN_SEG + 1) continue;
+      if (Math.abs(along - t.u) > TRAIN_NOSE) continue;
       return t;
     }
     return null;
@@ -1654,11 +1657,12 @@ export class World {
     } else {
       const target = stops[t.stop];
       const left = Math.abs(target - t.u);
-      // brake in time to come to rest at the platform
-      const brake = (t.speed * t.speed) / (2 * TRAIN_ACCEL) + 0.4;
-      t.speed = left <= brake
-        ? Math.max(1.2, t.speed - TRAIN_ACCEL * dt)
-        : Math.min(TRAIN_CRUISE, t.speed + TRAIN_ACCEL * dt);
+      // The fastest it could be going and still come to rest exactly at the
+      // platform. Following that curve down brakes it smoothly to a standstill;
+      // a fixed floor instead left it crawling the last stretch at a constant
+      // speed and then stopping dead.
+      const limit = Math.sqrt(2 * TRAIN_ACCEL * Math.max(0, left));
+      t.speed = Math.min(TRAIN_CRUISE, limit, t.speed + TRAIN_ACCEL * dt);
       const step = t.speed * dt;
       if (left <= step) {
         t.u = target;

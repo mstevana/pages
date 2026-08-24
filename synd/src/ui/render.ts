@@ -8,7 +8,7 @@ import { PeopleAtlas, FW, FH } from "../sprites/people";
 import { BENCH_H, BENCH_W, STALL_H, STALL_W, TREE_H, TREE_W } from "../sprites/props";
 import { CAR_MODELS } from "../sprites/cars";
 import { TileArt } from "../sprites/tiles";
-import { Car, Ped, TRAIN_CARS, TRAIN_SEG, World } from "../game/world";
+import { Car, Ped, TRAIN_CARS, TRAIN_HALF, TRAIN_SEG, World } from "../game/world";
 import { ITEMS } from "../game/items";
 import { ICON_SIZE, itemIcons } from "../sprites/icons";
 
@@ -402,7 +402,9 @@ export class Renderer {
         if (sectioned && line.level >= section + 0.01) continue;
         if (!sectioned && line.level < 0) continue;      // underground unless cut open
         for (let k = 0; k < nSeg; k++) {
-          const u = t.u - t.dir * k * segLen;
+          // cars sit either side of the train's middle, so reversing the line
+          // swaps which end leads without moving a single car
+          const u = t.u + TRAIN_HALF - k * segLen;
           if (u < -2 || u > GRID + 2) continue;
           const across = trackCentre(line);
           const wx = line.axis === "v" ? across : u + 0.5;
@@ -410,7 +412,7 @@ export class Renderer {
           if (wx < x0 || wx > x1 || wy < y0 || wy > y1) continue;
           const angle = line.axis === "v" ? Math.atan2(t.dir, 0) : Math.atan2(0, t.dir);
           push({ s: Math.floor(wx) + Math.floor(wy), pri: 2, kind: "train", x: wx, y: wy,
-                 train: { wx, wy, angle, head: k === 0, lift: line.level * STORY_H } });
+                 train: { wx, wy, angle, head: t.dir === 1 ? k === 0 : k === nSeg - 1, lift: line.level * STORY_H } });
         }
       }
     }
