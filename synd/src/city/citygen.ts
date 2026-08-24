@@ -23,7 +23,11 @@ export const GARAGE_LEVEL = -1;    // parking under the buildings
 export const SUBWAY_LEVEL = -2;    // the underground railway and its stations
 const HALL_LONG = 6;               // a concourse reaches this far along the line
 const HALL_WIDE = 3;               // ...and this far either side of the track
-const PLATFORM_HALF = 2;              // platform reaches this far each way      // sunken excavation/vent shaft (blocks movement, not bullets)
+// A skytrain platform: ten tiles along the track and two across it, so a
+// waiting squad has somewhere to stand that isn't the track itself.
+export const PLATFORM_LONG = 10;
+export const PLATFORM_WIDE = 2;
+const PLATFORM_HALF = PLATFORM_LONG >> 1;
 
 // building facade styles
 export const NSTYLES = 6;
@@ -234,6 +238,14 @@ export function kerbAt(c: City, x: number, y: number): Kerb | null {
 // to look at it.
 
 // the range of surfaces standing on a tile
+// Where a line's track runs, measured across the avenue it follows. A skytrain
+// viaduct sits over the first lane with its platform on the lane beside it; a
+// subway tunnel is bored under the middle of the avenue. Everything that has
+// to agree on where a train actually is reads this.
+export function trackCentre(line: Skytrain): number {
+  return line.level < 0 ? line.pos + 1.5 : line.pos + 0.5;
+}
+
 export function tileSurfaces(c: City, x: number, y: number): { from: number; to: number } {
   if (!inGrid(x, y)) return { from: 0, to: 0 };
   const i = idx(x, y);
@@ -608,27 +620,38 @@ export function generateCity(seed: number): City {
       if (u < PLATFORM_HALF + 2 || u > GRID - PLATFORM_HALF - 3) continue;
       const cx = line.axis === "v" ? line.pos + 1 : u;
       const cy = line.axis === "v" ? u : line.pos + 1;
-      // the platform itself: a run of deck alongside the track
-      for (let d = -PLATFORM_HALF; d <= PLATFORM_HALF; d++) {
-        const px2 = line.axis === "v" ? cx : cx + d;
-        const py2 = line.axis === "v" ? cy + d : cy;
-        if (!inGrid(px2, py2)) continue;
-        structZ[idx(px2, py2)] = TRAIN_LEVEL;
+      // the platform itself: a slab of deck alongside the track, never over it
+      for (let d = -PLATFORM_HALF; d < PLATFORM_HALF; d++) {
+        for (let e = 0; e < PLATFORM_WIDE; e++) {
+          const px2 = line.axis === "v" ? cx + e : cx + d;
+          const py2 = line.axis === "v" ? cy + d : cy + e;
+          if (!inGrid(px2, py2)) continue;
+          const pt = tiles[idx(px2, py2)];
+          if (pt === T_BUILDING || pt === T_WALL) continue;   // never re-roof a block
+          structZ[idx(px2, py2)] = TRAIN_LEVEL;
+        }
       }
       // and a stair up to it from the nearest clear pavement
+      // Which way is "across the track" depends on the line's axis, so work in
+      // along/across and only convert to x/y at the end.
+      const acrossBase = line.axis === "v" ? cx : cy;
+      const alongBase = line.axis === "v" ? cy : cx;
       let stair = -1;
-      for (let r = 2; r <= 4 && stair < 0; r++) {
-        for (let d = -PLATFORM_HALF; d <= PLATFORM_HALF && stair < 0; d++) {
-          for (const sgn of [-1, 1]) {
-            const gx = line.axis === "v" ? cx + sgn * r : cx + d;
-            const gy = line.axis === "v" ? cy + d : cy + sgn * r;
+      for (let r = 1; r <= 6 && stair < 0; r++) {
+        for (let d = -PLATFORM_HALF; d < PLATFORM_HALF && stair < 0; d++) {
+          for (const sgn of [1, -1]) {
+            // step off the platform's own edge, not off its centre
+            const edge = sgn > 0 ? acrossBase + PLATFORM_WIDE - 1 : acrossBase;
+            const gAcross = edge + sgn * r, gAlong = alongBase + d;
+            const gx = line.axis === "v" ? gAcross : gAlong;
+            const gy = line.axis === "v" ? gAlong : gAcross;
             if (!inGrid(gx, gy)) continue;
             const gi = idx(gx, gy);
             const t = tiles[gi];
             if ((t !== T_GROUND && t !== T_SIDEWALK) || streetUsed[gi] || stairTo[gi] >= 0) continue;
-            // climb to the nearest platform tile
-            const tx = line.axis === "v" ? cx : gx;
-            const ty = line.axis === "v" ? gy : cy;
+            // climb to whichever platform tile is on the same side
+            const tx = line.axis === "v" ? edge : gAlong;
+            const ty = line.axis === "v" ? gAlong : edge;
             if (!inGrid(tx, ty) || structZ[idx(tx, ty)] !== TRAIN_LEVEL) continue;
             stairTo[gi] = idx(tx, ty);
             stair = gi;
@@ -637,7 +660,9 @@ export function generateCity(seed: number): City {
         }
       }
       line.stops.push(u);
-      stations.push({ line: li, u, x: cx + 0.5, y: cy + 0.5, level: line.level });
+      const acx = line.axis === "v" ? cx + PLATFORM_WIDE / 2 : cx;
+      const acy = line.axis === "v" ? cy : cy + PLATFORM_WIDE / 2;
+      stations.push({ line: li, u, x: acx, y: acy, level: line.level });
     }
   }
 

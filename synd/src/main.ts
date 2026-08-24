@@ -5,7 +5,7 @@ import { AudioEngine } from "./engine/audio";
 import { GRID, PANEL_FRAC, STORY_H, TILE_H, TILE_W, WEATHERS, Weather, clamp, ctx2d, isRain, isoX, isoY, lerp, makeCanvas } from "./engine/util";
 import { ITEMS } from "./game/items";
 import { SaveData, clearSave, loadSave, newCampaign, writeSave } from "./game/save";
-import { MissionResult, ObjectiveKind, World } from "./game/world";
+import { MissionResult, ObjectiveKind, Train, World } from "./game/world";
 import { Panel } from "./ui/panel";
 import { Renderer } from "./ui/render";
 import { SectionSlider } from "./ui/slider";
@@ -97,6 +97,31 @@ function worldToScreen(x: number, y: number, h = 0): { x: number; y: number } {
     x: cx + (isoX(x, y) - isoX(cam.x, cam.y)) * cam.zoom,
     y: cy + (isoY(x, y) - isoY(cam.x, cam.y)) * cam.zoom - h * STORY_H * cam.zoom,
   };
+}
+
+// The world point a screen tap lands on at a given height: a point h storeys
+// up draws where the ground h*STORY_H/TILE_H tiles further from the camera
+// would, so undo exactly that shift.
+function pointAtHeight(sx: number, sy: number, h: number): { x: number; y: number } {
+  const g0 = screenToWorld(sx, sy);
+  const k = (h * STORY_H) / TILE_H;
+  return { x: g0.x + k, y: g0.y + k };
+}
+
+// Which train's body is under this tap? Tested at the track's own height and
+// again a little above it, so tapping the roof of a car counts as tapping it.
+function trainUnder(sx: number, sy: number): Train | null {
+  if (!world || !city) return null;
+  const levels = new Set(city.skytrains.map((l) => l.level));
+  for (const lvl of levels) {
+    if (lvl < 0 && lvl < sectionLevel - 0.01) continue;    // only where the section shows it
+    for (const rise of [0, 0.45]) {
+      const q = pointAtHeight(sx, sy, lvl + rise);
+      const tr = world.trainAtPoint(q.x, q.y, lvl);
+      if (tr) return tr;
+    }
+  }
+  return null;
 }
 
 function rollMission(): void {
@@ -370,20 +395,19 @@ function pointerEnd(ev: PointerEvent): void {
   if (bestDrop >= 0) { w.cmdPickup(w.uiSelected, bestDrop); followCam = true; return; }
 
   const lead = w.selectedAgents(w.uiSelected)[0];
-  // riding a train: tapping the platform gets you off, at a stop
+  // A train is a solid thing on the screen, so hit-test it as one: tap its
+  // body to board, tap anywhere else to get off.
+  const tappedTrain = trainUnder(p.x, p.y);
   if (lead && lead.trainId !== null) {
+    if (tappedTrain && tappedTrain.id === lead.trainId) return;   // tapped the train we are on
     w.cmdExitTrain(w.uiSelected);
     followCam = true;
     return;
   }
-  // a train standing at a platform can be boarded from beside it
-  for (const tr of w.trains) {
-    const at = w.trainPos(tr);
-    if ((at.x - t.x) ** 2 + (at.y - t.y) ** 2 < 3 * 3 && lead && Math.abs(lead.z - TRAIN_LEVEL) < 0.2) {
-      w.cmdBoardTrain(w.uiSelected, tr.id);
-      followCam = true;
-      return;
-    }
+  if (tappedTrain && lead) {
+    w.cmdBoardTrain(w.uiSelected, tappedTrain.id);
+    followCam = true;
+    return;
   }
   for (const c of w.cars) {
     const dd = (c.x - t.x) ** 2 + (c.y - t.y) ** 2;

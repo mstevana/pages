@@ -1,7 +1,7 @@
 // The live mission world: pedestrians, cops, enemy agents, cars, projectiles,
 // dropped items, objectives, and all the AI that drives them.
 
-import { City, GARAGE_LEVEL, Kerb, Station, TRAIN_LEVEL, T_ROAD, kerbAt, surfaceNear, DBIT, DX, DY, idx, inGrid, isRoad, isWalkable } from "../city/citygen";
+import { City, DBIT, DX, DY, GARAGE_LEVEL, idx, inGrid, isRoad, isWalkable, Kerb, kerbAt, Station, surfaceNear, T_ROAD, trackCentre, TRAIN_LEVEL } from "../city/citygen";
 import { AudioEngine } from "../engine/audio";
 import { Rng } from "../engine/rng";
 import { GRID, Weather, clamp, dist, dist2 } from "../engine/util";
@@ -133,6 +133,8 @@ const CIV_LIMIT = 90;
 const CAR_LIMIT = 7;
 const BLAST_R = 3.5;      // a wrecked car hurts everyone inside this radius
 const KERB_GAP = 3;       // clear length a car needs to itself at the kerb
+export const TRAIN_SEG = 1.9;   // length of one car, in tiles
+export const TRAIN_CARS = 4;    // cars in a set
 const TRAIN_DWELL = 5;    // seconds a train stands at each platform
 const TRAIN_CRUISE = 11;  // tiles a second at line speed
 const TRAIN_ACCEL = 6;    // tiles a second squared, braking and pulling away
@@ -672,12 +674,11 @@ export class World {
   cmdBoardTrain(sel: boolean[], trainId: number): void {
     const t = this.trains.find((q) => q.id === trainId);
     if (!t || t.state !== "dwell") { this.notify("TRAIN IN MOTION"); return; }
-    const at = this.trainPos(t);
     for (const a of this.selectedAgents(sel)) {
       if (a.carId !== null || a.trainId !== null) continue;
       const lvl = this.city.skytrains[t.line].level;
       if (Math.abs(a.z - lvl) > 0.2) { this.notify("REACH THE PLATFORM FIRST"); continue; }
-      if (dist2(a.x, a.y, at.x, at.y) > 3.5 * 3.5) continue;
+      if (!this.besideTrain(t, a.x, a.y)) { this.notify("STAND BESIDE THE TRAIN"); continue; }
       t.occupants.push(a.id);
       a.trainId = t.id;
       a.path = null;
@@ -695,16 +696,40 @@ export class World {
       a.trainId = null;
       // step out onto the platform beside the train
       const line = this.city.skytrains[t.line];
+      // step out sideways onto the platform, taking the nearest bit of deck
       const at = this.trainPos(t);
-      for (let d = 1; d <= 3; d++) {
-        const px = line.axis === "v" ? at.x : at.x + d - 2;
-        const py = line.axis === "v" ? at.y + d - 2 : at.y;
-        if (surfaceNear(this.city, px | 0, py | 0, line.level, 0.01) >= 0) {
-          a.x = (px | 0) + 0.5; a.y = (py | 0) + 0.5; a.z = line.level;
-          break;
-        }
+      for (const [across, along] of this.stepOffOrder()) {
+        const px = (line.axis === "v" ? at.x + across : at.x + along) | 0;
+        const py = (line.axis === "v" ? at.y + along : at.y + across) | 0;
+        if (px < 0 || py < 0 || px >= GRID || py >= GRID) continue;
+        if (surfaceNear(this.city, px, py, line.level, 0.01) < 0) continue;
+        a.x = px + 0.5; a.y = py + 0.5; a.z = line.level;
+        break;
       }
     }
+  }
+
+  // is this point alongside any car of the train, close enough to step across?
+  private besideTrain(t: Train, x: number, y: number): boolean {
+    const line = this.city.skytrains[t.line];
+    const across = Math.abs((line.axis === "v" ? x : y) - trackCentre(line));
+    if (across > 3.2) return false;
+    const along = (line.axis === "v" ? y : x) - 0.5;
+    const back = (along - t.u) * -t.dir;
+    return back > -2.2 && back < (TRAIN_CARS - 1) * TRAIN_SEG + 2.2;
+  }
+
+  // tiles to try when stepping off a train, nearest first: sideways onto the
+  // platform before anywhere else
+  private stepOffOrder(): [number, number][] {
+    const out: [number, number][] = [];
+    for (let across = 1; across <= 3; across++) {
+      for (let along = -3; along <= 3; along++) {
+        for (const sgn of [1, -1]) out.push([sgn * across, along]);
+      }
+    }
+    out.sort((p, q) => (p[0] * p[0] + p[1] * p[1]) - (q[0] * q[0] + q[1] * q[1]));
+    return out;
   }
 
   cmdExitCar(sel: boolean[]): void {
@@ -1587,11 +1612,29 @@ export class World {
   }
 
   // where a train is in the world right now
+  // the head of the train, on the track it runs on - one tile clear of the
+  // platform beside it
   trainPos(t: Train): { x: number; y: number } {
     const line = this.city.skytrains[t.line];
-    return line.axis === "v"
-      ? { x: line.pos + 1.5, y: t.u + 0.5 }
-      : { x: t.u + 0.5, y: line.pos + 1.5 };
+    const across = trackCentre(line);
+    return line.axis === "v" ? { x: across, y: t.u + 0.5 } : { x: t.u + 0.5, y: across };
+  }
+
+  // Which train, if any, stands over this point at this height? Used to turn a
+  // tap on a train's body into an order to board it, and a tap anywhere else
+  // into an order to get off.
+  trainAtPoint(x: number, y: number, z: number): Train | null {
+    for (const t of this.trains) {
+      const line = this.city.skytrains[t.line];
+      if (Math.abs(line.level - z) > 0.3) continue;
+      const across = (line.axis === "v" ? x : y) - trackCentre(line);
+      if (Math.abs(across) > 0.6) continue;
+      const along = (line.axis === "v" ? y : x) - 0.5;
+      const back = (along - t.u) * -t.dir;       // 0 at the nose, growing toward the tail
+      if (back < -1 || back > (TRAIN_CARS - 1) * TRAIN_SEG + 1) continue;
+      return t;
+    }
+    return null;
   }
 
   private updateTrain(t: Train, dt: number): void {

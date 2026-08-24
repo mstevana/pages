@@ -199,3 +199,32 @@ Stairs used to be dropped wholesale whenever the section sat at or below
 street level, which is why nothing underground appeared to have any. They
 are clipped now instead, so a subway entrance shows the part of itself
 below the plane.
+
+## Stations and trains
+
+A skytrain line follows an avenue. `trackCentre(line)` is the one place that
+says where its track runs across that avenue: a viaduct sits over the first
+lane, a subway tunnel is bored under the middle. Everything that has to agree
+on where a train actually is -- the renderer, `trainPos`, the tap hit test --
+reads it, because the two kinds of line do not share an offset and hardcoding
+either one puts the other train inside the earth.
+
+The platform is ten tiles along the track and two across it, on the lane
+beside the viaduct. It is drawn one tile at a time, each in its own depth
+bucket: as a single entity a ten-tile slab lands in one bucket, and a train
+alongside it then sorts in front of the whole platform or behind the whole
+platform rather than interleaving with it. That is what made trains look
+wrong at stations -- along with the train being drawn down the platform's
+own column instead of over its track.
+
+Its track edge carries a painted line rather than a railing, so nothing
+stands between the squad and the train they are about to board.
+
+A tap is hit-tested against the train's body as a solid object, at the
+track's height and again a little above it so tapping a car's roof counts.
+Tap the train to board, tap anywhere else to get off, and tapping the train
+you are already riding does nothing.
+
+Anything measuring a station in a test needs a search radius that matches the
+platform, not the old five-tile one; and converting a train's position to a
+tile takes `Math.floor`, not `Math.round` -- a track centre sits at x.5.

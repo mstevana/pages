@@ -2,13 +2,13 @@
 // blocks correctly occlude people and cars behind them. Also draws the static
 // street furniture (fences, doors, pit rails) and the elevated skytrain.
 
-import { City, Deco, Fitting, Prop, StairRun, Station, TRAIN_LEVEL, surfaceUnder, T_BUILDING, T_GROUND, T_ISLAND, T_PARK, T_PIT, T_ROAD, T_SIDEWALK, T_WALL, D_S, D_W, idx, inGrid, isRoad } from "../city/citygen";
+import { City, D_S, D_W, Deco, Fitting, idx, inGrid, isRoad, PLATFORM_LONG, PLATFORM_WIDE, Prop, StairRun, surfaceUnder, T_BUILDING, T_GROUND, T_ISLAND, T_PARK, T_PIT, T_ROAD, T_SIDEWALK, T_WALL, trackCentre, TRAIN_LEVEL } from "../city/citygen";
 import { GRID, STORY_H, TILE_H, TILE_W, isNight, isRain, isoX, isoY } from "../engine/util";
 import { PeopleAtlas, FW, FH } from "../sprites/people";
 import { BENCH_H, BENCH_W, STALL_H, STALL_W, TREE_H, TREE_W } from "../sprites/props";
 import { CAR_MODELS } from "../sprites/cars";
 import { TileArt } from "../sprites/tiles";
-import { Car, Ped, World } from "../game/world";
+import { Car, Ped, TRAIN_CARS, TRAIN_SEG, World } from "../game/world";
 import { ITEMS } from "../game/items";
 import { ICON_SIZE, itemIcons } from "../sprites/icons";
 
@@ -21,13 +21,24 @@ const TRAIN_ELEV = TRAIN_LEVEL * STORY_H;   // px above ground at zoom 1
 const SECTION_LIP = 5;   // px of wall left standing above a sectioned floor
 const PED_SCALE = 1.2;   // people vs the 30px story: roughly one story tall
 
+// One tile of station platform. Split per tile because a ten-tile slab drawn
+// as a single entity lands in one depth bucket, and then a train alongside it
+// sorts in front of the whole thing or behind the whole thing.
+interface PlatTile {
+  x: number; y: number;
+  axis: "v" | "h";
+  du: number;      // 0..PLATFORM_LONG-1 along the track
+  dv: number;      // 0 track side, PLATFORM_WIDE-1 outer edge
+  level: number;
+}
+
 interface Entity {
   s: number;    // depth key = tx + ty
   pri: number;  // within-bucket order: 0 elevated structure, 1 ground, 2 trains
-  kind: "ped" | "car" | "drop" | "lamp" | "fence" | "pylon" | "deck" | "train" | "prop" | "stair" | "station" | "fitting";
+  kind: "ped" | "car" | "drop" | "lamp" | "fence" | "pylon" | "deck" | "train" | "prop" | "stair" | "platform" | "fitting";
   fitting?: Fitting;
   stair?: StairRun;
-  station?: Station;
+  plat?: PlatTile;
   ped?: Ped;
   car?: Car;
   drop?: { x: number; y: number; item: { type: string } };
@@ -59,6 +70,7 @@ export class Renderer {
   readonly maxStories: number;    // ceiling of the tallest building in the sector
   readonly minLevel: number;      // floor of the deepest surface under the street
   private stairs: StairRun[] = [];
+  private platforms: PlatTile[] = [];
   // the cut plane in force this frame, for pieces drawn away from the block pass
   private secOn = false;
   private secAt = 0;
@@ -113,6 +125,7 @@ export class Renderer {
     }
     this.buildFences();
     this.buildDecks();
+    this.buildPlatforms();
   }
 
   private buildFences(): void {
@@ -144,6 +157,23 @@ export class Renderer {
 
   private buildStairs(): void {
     this.stairs = this.city.stairRuns;
+  }
+
+  private buildPlatforms(): void {
+    for (const st of this.city.stations) {
+      if (st.level < 0) continue;                 // concourses draw with the sublevel
+      const line = this.city.skytrains[st.line];
+      const acrossBase = line.pos + 1;            // the track itself is at line.pos
+      for (let du = 0; du < PLATFORM_LONG; du++) {
+        for (let dv = 0; dv < PLATFORM_WIDE; dv++) {
+          const a = st.u - (PLATFORM_LONG >> 1) + du;
+          const x = line.axis === "v" ? acrossBase + dv : a;
+          const y = line.axis === "v" ? a : acrossBase + dv;
+          if (!inGrid(x, y)) continue;
+          this.platforms.push({ x, y, axis: line.axis, du, dv, level: st.level });
+        }
+      }
+    }
   }
 
   private buildDecks(): void {
@@ -326,11 +356,10 @@ export class Renderer {
       if (!shown(c.z)) continue;
       push({ s: Math.floor(c.x) + Math.floor(c.y), pri: 1, kind: "car", car: c, x: c.x, y: c.y });
     }
-    for (const st of this.city.stations) {
-      if (st.level < 0) continue;                 // concourses draw with the sublevel
-      if (sectioned && st.level >= section) continue;
-      if (st.x < x0 - 3 || st.x > x1 + 3 || st.y < y0 - 3 || st.y > y1 + 3) continue;
-      push({ s: Math.floor(st.x) + Math.floor(st.y), pri: 0, kind: "station", x: st.x, y: st.y, station: st });
+    for (const pt of this.platforms) {
+      if (sectioned && pt.level >= section) continue;
+      if (pt.x < x0 - 1 || pt.x > x1 + 1 || pt.y < y0 - 1 || pt.y > y1 + 1) continue;
+      push({ s: pt.x + pt.y, pri: 0, kind: "platform", x: pt.x + 0.5, y: pt.y + 0.5, plat: pt });
     }
     for (const ft of this.city.fittings) {
       if (ft.x < x0 - 2 || ft.x > x1 + 2 || ft.y < y0 - 2 || ft.y > y1 + 2) continue;
@@ -367,7 +396,7 @@ export class Renderer {
     }
     // trains: real ones now, running the timetable the world keeps for them
     {
-      const segLen = 1.9, nSeg = 4;
+      const segLen = TRAIN_SEG, nSeg = TRAIN_CARS;
       for (const t of world.trains) {
         const line = this.city.skytrains[t.line];
         if (sectioned && line.level >= section + 0.01) continue;
@@ -375,8 +404,9 @@ export class Renderer {
         for (let k = 0; k < nSeg; k++) {
           const u = t.u - t.dir * k * segLen;
           if (u < -2 || u > GRID + 2) continue;
-          const wx = line.axis === "v" ? line.pos + 1.5 : u + 0.5;
-          const wy = line.axis === "v" ? u + 0.5 : line.pos + 1.5;
+          const across = trackCentre(line);
+          const wx = line.axis === "v" ? across : u + 0.5;
+          const wy = line.axis === "v" ? u + 0.5 : across;
           if (wx < x0 || wx > x1 || wy < y0 || wy > y1) continue;
           const angle = line.axis === "v" ? Math.atan2(t.dir, 0) : Math.atan2(0, t.dir);
           push({ s: Math.floor(wx) + Math.floor(wy), pri: 2, kind: "train", x: wx, y: wy,
@@ -959,8 +989,8 @@ export class Renderer {
       this.drawFitting(g, e.fitting, SX, SY, z, art, time);
       return;
     }
-    if (e.kind === "station" && e.station) {
-      this.drawStation(g, e.station, SX, SY, z, art);
+    if (e.kind === "platform" && e.plat) {
+      this.drawPlatform(g, e.plat, SX, SY, z, art);
       return;
     }
     if (e.kind === "stair" && e.stair) {
@@ -1122,47 +1152,69 @@ export class Renderer {
 
   // A platform: the deck widened either side of the track, railed along both
   // edges and lit, so a stop is legible from street level.
-  private drawStation(
-    g: CanvasRenderingContext2D, st: Station,
+  private drawPlatform(
+    g: CanvasRenderingContext2D, p: PlatTile,
     SX: (x: number, y: number) => number, SY: (x: number, y: number) => number, z: number, art: TileArt
   ): void {
-    const line = this.city.skytrains[st.line];
-    const along = line.axis === "v" ? { x: 0, y: 1 } : { x: 1, y: 0 };
-    const half = 2.5;
-    const lift = TRAIN_ELEV * z;
-    const P = (du: number, dv: number) => {
-      const wx = st.x + along.x * du + along.y * dv;
-      const wy = st.y + along.y * du + along.x * dv;
-      return [SX(wx, wy), SY(wx, wy) - lift] as [number, number];
+    const lift = p.level * STORY_H * z;
+    // du runs along the track, dv across it; both 0..1 within this one tile
+    const P = (du: number, dv: number): [number, number] => {
+      const wx = p.axis === "v" ? p.x + dv : p.x + du;
+      const wy = p.axis === "v" ? p.y + du : p.y + dv;
+      return [SX(wx, wy), SY(wx, wy) - lift];
     };
-    // the deck slab
-    const c1 = P(-half, -0.8), c2 = P(half, -0.8), c3 = P(half, 0.8), c4 = P(-half, 0.8);
+    const a = P(0, 0), b = P(1, 0), c = P(1, 1), d = P(0, 1);
+    // the slab, with a skirt down its two camera-facing edges for thickness
+    const skirt = 6 * z;
+    g.fillStyle = art.night ? "#232830" : "#3d434c";
+    for (const [q, r] of [[b, c], [c, d]] as [number, number][][]) {
+      g.beginPath();
+      g.moveTo(q[0], q[1]); g.lineTo(r[0], r[1]);
+      g.lineTo(r[0], r[1] + skirt); g.lineTo(q[0], q[1] + skirt);
+      g.closePath(); g.fill();
+    }
     g.fillStyle = art.night ? "#2b3038" : "#4a515c";
     g.beginPath();
-    g.moveTo(c1[0], c1[1]); g.lineTo(c2[0], c2[1]); g.lineTo(c3[0], c3[1]); g.lineTo(c4[0], c4[1]);
+    g.moveTo(a[0], a[1]); g.lineTo(b[0], b[1]); g.lineTo(c[0], c[1]); g.lineTo(d[0], d[1]);
     g.closePath(); g.fill();
-    g.strokeStyle = art.night ? "#4d5765" : "#6d7683";
-    g.lineWidth = Math.max(1, z);
+    g.strokeStyle = art.night ? "#3a414b" : "#5c6470";
+    g.lineWidth = Math.max(1, 0.7 * z);
     g.stroke();
-    // railings down both long edges
-    for (const dv of [-0.8, 0.8]) {
+
+    const post = (q: [number, number], h: number) => {
       g.strokeStyle = art.night ? "#5a6472" : "#818b99";
       g.lineWidth = Math.max(1, 0.9 * z);
-      const a = P(-half, dv), b = P(half, dv);
+      g.beginPath(); g.moveTo(q[0], q[1]); g.lineTo(q[0], q[1] - h); g.stroke();
+    };
+    const rail = (q: [number, number], r: [number, number], h: number) => {
+      g.strokeStyle = art.night ? "#5a6472" : "#818b99";
+      g.lineWidth = Math.max(1, 0.9 * z);
       g.beginPath();
-      g.moveTo(a[0], a[1] - 7 * z); g.lineTo(b[0], b[1] - 7 * z);
+      g.moveTo(q[0], q[1] - h); g.lineTo(r[0], r[1] - h);
+      g.moveTo(q[0], q[1] - h * 0.5); g.lineTo(r[0], r[1] - h * 0.5);
       g.stroke();
-      for (let u = -half; u <= half; u += 1.25) {
-        const q = P(u, dv);
-        g.beginPath(); g.moveTo(q[0], q[1]); g.lineTo(q[0], q[1] - 7 * z); g.stroke();
-      }
+      post(q, h); post(r, h);
+    };
+    const H = 8 * z;
+    if (p.dv === 0) {
+      // the track edge: no railing to stand between the squad and the train,
+      // just the painted line you are told not to cross
+      g.strokeStyle = art.night ? "#8a7a24" : "#d8c341";
+      g.lineWidth = Math.max(1, 1.6 * z);
+      const e0 = P(0, 0.16), e1 = P(1, 0.16);
+      g.beginPath(); g.moveTo(e0[0], e0[1]); g.lineTo(e1[0], e1[1]); g.stroke();
     }
-    // a lamp at each end, and the glow it throws
-    for (const u of [-half + 0.4, half - 0.4]) {
-      const q = P(u, 0);
+    if (p.dv === PLATFORM_WIDE - 1) rail(P(0, 1), P(1, 1), H);
+    if (p.du === 0) rail(P(0, 0), P(0, 1), H);
+    if (p.du === PLATFORM_LONG - 1) rail(P(1, 0), P(1, 1), H);
+    // lamps down the back edge
+    if (p.dv === PLATFORM_WIDE - 1 && p.du % 3 === 1) {
+      const q = P(0.5, 0.8);
+      g.fillStyle = art.night ? "#3c434e" : "#5a626e";
+      g.fillRect(q[0] - 0.8 * z, q[1] - 15 * z, 1.6 * z, 15 * z);
       g.fillStyle = art.night ? "#ffe9a8" : "#d8d2a0";
-      g.fillRect(q[0] - 1.6 * z, q[1] - 13 * z, 3.2 * z, 2.4 * z);
-      this.glow(q[0], q[1] - 12 * z, 13 * z, "#ffe9a8", art.night ? 0.5 : 0.12);
+      g.fillRect(q[0] - 2 * z, q[1] - 17 * z, 4 * z, 2.4 * z);
+      this.glow(q[0], q[1] - 15 * z, 14 * z, "#ffe9a8", art.night ? 0.45 : 0.1);
     }
   }
 
