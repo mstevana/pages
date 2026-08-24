@@ -1,7 +1,7 @@
 // The live mission world: pedestrians, cops, enemy agents, cars, projectiles,
 // dropped items, objectives, and all the AI that drives them.
 
-import { City, Kerb, Station, TRAIN_LEVEL, T_ROAD, kerbAt, surfaceNear, DBIT, DX, DY, idx, inGrid, isRoad, isWalkable } from "../city/citygen";
+import { City, GARAGE_LEVEL, Kerb, Station, TRAIN_LEVEL, T_ROAD, kerbAt, surfaceNear, DBIT, DX, DY, idx, inGrid, isRoad, isWalkable } from "../city/citygen";
 import { AudioEngine } from "../engine/audio";
 import { Rng } from "../engine/rng";
 import { GRID, Weather, clamp, dist, dist2 } from "../engine/util";
@@ -58,6 +58,7 @@ export interface Ped {
 export interface Car {
   id: number;
   x: number; y: number;
+  z: number;              // the level it stands on: 0 street, negative in a garage
   angle: number;          // rendered angle in *screen* space
   dir: number;            // current lane dir 0..3 (N,E,S,W)
   speed: number;
@@ -217,6 +218,21 @@ export class World {
       });
     }
 
+    // the garages are not empty: a few cars stand on each floor
+    for (const gar of city.garages) {
+      const n = Math.max(2, Math.min(6, Math.floor((gar.w * gar.h) / 9)));
+      for (let k = 0; k < n; k++) {
+        const gx = gar.x + 1 + this.rng.int(0, Math.max(0, gar.w - 3));
+        const gy = gar.y + 1 + this.rng.int(0, Math.max(0, gar.h - 3));
+        if (surfaceNear(city, gx, gy, GARAGE_LEVEL, 0.01) < 0) continue;
+        const car = this.spawnCar(gx + 0.5, gy + 0.5, this.rng.chance(0.5) ? 1 : 2);
+        car.state = "parked";
+        car.pilotOut = true;
+        car.z = GARAGE_LEVEL;
+        car.angle = this.rng.chance(0.5) ? 0 : Math.PI / 2;
+      }
+    }
+
     // a car or two per block starts the mission standing at the kerb, on
     // whichever stretch of pavement the block happens to offer
     for (const k of this.pickKerbs(2)) this.parkCarAt(k);
@@ -363,7 +379,7 @@ export class World {
 
   spawnCar(x: number, y: number, dir: number): Car {
     const car: Car = {
-      id: nextId++, x, y, angle: Math.atan2(DY[dir], DX[dir]), dir, speed: 0,
+      id: nextId++, x, y, z: 0, angle: Math.atan2(DY[dir], DX[dir]), dir, speed: 0,
       model: this.rng.int(0, 23), glide: null,
       hp: 90, state: "drive", path: null, pathIdx: 0, pilotOut: false, occupants: [], waitT: 0,
     };
@@ -575,7 +591,7 @@ export class World {
   private kerbTaken(k: Kerb, selfId: number): boolean {
     const R2 = KERB_GAP * KERB_GAP;
     for (const o of this.cars) {
-      if (o.id === selfId || o.state === "wreck") continue;
+      if (o.id === selfId || o.state === "wreck" || o.z !== 0) continue;
       if ((o.state === "parked" || o.state === "docking")
           && dist2(o.x, o.y, k.px, k.py) < R2) return true;
       if (o.glide && dist2(o.glide.x, o.glide.y, k.px, k.py) < R2) return true;
@@ -658,7 +674,8 @@ export class World {
     const at = this.trainPos(t);
     for (const a of this.selectedAgents(sel)) {
       if (a.carId !== null || a.trainId !== null) continue;
-      if (Math.abs(a.z - TRAIN_LEVEL) > 0.2) { this.notify("REACH THE PLATFORM FIRST"); continue; }
+      const lvl = this.city.skytrains[t.line].level;
+      if (Math.abs(a.z - lvl) > 0.2) { this.notify("REACH THE PLATFORM FIRST"); continue; }
       if (dist2(a.x, a.y, at.x, at.y) > 3.5 * 3.5) continue;
       t.occupants.push(a.id);
       a.trainId = t.id;
@@ -681,8 +698,8 @@ export class World {
       for (let d = 1; d <= 3; d++) {
         const px = line.axis === "v" ? at.x : at.x + d - 2;
         const py = line.axis === "v" ? at.y + d - 2 : at.y;
-        if (surfaceNear(this.city, px | 0, py | 0, TRAIN_LEVEL, 0.01) >= 0) {
-          a.x = (px | 0) + 0.5; a.y = (py | 0) + 0.5; a.z = TRAIN_LEVEL;
+        if (surfaceNear(this.city, px | 0, py | 0, line.level, 0.01) >= 0) {
+          a.x = (px | 0) + 0.5; a.y = (py | 0) + 0.5; a.z = line.level;
           break;
         }
       }
@@ -891,7 +908,7 @@ export class World {
     const fx = Math.cos(c.angle), fy = Math.sin(c.angle);
     let near: Car | null = null;
     for (const o of this.cars) {
-      if (o === c || o.state === "wreck") continue;
+      if (o === c || o.state === "wreck" || o.z !== 0) continue;
       // a car sitting on the kerb is scenery, not an obstacle in the lane
       if (!isRoad(this.city, o.x | 0, o.y | 0)) continue;
       const relx = o.x - c.x, rely = o.y - c.y;
@@ -1616,7 +1633,7 @@ export class World {
       const at = this.trainPos(t);
       for (const oid of t.occupants) {
         const rider = this.peds.find((q) => q.id === oid);
-        if (rider) { rider.x = at.x; rider.y = at.y; rider.z = TRAIN_LEVEL; rider.path = null; }
+        if (rider) { rider.x = at.x; rider.y = at.y; rider.z = this.city.skytrains[t.line].level; rider.path = null; }
       }
     }
   }

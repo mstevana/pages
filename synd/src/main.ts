@@ -150,6 +150,7 @@ function buildMission(): void {
   notices = [{ text: world.mission.text.split(".")[0].toUpperCase(), t: 5 }];
   endTimer = 0;
   world.uiSelected = [true, true, true, true];
+  audio.setTrack(p.seed + save.mission);
   screens.clearScreens();
   audio.rain(isRain(p.weather));
   state = "mission";
@@ -556,6 +557,8 @@ requestAnimationFrame(frame);
   screenToWorld,
   get section() { return sectionLevel; },
   get sliderMin() { return slider ? slider.minLevel : 0; },
+  setSection(v: number) { sectionLevel = v; },
+  audio,
 };
 
 // ---------- boot ----------

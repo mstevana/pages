@@ -2,7 +2,7 @@
 // blocks correctly occlude people and cars behind them. Also draws the static
 // street furniture (fences, doors, pit rails) and the elevated skytrain.
 
-import { City, Deco, Prop, Station, TRAIN_LEVEL, surfaceUnder, T_BUILDING, T_GROUND, T_ISLAND, T_PARK, T_PIT, T_ROAD, T_SIDEWALK, T_WALL, D_S, D_W, idx, inGrid, isRoad } from "../city/citygen";
+import { City, Deco, Fitting, Prop, Station, TRAIN_LEVEL, surfaceUnder, T_BUILDING, T_GROUND, T_ISLAND, T_PARK, T_PIT, T_ROAD, T_SIDEWALK, T_WALL, D_S, D_W, idx, inGrid, isRoad } from "../city/citygen";
 import { GRID, STORY_H, TILE_H, TILE_W, isNight, isRain, isoX, isoY } from "../engine/util";
 import { PeopleAtlas, FW, FH } from "../sprites/people";
 import { BENCH_H, BENCH_W, STALL_H, STALL_W, TREE_H, TREE_W } from "../sprites/props";
@@ -24,7 +24,8 @@ const PED_SCALE = 1.2;   // people vs the 30px story: roughly one story tall
 interface Entity {
   s: number;    // depth key = tx + ty
   pri: number;  // within-bucket order: 0 elevated structure, 1 ground, 2 trains
-  kind: "ped" | "car" | "drop" | "lamp" | "fence" | "pylon" | "deck" | "train" | "prop" | "stair" | "station";
+  kind: "ped" | "car" | "drop" | "lamp" | "fence" | "pylon" | "deck" | "train" | "prop" | "stair" | "station" | "fitting";
+  fitting?: Fitting;
   stair?: { x: number; y: number; rx: number; ry: number; h: number; base: number };
   station?: Station;
   ped?: Ped;
@@ -43,7 +44,7 @@ interface FenceEdge {
   hazard: boolean;       // yellow pit railing vs park fence
 }
 
-interface TrainSeg { wx: number; wy: number; angle: number; head: boolean; }
+interface TrainSeg { wx: number; wy: number; angle: number; head: boolean; lift: number; }
 
 interface DeckTile { x: number; y: number; axis: "v" | "h"; pylon: boolean; }
 
@@ -154,6 +155,7 @@ export class Renderer {
 
   private buildDecks(): void {
     for (const line of this.city.skytrains) {
+      if (line.level < 0) continue;               // a subway needs no viaduct
       if (line.axis === "v") {
         for (let y = 1; y < GRID - 1; y++) {
           this.decks.push({ x: line.pos, y, axis: "v", pylon: y % 5 === 2 });
@@ -241,6 +243,27 @@ export class Renderer {
           g.lineTo(sx, sy + th / 2);
           g.closePath();
           g.fill();
+          if (floor < 0) continue;
+          // Where a hollow meets the earth, stand a wall up from the floor, so
+          // a garage or a concourse reads as a room instead of a stain.
+          const fzz = this.city.levels.z[floor];
+          for (const [dx2, dy2, near] of [[-1, 0, false], [0, -1, false], [1, 0, true], [0, 1, true]] as const) {
+            const nb = surfaceUnder(this.city, tx + dx2, ty + dy2, section);
+            if (nb >= 0 && Math.abs(this.city.levels.z[nb] - fzz) < 0.01) continue;
+            const wallH = 9 * z;
+            const a1: [number, number] = dx2 === -1 ? [sx, sy + th / 2] : dy2 === -1 ? [sx + tw / 2, sy]
+                     : dx2 === 1 ? [sx + tw, sy + th / 2] : [sx + tw / 2, sy + th];
+            const a2: [number, number] = dx2 === -1 ? [sx + tw / 2, sy + th] : dy2 === -1 ? [sx + tw, sy + th / 2]
+                     : dx2 === 1 ? [sx + tw / 2, sy + th] : [sx, sy + th / 2];
+            g.fillStyle = near ? "#20242c" : "#161a20";
+            g.beginPath();
+            g.moveTo(a1[0], a1[1]);
+            g.lineTo(a2[0], a2[1]);
+            g.lineTo(a2[0], a2[1] - wallH);
+            g.lineTo(a1[0], a1[1] - wallH);
+            g.closePath();
+            g.fill();
+          }
         }
       }
     }
@@ -290,7 +313,11 @@ export class Renderer {
     // Anything standing above the section plane has been cut away with the
     // storey it stood on. A living agent is the exception: the squad stays
     // drawn whatever the plane, so it can never be lost behind the view.
-    const shown = (ez: number) => !sectioned || ez <= section + 0.01;
+    // Anything under the street is only drawn once the plane has cut down to
+    // it; on the surface view the ground hides it, as ground does.
+    const shown = (ez: number) => ez < -0.01
+      ? sectioned && ez <= section + 0.01
+      : !sectioned || ez <= section + 0.01;
     for (const p of world.peds) {
       if (p.carId !== null || p.x < x0 || p.x > x1 || p.y < y0 || p.y > y1) continue;
       // Height needs no depth trickery: entities flush after the columns of
@@ -302,13 +329,19 @@ export class Renderer {
     }
     for (const c of world.cars) {
       if (c.x < x0 || c.x > x1 || c.y < y0 || c.y > y1) continue;
-      if (!shown(0)) continue;
+      if (!shown(c.z)) continue;
       push({ s: Math.floor(c.x) + Math.floor(c.y), pri: 1, kind: "car", car: c, x: c.x, y: c.y });
     }
     for (const st of this.city.stations) {
-      if (sectioned && TRAIN_LEVEL >= section) break;
+      if (st.level < 0) continue;                 // concourses draw with the sublevel
+      if (sectioned && st.level >= section) continue;
       if (st.x < x0 - 3 || st.x > x1 + 3 || st.y < y0 - 3 || st.y > y1 + 3) continue;
       push({ s: Math.floor(st.x) + Math.floor(st.y), pri: 0, kind: "station", x: st.x, y: st.y, station: st });
+    }
+    for (const ft of this.city.fittings) {
+      if (ft.x < x0 - 2 || ft.x > x1 + 2 || ft.y < y0 - 2 || ft.y > y1 + 2) continue;
+      if (!shown(ft.z)) continue;
+      push({ s: ft.x + ft.y, pri: 1, kind: "fitting", x: ft.x + 0.5, y: ft.y + 0.5, fitting: ft });
     }
     for (const fs of this.stairs) {
       if (fs.x < x0 || fs.x > x1 || fs.y < y0 || fs.y > y1) continue;
@@ -339,10 +372,12 @@ export class Renderer {
       push({ s: d.x + d.y, pri: 0, kind: "deck", x: d.x + 1, y: d.y + (d.axis === "v" ? 0.5 : 1), deckAxis: d.axis });
     }
     // trains: real ones now, running the timetable the world keeps for them
-    if (!(sectioned && TRAIN_LEVEL >= section)) {
+    {
       const segLen = 1.9, nSeg = 4;
       for (const t of world.trains) {
         const line = this.city.skytrains[t.line];
+        if (sectioned && line.level >= section + 0.01) continue;
+        if (!sectioned && line.level < 0) continue;      // underground unless cut open
         for (let k = 0; k < nSeg; k++) {
           const u = t.u - t.dir * k * segLen;
           if (u < -2 || u > GRID + 2) continue;
@@ -351,7 +386,7 @@ export class Renderer {
           if (wx < x0 || wx > x1 || wy < y0 || wy > y1) continue;
           const angle = line.axis === "v" ? Math.atan2(t.dir, 0) : Math.atan2(0, t.dir);
           push({ s: Math.floor(wx) + Math.floor(wy), pri: 2, kind: "train", x: wx, y: wy,
-                 train: { wx, wy, angle, head: k === 0 } });
+                 train: { wx, wy, angle, head: k === 0, lift: line.level * STORY_H } });
         }
       }
     }
@@ -917,6 +952,10 @@ export class Renderer {
     g: CanvasRenderingContext2D, e: Entity, world: World, art: TileArt, people: PeopleAtlas,
     SX: (x: number, y: number) => number, SY: (x: number, y: number) => number, z: number, time: number
   ): void {
+    if (e.kind === "fitting" && e.fitting) {
+      this.drawFitting(g, e.fitting, SX, SY, z, art, time);
+      return;
+    }
     if (e.kind === "station" && e.station) {
       this.drawStation(g, e.station, SX, SY, z, art);
       return;
@@ -995,6 +1034,89 @@ export class Renderer {
   // A fire escape bolted to the flank: a zig-zag of landings and flights from
   // the pavement to the parapet, drawn along the tile edge it shares with the
   // building so it reads as attached rather than free-standing.
+  // The furniture of an underground concourse. Everything is built from the
+  // same lit box so a hall reads as a parade of frontages: what changes is the
+  // height, the colour of the light and what is written across it.
+  private drawFitting(
+    g: CanvasRenderingContext2D, f: Fitting,
+    SX: (x: number, y: number) => number, SY: (x: number, y: number) => number, z: number,
+    art: TileArt, time: number
+  ): void {
+    const lift = f.z * STORY_H * z;
+    const cx = SX(f.x + 0.5, f.y + 0.5), cy = SY(f.x + 0.5, f.y + 0.5) - lift;
+    const tw = TILE_W * z, th = TILE_H * z;
+    const box = (h: number, body: string, top: string) => {
+      const hh = h * z;
+      g.fillStyle = body;
+      g.beginPath();
+      g.moveTo(cx - tw / 2, cy);
+      g.lineTo(cx, cy + th / 2);
+      g.lineTo(cx + tw / 2, cy);
+      g.lineTo(cx + tw / 2, cy - hh);
+      g.lineTo(cx, cy + th / 2 - hh);
+      g.lineTo(cx - tw / 2, cy - hh);
+      g.closePath();
+      g.fill();
+      g.fillStyle = top;
+      g.beginPath();
+      g.moveTo(cx, cy - th / 2 - hh);
+      g.lineTo(cx + tw / 2, cy - hh);
+      g.lineTo(cx, cy + th / 2 - hh);
+      g.lineTo(cx - tw / 2, cy - hh);
+      g.closePath();
+      g.fill();
+    };
+    const sign = (col: string, h: number, w: number) => {
+      g.fillStyle = col;
+      g.fillRect(cx - w / 2, cy - h * z, w, 3.2 * z);
+      this.glow(cx, cy - h * z, 11 * z, col, 0.45);
+    };
+    const flick = 0.75 + 0.25 * Math.sin(time * 3 + f.x * 1.7 + f.y);
+    switch (f.kind) {
+      case "ticket":                                   // the ticket hall
+        box(13, "#2a3140", "#39424f");
+        sign(`rgba(120,210,255,${flick})`, 12, tw * 0.62);
+        break;
+      case "shop": {
+        box(12, "#242a35", "#333b47");
+        const cols = ["#ff5fa8", "#5fe0ff", "#ffd166", "#a6ff6b"];
+        sign(cols[f.variant % cols.length], 11.5, tw * 0.7);
+        // a lit window under the sign
+        g.fillStyle = art.night ? "#f4f6ff" : "#e8ecf6";
+        g.globalAlpha = 0.75;
+        g.fillRect(cx - tw * 0.26, cy - 7 * z, tw * 0.52, 4.5 * z);
+        g.globalAlpha = 1;
+        break;
+      }
+      case "food": {
+        box(12, "#2b2330", "#3a3040");
+        const cols = ["#ff8a3d", "#ffd166", "#ff5f5f", "#c06bff"];
+        sign(cols[f.variant % cols.length], 11.5, tw * 0.66);
+        // counter and stools
+        g.fillStyle = "#5a4a3a";
+        g.fillRect(cx - tw * 0.3, cy - 2 * z, tw * 0.6, 2 * z);
+        break;
+      }
+      case "bench":
+        g.fillStyle = "#3d4450";
+        g.fillRect(cx - tw * 0.28, cy - 3.4 * z, tw * 0.56, 1.6 * z);
+        g.fillStyle = "#2a3038";
+        g.fillRect(cx - tw * 0.24, cy - 1.8 * z, 1.6 * z, 1.8 * z);
+        g.fillRect(cx + tw * 0.24 - 1.6 * z, cy - 1.8 * z, 1.6 * z, 1.8 * z);
+        break;
+      case "map":
+        box(8, "#232a34", "#2f3742");
+        sign("rgba(120,255,190,0.9)", 7.5, tw * 0.4);
+        break;
+      case "column":
+        g.fillStyle = "#39414d";
+        g.fillRect(cx - 2.6 * z, cy - 14 * z, 5.2 * z, 14 * z);
+        g.fillStyle = "#4a5462";
+        g.fillRect(cx - 3.4 * z, cy - 15 * z, 6.8 * z, 1.6 * z);
+        break;
+    }
+  }
+
   // A platform: the deck widened either side of the track, railed along both
   // edges and lit, so a stop is legible from street level.
   private drawStation(
@@ -1240,7 +1362,7 @@ export class Renderer {
     };
 
     const L = 0.86, W = 0.3;
-    const elev = TRAIN_ELEV * z;
+    const elev = t.lift * z;
     const h0 = elev + 2.5 * z;   // maglev gap above the deck
     const h1 = elev + 13 * z;    // roof
     const body = night ? "#46525e" : "#828c98";
@@ -1320,7 +1442,7 @@ export class Renderer {
     const rx = -fy, ry = fx;
     const px = (df: number, dr: number, lift: number): [number, number] => {
       const wx = c.x + fx * df + rx * dr, wy = c.y + fy * df + ry * dr;
-      return [SX(wx, wy), SY(wx, wy) - lift];
+      return [SX(wx, wy), SY(wx, wy) - lift - c.z * STORY_H * z];
     };
     const quad = (pts: [number, number][], col: string) => {
       g.fillStyle = col;
@@ -1393,7 +1515,7 @@ export class Renderer {
 
     // ---- shadow, oriented along the projected body axis ----
     const L = m.L, W = m.W;
-    const sx = SX(c.x, c.y), sy = SY(c.x, c.y);
+    const sx = SX(c.x, c.y), sy = SY(c.x, c.y) - c.z * STORY_H * z;
     const nose = px(L, 0, 0), tail = px(-L, 0, 0);
     const bodyAngle = Math.atan2(nose[1] - tail[1], nose[0] - tail[0]);
     const bodyLen = Math.hypot(nose[0] - tail[0], nose[1] - tail[1]);

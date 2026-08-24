@@ -19,7 +19,10 @@ export const T_PIT = 7;
 export const TRAIN_LEVEL = 2.125;
 // Underground levels are negative storeys. Like TRAIN_LEVEL these are chosen
 // to be exact in float32 so a height read back out of the model compares equal.
-export const TUNNEL_LEVEL = -1.5;
+export const GARAGE_LEVEL = -1;    // parking under the buildings
+export const SUBWAY_LEVEL = -2;    // the underground railway and its stations
+const HALL_LONG = 6;               // a concourse reaches this far along the line
+const HALL_WIDE = 3;               // ...and this far either side of the track
 const PLATFORM_HALF = 2;              // platform reaches this far each way      // sunken excavation/vent shaft (blocks movement, not bullets)
 
 // building facade styles
@@ -40,6 +43,16 @@ export interface Deco {
   level: number;             // story on the wall (0-based)
 }
 
+// A fixture in an underground concourse: the things that make a station read
+// as a place rather than a corridor.
+export interface Fitting {
+  x: number; y: number;
+  z: number;
+  kind: "ticket" | "shop" | "food" | "bench" | "map" | "column";
+  variant: number;
+  facing: number;            // 0..3, which way it turns
+}
+
 export interface Prop {
   x: number; y: number;      // tile the prop stands on
   kind: "tree" | "bench" | "stall";
@@ -50,6 +63,7 @@ export interface Skytrain {
   axis: "v" | "h";
   pos: number;               // x (axis v) or y (axis h) of the left/top lane tile
   stops: number[];           // distance along the line of each station, in order
+  level: number;             // height the line runs at: elevated, or under the street
 }
 
 // A station: a stretch of platform beside the track with a stair down to the
@@ -58,6 +72,7 @@ export interface Station {
   line: number;              // index into City.skytrains
   u: number;
   x: number; y: number;      // centre of the platform
+  level: number;             // the height its platform sits at
 }
 
 export interface City {
@@ -77,6 +92,8 @@ export interface City {
   hRoads: number[];          // y of top lane of each horizontal avenue
   skytrains: Skytrain[];     // elevated rail lines running above avenues
   stations: Station[];       // platforms on those lines, every other block
+  fittings: Fitting[];       // what furnishes the underground concourses
+  garages: { x: number; y: number; w: number; h: number }[]; // parking floors under buildings
 }
 
 // ---------------------------------------------------------------------------
@@ -553,14 +570,24 @@ export function generateCity(seed: number): City {
 
   // ---- 6. Elevated skytrain lines above a couple of avenues ----
   const skytrains: Skytrain[] = [];
-  if (vRoads.length > 2) skytrains.push({ axis: "v", pos: vRoads[rng.int(1, vRoads.length - 2)], stops: [] });
-  if (hRoads.length > 2 && rng.chance(0.75)) skytrains.push({ axis: "h", pos: hRoads[rng.int(1, hRoads.length - 2)], stops: [] });
+  if (vRoads.length > 2) skytrains.push({ axis: "v", pos: vRoads[rng.int(1, vRoads.length - 2)], stops: [], level: TRAIN_LEVEL });
+  if (hRoads.length > 2 && rng.chance(0.75)) skytrains.push({ axis: "h", pos: hRoads[rng.int(1, hRoads.length - 2)], stops: [], level: TRAIN_LEVEL });
+  // the subway runs under an avenue the elevated line does not already have
+  {
+    const takenV = new Set(skytrains.filter((l) => l.axis === "v").map((l) => l.pos));
+    const freeV = vRoads.filter((x) => !takenV.has(x) && x > 8 && x < GRID - 9);
+    if (freeV.length > 0) skytrains.push({ axis: "v", pos: rng.pick(freeV), stops: [], level: SUBWAY_LEVEL });
+    const takenH = new Set(skytrains.filter((l) => l.axis === "h").map((l) => l.pos));
+    const freeH = hRoads.filter((y) => !takenH.has(y) && y > 8 && y < GRID - 9);
+    if (freeH.length > 0 && rng.chance(0.6)) skytrains.push({ axis: "h", pos: rng.pick(freeH), stops: [], level: SUBWAY_LEVEL });
+  }
 
   // ---- 6b. Stations every other block, with a platform over the avenue and
   // a stair up from the pavement ----
   const stations: Station[] = [];
   for (let li = 0; li < skytrains.length; li++) {
     const line = skytrains[li];
+    if (line.level < 0) continue;              // the subway lays its own out below
     const cross = line.axis === "v" ? hRoads : vRoads;
     for (let k = 0; k < cross.length; k += 2) {
       const u = cross[k] + 1;                       // centred on the cross avenue
@@ -596,7 +623,7 @@ export function generateCity(seed: number): City {
         }
       }
       line.stops.push(u);
-      stations.push({ line: li, u, x: cx + 0.5, y: cy + 0.5 });
+      stations.push({ line: li, u, x: cx + 0.5, y: cy + 0.5, level: line.level });
     }
   }
 
@@ -626,37 +653,143 @@ export function generateCity(seed: number): City {
     if (a < 0 || b < 0) continue;
     lb.link(a, b, LINK_STAIR, 1 + structZ[to] * 1.5);
   }
-  // ---- 7b. A first thing under the street: a service tunnel beneath one
-  // avenue, reached by manholes. It is deliberately small - the point is that
-  // the model, the search, the section view and the shooting all already work
-  // below zero, so metro, sewers and basements are content rather than
-  // foundation work. ----
-  const undergroundSurf = new Int32Array(GRID * GRID).fill(-1);
-  if (vRoads.length > 1) {
-    const ux = vRoads[rng.int(0, vRoads.length - 1)];
-    const y0t = 6, y1t = GRID - 7;
-    for (let y = y0t; y <= y1t; y++) {
-      const i = idx(ux, y);
-      undergroundSurf[i] = lb.add(i, TUNNEL_LEVEL, SURF_TUNNEL);
-    }
-    // a manhole every so often, dropping from the pavement beside the avenue
-    for (let y = y0t + 4; y <= y1t - 4; y += 18) {
-      const i = idx(ux, y);
-      if (undergroundSurf[i] < 0) continue;
-      for (const gx of [ux - 1, ux + 2, ux - 2, ux + 3]) {
-        if (!inGrid(gx, y)) continue;
-        const gi = idx(gx, y);
-        if (tiles[gi] !== T_SIDEWALK || streetUsed[gi] || stairTo[gi] >= 0) continue;
-        if (groundSurf[gi] < 0) continue;
-        lb.link(groundSurf[gi], undergroundSurf[i], LINK_LADDER, 2 - TUNNEL_LEVEL * 1.5);
-        break;
+  // ---- 7b. Parking under the buildings, at one storey down. A garage fills
+  // the footprint of the building over it and meets the street through a ramp
+  // cut down from the carriageway. ----
+  const fittings: Fitting[] = [];
+  const garages: { x: number; y: number; w: number; h: number }[] = [];
+  const underSurf = new Map<number, number>();          // tile -> surface, for linking
+  {
+    const seen = new Uint8Array(GRID * GRID);
+    for (let y = 2; y < GRID - 2; y++) {
+      for (let x = 2; x < GRID - 2; x++) {
+        const i = idx(x, y);
+        if (seen[i] || tiles[i] !== T_BUILDING) continue;
+        // take the whole lot
+        const lot: number[] = [i];
+        seen[i] = 1;
+        let x0 = x, x1 = x, y0 = y, y1 = y;
+        for (let k = 0; k < lot.length; k++) {
+          const j = lot[k];
+          const jx = j % GRID, jy = (j / GRID) | 0;
+          x0 = Math.min(x0, jx); x1 = Math.max(x1, jx);
+          y0 = Math.min(y0, jy); y1 = Math.max(y1, jy);
+          for (let d = 0; d < 4; d++) {
+            const nx = jx + DX[d], ny = jy + DY[d];
+            if (!inGrid(nx, ny)) continue;
+            const n = idx(nx, ny);
+            if (!seen[n] && (tiles[n] === T_BUILDING || tiles[n] === T_WALL)) { seen[n] = 1; if (tiles[n] === T_BUILDING) lot.push(n); }
+          }
+        }
+        // only worth digging under a lot with room for cars in it
+        const w = x1 - x0 + 1, h = y1 - y0 + 1;
+        if (lot.length < 12 || w < 3 || h < 3 || !rng.chance(0.4)) continue;
+
+        // the ramp: a carriageway tile within reach of the lot's edge
+        let mouth = -1, into = -1;
+        outer:
+        for (let ry = y0 - 3; ry <= y1 + 3; ry++) {
+          for (let rx2 = x0 - 3; rx2 <= x1 + 3; rx2++) {
+            if (!inGrid(rx2, ry) || tiles[idx(rx2, ry)] !== T_ROAD) continue;
+            // the nearest lot tile to it, if that tile is close enough to ramp to
+            let bd = 1e9, bi = -1;
+            for (const j of lot) {
+              const jx = j % GRID, jy = (j / GRID) | 0;
+              const d = Math.abs(jx - rx2) + Math.abs(jy - ry);
+              if (d < bd) { bd = d; bi = j; }
+            }
+            if (bi >= 0 && bd <= 4) { mouth = idx(rx2, ry); into = bi; break outer; }
+          }
+        }
+        if (mouth < 0) continue;
+
+        for (const j of lot) underSurf.set(j, lb.add(j, GARAGE_LEVEL, SURF_BASEMENT));
+        garages.push({ x: x0, y: y0, w, h });
+        const rampSurf = underSurf.get(into)!;
+        if (groundSurf[mouth] >= 0) lb.link(groundSurf[mouth], rampSurf, LINK_STAIR, 3);
       }
+    }
+  }
+
+  // ---- 7c. The subway, two storeys down: running tunnel the length of the
+  // line, opening every few blocks into a concourse with a ticket hall, shops
+  // and places to eat, and stairs up to the pavement. ----
+  for (let li = 0; li < skytrains.length; li++) {
+    const line = skytrains[li];
+    if (line.level >= 0) continue;
+    const along = line.axis === "v" ? { x: 0, y: 1 } : { x: 1, y: 0 };
+    const across = line.axis === "v" ? { x: 1, y: 0 } : { x: 0, y: 1 };
+    const trackU = line.pos + 1;                    // the tunnel follows the avenue
+    const at = (u: number, v: number) => {
+      const x = line.axis === "v" ? trackU + v : u;
+      const y = line.axis === "v" ? u : trackU + v;
+      return inGrid(x, y) ? idx(x, y) : -1;
+    };
+    // the running tunnel
+    for (let u = 5; u < GRID - 5; u++) {
+      const t = at(u, 0);
+      if (t >= 0 && !underSurf.has(t)) underSurf.set(t, lb.add(t, SUBWAY_LEVEL, SURF_TUNNEL));
+    }
+    // concourses on every other cross avenue
+    const cross = line.axis === "v" ? hRoads : vRoads;
+    for (let k = 0; k < cross.length; k += 2) {
+      const u = cross[k] + 1;
+      if (u < HALL_LONG + 6 || u > GRID - HALL_LONG - 7) continue;
+      for (let du = -HALL_LONG; du <= HALL_LONG; du++) {
+        for (let dv = -HALL_WIDE; dv <= HALL_WIDE; dv++) {
+          const t = at(u + du, dv);
+          if (t < 0 || underSurf.has(t)) continue;
+          underSurf.set(t, lb.add(t, SUBWAY_LEVEL, SURF_TUNNEL));
+        }
+      }
+      // fit it out: ticket hall at one end, a parade of shops and food along
+      // the far wall, benches and a map where passengers wait
+      const hx = line.axis === "v" ? trackU : u;
+      const hy = line.axis === "v" ? u : trackU;
+      const put = (du: number, dv: number, kind: Fitting["kind"], variant: number) => {
+        const fx = hx + along.x * du + across.x * dv;
+        const fy = hy + along.y * du + across.y * dv;
+        if (inGrid(fx, fy) && underSurf.has(idx(fx, fy))) {
+          fittings.push({ x: fx, y: fy, z: SUBWAY_LEVEL, kind, variant, facing: dv < 0 ? 0 : 2 });
+        }
+      };
+      put(-HALL_LONG + 1, -HALL_WIDE, "ticket", rng.int(0, 1));
+      put(-HALL_LONG + 2, -HALL_WIDE, "ticket", rng.int(0, 1));
+      for (let du = -HALL_LONG + 4; du <= HALL_LONG - 1; du += 2) {
+        put(du, -HALL_WIDE, rng.chance(0.5) ? "shop" : "food", rng.int(0, 3));
+      }
+      for (let du = -HALL_LONG + 2; du <= HALL_LONG - 2; du += 3) put(du, HALL_WIDE, "bench", 0);
+      put(HALL_LONG - 1, HALL_WIDE, "map", 0);
+      for (const du of [-HALL_LONG + 3, 0, HALL_LONG - 3]) {
+        put(du, -HALL_WIDE + 1, "column", 0);
+        put(du, HALL_WIDE - 1, "column", 0);
+      }
+      // stairs up to the pavement either side of the avenue
+      let made = 0;
+      for (let r = 2; r <= 5 && made < 2; r++) {
+        for (const sgn of [-1, 1]) {
+          if (made >= 2) break;
+          const gx = line.axis === "v" ? trackU + sgn * r : u + (sgn > 0 ? 2 : -2);
+          const gy = line.axis === "v" ? u + (sgn > 0 ? 2 : -2) : trackU + sgn * r;
+          if (!inGrid(gx, gy)) continue;
+          const gi = idx(gx, gy);
+          if ((tiles[gi] !== T_SIDEWALK && tiles[gi] !== T_GROUND) || streetUsed[gi] || stairTo[gi] >= 0) continue;
+          if (groundSurf[gi] < 0) continue;
+          const landing = at(u + (sgn > 0 ? 2 : -2), sgn * (HALL_WIDE - 1));
+          const ls = landing >= 0 ? underSurf.get(landing) : undefined;
+          if (ls === undefined) continue;
+          lb.link(groundSurf[gi], ls, LINK_STAIR, 4);
+          made++;
+        }
+      }
+      line.stops.push(u);
+      stations.push({ line: li, u, x: hx + 0.5, y: hy + 0.5, level: SUBWAY_LEVEL });
     }
   }
 
   const levels = lb.freeze(GRID * GRID);
 
-  return { seed, tiles, height, bstyle, laneDir, decos, props, crossing, streetUsed, levels, lamps, roundabouts, vRoads, hRoads, skytrains, stations };
+  return { seed, tiles, height, bstyle, laneDir, decos, props, crossing, streetUsed, levels, fittings, garages, lamps, roundabouts, vRoads, hRoads, skytrains, stations };
 }
 
 // Recursively split a block into lots separated by 4-tile alleys, then raise

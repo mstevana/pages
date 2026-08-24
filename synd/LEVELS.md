@@ -80,3 +80,28 @@ every layer is exercised. Still to do:
   remove a surface. Anything that reshapes terrain mid-mission - a demolished
   building, a collapsed floor - needs the builder run again, or an incremental
   update path that does not exist yet.
+
+## What lives underground today
+
+- **−1, basement garages.** One per building lot of 12 tiles or more, roughly
+  two lots in five. Each has a ramp linking a `SURF_BASEMENT` tile to a road
+  tile within four tiles of the lot, so every garage is reachable by car and
+  on foot. Parked cars carry `Car.z = GARAGE_LEVEL`.
+- **−2, the subway.** A running tunnel under a road, with a concourse
+  (`HALL_LONG` × `HALL_WIDE`) on every other cross avenue. Concourses are
+  furnished from `City.fittings` — ticket offices, shops, food counters,
+  benches, maps and columns — and each has two stairs up to the street.
+  Subway lines are ordinary `Skytrain`s with `level: SUBWAY_LEVEL`, so they
+  reuse the dwell/reverse/boarding machinery unchanged.
+
+## Testing against the level model
+
+Tests must read `city.levels`, not the old `structZ` / `stairTo` arrays,
+which no longer exist on `City`. Two traps that have already bitten:
+
+- A stair check that hardcodes `2.125` only ever finds skytrain platforms.
+  Use the line's own `level`, and remember a subway concourse is wider than
+  a platform, so the search radius has to grow with it.
+- Any check that compares two entities by `x`/`y` alone will now see a car
+  in a garage as overlapping the car on the street above it. Compare `z`
+  first.
