@@ -91,7 +91,7 @@ export interface Particle {
   kind: FxKind; lift: number; liftV: number; grow: number; drag: number;
 }
 export interface Flash { x: number; y: number; life: number; maxLife: number; r: number; ring: boolean; }
-export interface Ping { x: number; y: number; life: number; maxLife: number; ok: boolean; }
+export interface Ping { x: number; y: number; z: number; life: number; maxLife: number; ok: boolean; }
 
 export interface Mission {
   kind: ObjectiveKind;
@@ -500,13 +500,14 @@ export class World {
       if (p) { a.path = p; a.pathIdx = 0; a.state = "walk"; anyMoved = true; }
       n++;
     }
-    this.addPing(tx, ty, anyMoved);
+    // the marker belongs at the height that was tapped, not on the street
+    this.addPing(tx, ty, anyMoved, tSurf >= 0 ? this.city.levels.z[tSurf] : 0);
   }
 
   // a marker at a tapped destination: green when someone is on their way,
   // red when nothing could path there
-  addPing(x: number, y: number, ok: boolean): void {
-    this.pings.push({ x, y, life: 1.1, maxLife: 1.1, ok });
+  addPing(x: number, y: number, ok: boolean, z = 0): void {
+    this.pings.push({ x, y, z, life: 1.1, maxLife: 1.1, ok });
   }
 
   cmdShoot(sel: boolean[], tx: number, ty: number, tz = 0): void {

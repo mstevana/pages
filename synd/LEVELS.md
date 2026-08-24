@@ -162,3 +162,40 @@ station steps, subway entrances and garage ramps share the routine. A garage
 ramp may reach several tiles to find its road mouth, so the drawing takes a
 single step toward the far end rather than the whole offset -- otherwise the
 footprint scales with the distance to the mouth.
+
+## Working at a level other than the street
+
+Two things have to follow the height, not just the plan position:
+
+- **The tap marker.** `Ping` carries a `z`, taken from the surface that was
+  tapped, and draws lifted by it. Tap a roof and the marker lands on the
+  roof; tap a concourse with the section down at -2 and it lands on the
+  concourse.
+- **The follow camera.** It corrects the focus point for the subject's
+  height so a raised squad stays centred. That correction used to be
+  guarded on `fz > 0`, which left a squad in a garage or a concourse
+  sitting a storey or two below centre. It now applies in both directions.
+
+`SYND.worldToScreen(x, y, h)` is the inverse of `screenToWorld` and is what
+tests should use to aim a tap at a particular tile and height. Both work off
+`cam` directly, which is correct: the height correction is already baked
+into `cam` by the follow code, not applied separately at draw time.
+
+## Stairs under the section plane
+
+A stair is clipped like a building. Flights above the plane are dropped;
+the flight the plane passes through is truncated where it crosses, and the
+exposed cross-section is painted black, as a sliced wall is. Stanchions
+stop at the plane with a black cap, and a railing -- which stands proud of
+its deck and so meets the plane before the deck does -- is cut back
+separately.
+
+The same clamp fixes a separate bug: a flight is drawn per whole storey, so
+a station stair, which climbs 2.125 storeys to reach its platform, used to
+draw a full extra flight past the top. Flights now stop at whichever comes
+first, the top of the stair or the cut.
+
+Stairs used to be dropped wholesale whenever the section sat at or below
+street level, which is why nothing underground appeared to have any. They
+are clipped now instead, so a subway entrance shows the part of itself
+below the plane.

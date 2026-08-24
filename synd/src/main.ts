@@ -89,6 +89,16 @@ function screenToWorld(sx: number, sy: number): { x: number; y: number } {
   return { x: px / TILE_W + py / TILE_H, y: py / TILE_H - px / TILE_W };
 }
 
+// the inverse of screenToWorld, for a point at a given height in storeys
+function worldToScreen(x: number, y: number, h = 0): { x: number; y: number } {
+  const vx = panelW, vw = W - panelW;
+  const cx = vx + vw / 2, cy = H / 2;
+  return {
+    x: cx + (isoX(x, y) - isoX(cam.x, cam.y)) * cam.zoom,
+    y: cy + (isoY(x, y) - isoY(cam.x, cam.y)) * cam.zoom - h * STORY_H * cam.zoom,
+  };
+}
+
 function rollMission(): void {
   const kinds: ObjectiveKind[] = ["assassinate", "persuade", "escort", "killall"];
   const q = new URLSearchParams(location.search);
@@ -483,8 +493,9 @@ function frame(now: number): void {
       }
       // A squad up on a roof draws STORY_H per storey higher up the screen, so
       // the focus point has to come the same distance toward the camera for it
-      // to stay centred.
-      if (n > 0 && fz > 0) {
+      // to stay centred - and a squad down in a garage or a concourse draws
+      // that much lower, so it needs the same correction the other way.
+      if (n > 0 && fz !== 0) {
         const lift = (fz / n) * STORY_H / TILE_H;
         fx -= lift * n; fy -= lift * n;
       }
@@ -556,6 +567,7 @@ requestAnimationFrame(frame);
   get renderer() { return renderer; },
   setFollow(v: boolean) { followCam = v; },
   screenToWorld,
+  worldToScreen,
   get section() { return sectionLevel; },
   get sliderMin() { return slider ? slider.minLevel : 0; },
   setSection(v: number) { sectionLevel = v; },

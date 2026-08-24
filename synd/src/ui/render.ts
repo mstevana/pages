@@ -59,6 +59,9 @@ export class Renderer {
   readonly maxStories: number;    // ceiling of the tallest building in the sector
   readonly minLevel: number;      // floor of the deepest surface under the street
   private stairs: StairRun[] = [];
+  // the cut plane in force this frame, for pieces drawn away from the block pass
+  private secOn = false;
+  private secAt = 0;
   // emissive sources gathered while drawing, blended additively later
   private lampGlows: { x: number; y: number; gy: number; phase: number }[] = [];
   private emissives: { x: number; y: number; r: number; col: [number, number, number]; i: number }[] = [];
@@ -194,6 +197,7 @@ export class Renderer {
     // A section plane below the tallest roof slices the city open; at or above
     // it the city stands whole and nothing is cut.
     const sectioned = section < this.maxStories;
+    this.secOn = sectioned; this.secAt = section;
 
     // visible tile bounds (margin for tall buildings + elevated track)
     const maxRise = 8 * STORY_H * z;
@@ -335,7 +339,6 @@ export class Renderer {
     }
     for (const fs of this.stairs) {
       if (fs.x < x0 || fs.x > x1 || fs.y < y0 || fs.y > y1) continue;
-      if (sectioned && section <= 0) continue;
       if (!shown(fs.base)) continue;
       const ex = fs.x - fs.dy * fs.side, ey = fs.y + fs.dx * fs.side;
       push({ s: Math.max(fs.x + fs.y, fs.rx + fs.ry, ex + ey), pri: 1, kind: "stair",
@@ -802,7 +805,8 @@ export class Renderer {
     for (const pg of world.pings) {
       const t = 1 - pg.life / pg.maxLife;      // 0 fresh -> 1 gone
       const fade = 1 - t;
-      const mx = SX(pg.x, pg.y), my = SY(pg.x, pg.y);
+      if (!shown(pg.z)) continue;
+      const mx = SX(pg.x, pg.y), my = SY(pg.x, pg.y) - pg.z * STORY_H * z;
       const col = pg.ok ? "79,220,106" : "224,64,64";
       const rx = (TILE_W / 2) * z, ry = (TILE_H / 2) * z;
       // expanding shockwave ring
@@ -1190,6 +1194,15 @@ export class Renderer {
     const lw = Math.max(1, 0.9 * z);
     const rail = 7 * z;
     const THICK = 0.12 * STORY_H * z;   // decks are steel plate on a beam, not paper
+    // How far up this stair the horizontal cross-section lets us see. Anything
+    // above the plane is taken away, and whatever the plane cuts through shows
+    // its section in black, exactly as a sliced building does.
+    const lim = this.secOn ? this.secAt - fs.base : Infinity;
+    if (lim <= 0.01) return;
+    // A station stair climbs 2.125 storeys, so its last flight is a stub. Cap
+    // every flight at whichever comes first, the top of the stair or the cut.
+    const top = Math.min(fs.h, lim);
+    const RAIL_UP = rail / (STORY_H * z);   // the railing's own height, in storeys
 
     // A deck is an extruded box, not a bare quad: without the skirt down its
     // near edges the whole flight reads as a sheet of card from any angle that
@@ -1248,7 +1261,7 @@ export class Renderer {
     for (const [pt, pv] of [[INSET, 0.95], [1 - INSET, 0.95]]) {
       parts.push({ d: depth(pt, pv), h: -1, draw: () => {
         // a stanchion is a box section, so give it a lit face and a shaded one
-        const b = P(pt, pv, 0), t = P(pt, pv, fs.h);
+        const b = P(pt, pv, 0), t = P(pt, pv, top);
         const w = Math.max(1.6, 2.6 * z);
         g.fillStyle = "#272c34";
         g.fillRect(t[0] - w / 2, t[1], w, b[1] - t[1]);
@@ -1256,6 +1269,7 @@ export class Renderer {
         g.fillRect(t[0] - w / 2, t[1], w * 0.42, b[1] - t[1]);
         g.fillStyle = "#141820";
         g.fillRect(t[0] + w / 2 - w * 0.18, t[1], w * 0.18, b[1] - t[1]);
+        if (lim < fs.h) { g.fillStyle = "#000"; g.fillRect(t[0] - w / 2, t[1] - lw, w, lw * 2); }
       } });
     }
 
@@ -1268,23 +1282,44 @@ export class Renderer {
       const tHead = even ? 1 - INSET - LAND : INSET + LAND;
       const outV = even ? 0.5 : 0.95;                 // the flight's free side
       const h0 = lvl, h1 = lvl + 1;
-      parts.push({ d: (depth(tFoot, vLo) + depth(tHead, vHi)) / 2, h: lvl, draw: () => {
-        slab([P(tFoot, vLo, h0), P(tFoot, vHi, h0), P(tHead, vHi, h1), P(tHead, vLo, h1)], "#79828f");
+      if (h0 >= top) break;                          // this flight is above the cut
+      // a flight climbs one storey over its run, so the fraction of the run
+      // left below the ceiling is just how much of that storey is left
+      const keep = Math.min(1, top - h0);
+      const sliced = lim < fs.h && h0 + keep >= lim - 1e-6;
+      const tEnd = tFoot + (tHead - tFoot) * keep;
+      const hEnd = h0 + keep;
+      parts.push({ d: (depth(tFoot, vLo) + depth(tEnd, vHi)) / 2, h: lvl, draw: () => {
+        slab([P(tFoot, vLo, h0), P(tFoot, vHi, h0), P(tEnd, vHi, hEnd), P(tEnd, vLo, hEnd)], "#79828f");
         g.strokeStyle = "#3b424d"; g.lineWidth = Math.max(0.8, lw * 0.7);
         g.beginPath();
-        for (let k = 0.06; k < 0.98; k += 0.075) {
+        for (let k = 0.06; k < keep - 0.02; k += 0.075) {
           const t = tFoot + (tHead - tFoot) * k;
           const p0 = P(t, vLo, h0 + k), p1 = P(t, vHi, h0 + k);
           g.moveTo(p0[0], p0[1]); g.lineTo(p1[0], p1[1]);
         }
         g.stroke();
-        handrail(P(tFoot, outV, h0), P(tHead, outV, h1));
+        // the railing stands proud of the deck, so it meets the plane first
+        const rk = Math.min(keep, lim - RAIL_UP - h0);
+        if (rk > 0.02) {
+          const tR = tFoot + (tHead - tFoot) * rk;
+          handrail(P(tFoot, outV, h0), P(tR, outV, h0 + rk));
+        }
+        if (sliced) {                                // the cut face itself
+          const a = P(tEnd, vLo, hEnd), b = P(tEnd, vHi, hEnd);
+          g.beginPath();
+          g.moveTo(a[0], a[1]); g.lineTo(b[0], b[1]);
+          g.lineTo(b[0], b[1] + THICK); g.lineTo(a[0], a[1] + THICK);
+          g.closePath();
+          g.fillStyle = "#000"; g.fill();
+        }
       } });
 
+      if (h1 > top + 1e-6) break;                    // and so is its landing
       const lt0 = even ? 1 - INSET - LAND : INSET, lt1 = even ? 1 - INSET : INSET + LAND;
       parts.push({ d: (depth(lt0, 0.05) + depth(lt1, 0.95)) / 2, h: lvl + 0.5, draw: () => {
         slab([P(lt0, 0.05, h1), P(lt0, 0.95, h1), P(lt1, 0.95, h1), P(lt1, 0.05, h1)], "#98a2b0");
-        handrail(P(lt0, 0.95, h1), P(lt1, 0.95, h1));
+        if (h1 + RAIL_UP <= lim) handrail(P(lt0, 0.95, h1), P(lt1, 0.95, h1));
       } });
     }
 
