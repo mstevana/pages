@@ -553,6 +553,7 @@ requestAnimationFrame(frame);
   get world() { return world; },
   get city() { return city; },
   get panel() { return panel; },
+  get renderer() { return renderer; },
   setFollow(v: boolean) { followCam = v; },
   screenToWorld,
   get section() { return sectionLevel; },

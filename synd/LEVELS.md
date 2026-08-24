@@ -105,3 +105,26 @@ which no longer exist on `City`. Two traps that have already bitten:
 - Any check that compares two entities by `x`/`y` alone will now see a car
   in a garage as overlapping the car on the street above it. Compare `z`
   first.
+
+## Occlusion and height
+
+A building is sliced open only when it genuinely stands between the camera
+and an agent. The test works in world space: the view ray out of a point
+travels one tile nearer the camera for every `TILE_H` it climbs, so a column
+hides the agent only if it out-tops that ray where the ray crosses its
+footprint. Comparing screen positions by whole-tile depth buckets instead
+mis-fires at tile boundaries -- an agent standing near the far corner of its
+tile reads as being behind the column in the next bucket, which is how a
+building used to dissolve under a squad standing on its own roof.
+
+`Renderer.cutawayCount` reports how many buildings the last frame sliced
+open, which makes this testable without reading pixels.
+
+## Fire escapes
+
+A fire escape occupies the whole of the ground tile it stands on. Two
+flights, each half a tile wide, run the tile's length side by side, offset
+from one another by that same half tile; a landing spanning both caps each
+flight so an agent can turn the corner onto the next. The pieces are painted
+back to front within the entity, because the two flights sit at different
+distances from the camera.

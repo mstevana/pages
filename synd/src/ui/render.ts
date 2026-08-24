@@ -52,6 +52,9 @@ export class Renderer {
   private decoIndex = new Map<number, Deco[]>();
   private fences: FenceEdge[] = [];
   private decks: DeckTile[] = [];
+  // how many whole buildings the last frame sliced open to keep the squad in
+  // view - zero whenever nothing is actually hidden behind one
+  cutawayCount = 0;
   private buildingId: Int32Array; // connected-component label per WALL/BUILDING tile
   readonly maxStories: number;    // ceiling of the tallest building in the sector
   readonly minLevel: number;      // floor of the deepest surface under the street
@@ -394,20 +397,30 @@ export class Renderer {
     // ---- cutaway targets: living agents (and their car) the camera must
     // be able to see - occluding buildings render floors above the first
     // at low alpha ----
-    const cutTargets: { ax: number; ay: number; s: number }[] = [];
+    // The subject's height matters as much as its position: an agent up on a
+    // roof is above most of what used to stand in front of it.
+    const cutTargets: { px: number; py: number; pz: number }[] = [];
     for (const a of world.agents) {
       if (a.hp <= 0 || a.carId !== null) continue;
-      cutTargets.push({ ax: SX(a.x, a.y), ay: SY(a.x, a.y), s: Math.floor(a.x) + Math.floor(a.y) });
+      cutTargets.push({ px: a.x, py: a.y, pz: a.z });
     }
     for (const c of world.cars) {
       if (c.state === "player" && c.occupants.length > 0) {
-        cutTargets.push({ ax: SX(c.x, c.y), ay: SY(c.x, c.y), s: Math.floor(c.x) + Math.floor(c.y) });
+        cutTargets.push({ px: c.x, py: c.y, pz: c.z });
       }
     }
 
-    // which whole buildings occlude an agent? (they cut away above floor 1)
+    // Which whole buildings actually stand between the camera and an agent?
+    // In this projection the view ray out of a point moves one tile nearer the
+    // camera for every TILE_H it climbs, so a column hides the agent only if
+    // it out-tops that ray where the ray crosses its footprint. Working in
+    // world space rather than screen space keeps the test honest at the tile
+    // boundaries - and means the block an agent has climbed drops below the
+    // ray and stops being sliced open the moment the agent reaches its roof.
     const cutIds = new Set<number>();
     if (cutTargets.length > 0 && !sectioned) {
+      const RISE = TILE_H / STORY_H;          // storeys gained per tile travelled
+      const CHEST = 0.5;                       // aim the ray at the body, not the feet
       for (let ty = y0; ty <= y1; ty++) {
         for (let tx = x0; tx <= x1; tx++) {
           const i = idx(tx, ty);
@@ -417,19 +430,17 @@ export class Renderer {
           if (stories <= 1) continue;
           const id = this.buildingId[i];
           if (id < 0 || cutIds.has(id)) continue;
-          const s = tx + ty;
-          const colCx = SX(tx, ty);
-          const syTop = SY(tx, ty) - stories * STORY_H * z;
-          const baseBottom = syTop + stories * STORY_H * z + th;
           for (const ct of cutTargets) {
-            if (s > ct.s && Math.abs(colCx - ct.ax) < tw * 0.8 && ct.ay - 32 * z < baseBottom && ct.ay > syTop) {
-              cutIds.add(id);
-              break;
-            }
+            const uLo = Math.max(tx - ct.px, ty - ct.py, 0);
+            const uHi = Math.min(tx + 1 - ct.px, ty + 1 - ct.py);
+            if (uLo >= uHi) continue;          // the ray misses this column
+            if (stories > ct.pz + CHEST + uLo * RISE) { cutIds.add(id); break; }
           }
         }
       }
     }
+
+    this.cutawayCount = cutIds.size;
 
     // ---- pass 2: blocks + entities in depth order ----
     const adFrame = Math.floor(time * 2.2);
@@ -1167,69 +1178,94 @@ export class Renderer {
     g: CanvasRenderingContext2D, fs: { x: number; y: number; rx: number; ry: number; h: number; base: number },
     SX: (x: number, y: number) => number, SY: (x: number, y: number) => number, z: number
   ): void {
-    // the edge the stair is bolted to, and the two ends of that edge
-    const ex = (fs.x + fs.rx) / 2 + 0.5, ey = (fs.y + fs.ry) / 2 + 0.5;
-    const ax = fs.rx - fs.x, ay = fs.ry - fs.y;        // toward the wall
-    const px = -ay * 0.45, py = ax * 0.45;             // along the wall face
-    const out = 0.16;                                  // how far it stands proud
-    const L = { x: ex + px - ax * out, y: ey + py - ay * out };
-    const R = { x: ex - px - ax * out, y: ey - py - ay * out };
-    const lx = SX(L.x, L.y), rx = SX(R.x, R.y);
-    const lyG = SY(L.x, L.y) - fs.base * STORY_H * z;
-    const ryG = SY(R.x, R.y) - fs.base * STORY_H * z;
-    const up = STORY_H * z;
-    const lw = Math.max(1.2, 1.1 * z);
+    // A fire escape fills the ground tile it stands on. Two flights, each half
+    // a tile wide, run down the tile's length side by side and offset from one
+    // another by that same half tile; a landing spanning both caps each flight
+    // so an agent can turn the corner onto the next. Footprint: one tile square.
+    const ax = fs.rx - fs.x, ay = fs.ry - fs.y;      // toward the wall it serves
+    const ux = -ay, uy = ax;                          // along the wall face
+    const cx = fs.x + 0.5, cy = fs.y + 0.5;
+    const INSET = 0.05;                               // clear of the tile edges
+    const LAND = 0.22;                                // how much length a landing takes
+    // u runs along the wall, v out from it, both spanning the single tile
+    const wx = (u: number, v: number) => cx + ax * (0.5 - v) + ux * (u - 0.5);
+    const wy = (u: number, v: number) => cy + ay * (0.5 - v) + uy * (u - 0.5);
+    const P = (u: number, v: number, h: number): [number, number] => {
+      const x = wx(u, v), y = wy(u, v);
+      return [SX(x, y), SY(x, y) - (fs.base + h) * STORY_H * z];
+    };
+    const depth = (u: number, v: number) => wx(u, v) + wy(u, v);
+    const lw = Math.max(1, 0.9 * z);
+    const rail = 6.5 * z, drop = 2.4 * z;
 
-    // the two stringers running the full height
-    g.strokeStyle = "#20242b";
-    g.lineWidth = lw * 2.2;
-    g.beginPath();
-    g.moveTo(lx, lyG); g.lineTo(lx, lyG - fs.h * up);
-    g.moveTo(rx, ryG); g.lineTo(rx, ryG - fs.h * up);
-    g.stroke();
-    g.strokeStyle = "#6f7887";
-    g.lineWidth = lw;
-    g.beginPath();
-    g.moveTo(lx, lyG); g.lineTo(lx, lyG - fs.h * up);
-    g.moveTo(rx, ryG); g.lineTo(rx, ryG - fs.h * up);
-    g.stroke();
+    const slab = (pts: [number, number][], fill: string) => {
+      g.beginPath();
+      g.moveTo(pts[0][0], pts[0][1] + drop);
+      for (let k = 1; k < pts.length; k++) g.lineTo(pts[k][0], pts[k][1] + drop);
+      g.closePath();
+      g.fillStyle = "#191d23"; g.fill();
+      g.beginPath();
+      g.moveTo(pts[0][0], pts[0][1]);
+      for (let k = 1; k < pts.length; k++) g.lineTo(pts[k][0], pts[k][1]);
+      g.closePath();
+      g.fillStyle = fill; g.fill();
+      g.strokeStyle = "#20242b"; g.lineWidth = lw * 0.8; g.stroke();
+    };
+    const handrail = (a: [number, number], b: [number, number]) => {
+      g.strokeStyle = "#5d6675"; g.lineWidth = lw;
+      g.beginPath();
+      g.moveTo(a[0], a[1]); g.lineTo(a[0], a[1] - rail);
+      g.moveTo(b[0], b[1]); g.lineTo(b[0], b[1] - rail);
+      g.moveTo(a[0], a[1] - rail); g.lineTo(b[0], b[1] - rail);
+      g.stroke();
+    };
+
+    // every piece is collected first, then painted back to front: the two
+    // flights sit at different distances from the camera and would otherwise
+    // overlap in the wrong order
+    const parts: { d: number; h: number; draw: () => void }[] = [];
+
+    for (const [pu, pv] of [[INSET, INSET], [1 - INSET, INSET], [INSET, 1 - INSET], [1 - INSET, 1 - INSET]]) {
+      parts.push({ d: depth(pu, pv), h: -1, draw: () => {
+        const b = P(pu, pv, 0), t = P(pu, pv, fs.h);
+        g.strokeStyle = "#20242b"; g.lineWidth = lw * 2.2;
+        g.beginPath(); g.moveTo(b[0], b[1]); g.lineTo(t[0], t[1]); g.stroke();
+        g.strokeStyle = "#6f7887"; g.lineWidth = lw;
+        g.beginPath(); g.moveTo(b[0], b[1]); g.lineTo(t[0], t[1]); g.stroke();
+      } });
+    }
 
     for (let lvl = 0; lvl < fs.h; lvl++) {
-      // a flight, reversing at every landing
+      // flights alternate half and direction, so each one starts where the
+      // landing below it ended
       const even = lvl % 2 === 0;
-      const x0 = even ? lx : rx, y0 = (even ? lyG : ryG) - lvl * up;
-      const x1 = even ? rx : lx, y1 = (even ? ryG : lyG) - (lvl + 1) * up;
-      g.strokeStyle = "#20242b";
-      g.lineWidth = lw * 3.4;
-      g.beginPath(); g.moveTo(x0, y0); g.lineTo(x1, y1); g.stroke();
-      g.strokeStyle = "#8d97a6";
-      g.lineWidth = lw * 2.2;
-      g.beginPath(); g.moveTo(x0, y0); g.lineTo(x1, y1); g.stroke();
-      g.strokeStyle = "#3b424d";                       // treads
-      g.lineWidth = Math.max(1, lw * 0.7);
-      g.beginPath();
-      for (let t = 0.12; t < 0.95; t += 0.16) {
-        const mx = x0 + (x1 - x0) * t, my = y0 + (y1 - y0) * t;
-        g.moveTo(mx - 2.6 * z, my); g.lineTo(mx + 2.6 * z, my);
-      }
-      g.stroke();
-      // the landing at the top of it
-      const ly = lyG - (lvl + 1) * up, ry2 = ryG - (lvl + 1) * up;
-      g.strokeStyle = "#20242b";
-      g.lineWidth = lw * 3;
-      g.beginPath(); g.moveTo(lx, ly); g.lineTo(rx, ry2); g.stroke();
-      g.strokeStyle = "#9aa4b3";
-      g.lineWidth = lw * 1.6;
-      g.beginPath(); g.moveTo(lx, ly); g.lineTo(rx, ry2); g.stroke();
-      // its handrail
-      g.strokeStyle = "#5d6675";
-      g.lineWidth = lw;
-      g.beginPath();
-      g.moveTo(lx, ly - 6 * z); g.lineTo(rx, ry2 - 6 * z);
-      g.moveTo(lx, ly); g.lineTo(lx, ly - 6 * z);
-      g.moveTo(rx, ry2); g.lineTo(rx, ry2 - 6 * z);
-      g.stroke();
+      const vLo = even ? INSET : 0.5, vHi = even ? 0.5 : 1 - INSET;
+      const uFoot = even ? INSET : 1 - INSET;
+      const uHead = even ? 1 - INSET - LAND : INSET + LAND;
+      const outV = even ? 0.5 : 1 - INSET;            // the flight's free side
+      const h0 = lvl, h1 = lvl + 1;
+      parts.push({ d: (depth(uFoot, vLo) + depth(uHead, vHi)) / 2, h: lvl, draw: () => {
+        slab([P(uFoot, vLo, h0), P(uFoot, vHi, h0), P(uHead, vHi, h1), P(uHead, vLo, h1)], "#79828f");
+        g.strokeStyle = "#3b424d"; g.lineWidth = Math.max(0.8, lw * 0.7);
+        g.beginPath();
+        for (let t = 0.1; t < 0.96; t += 0.13) {
+          const u = uFoot + (uHead - uFoot) * t;
+          const p0 = P(u, vLo, h0 + t), p1 = P(u, vHi, h0 + t);
+          g.moveTo(p0[0], p0[1]); g.lineTo(p1[0], p1[1]);
+        }
+        g.stroke();
+        handrail(P(uFoot, outV, h0), P(uHead, outV, h1));
+      } });
+
+      const lu0 = even ? 1 - INSET - LAND : INSET, lu1 = even ? 1 - INSET : INSET + LAND;
+      parts.push({ d: (depth(lu0, INSET) + depth(lu1, 1 - INSET)) / 2, h: lvl + 0.5, draw: () => {
+        slab([P(lu0, INSET, h1), P(lu0, 1 - INSET, h1), P(lu1, 1 - INSET, h1), P(lu1, INSET, h1)], "#98a2b0");
+        handrail(P(lu0, 1 - INSET, h1), P(lu1, 1 - INSET, h1));
+      } });
     }
+
+    parts.sort((a, b) => a.d - b.d || a.h - b.h);
+    for (const part of parts) part.draw();
   }
 
   // tile-edge fence: posts + rails (park) or hazard railing (pit rim)
