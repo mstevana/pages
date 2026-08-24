@@ -1231,7 +1231,7 @@ export class Renderer {
     const cx = fs.x + 0.5, cy = fs.y + 0.5;
     const RUN = fs.run;                               // tiles of length
     const INSET = 0.05 / RUN;                         // clear of the ends
-    const LAND = 0.2 / RUN;                           // share of the run a landing takes
+    const LAND = 0.34 / RUN;                          // share of the run a landing takes
     // t runs the length of the footprint, v out from the wall; both 0..1
     const uStart = fs.side < 0 ? 0.5 - RUN : -0.5;
     const wx = (t: number, v: number) => cx + ax * (0.5 - v) + ux * (uStart + t * RUN);
@@ -1242,14 +1242,28 @@ export class Renderer {
     };
     const depth = (t: number, v: number) => wx(t, v) + wy(t, v);
     const lw = Math.max(1, 0.9 * z);
-    const rail = 6.5 * z, drop = 2.4 * z;
+    const rail = 7 * z;
+    const THICK = 0.12 * STORY_H * z;   // decks are steel plate on a beam, not paper
 
+    // A deck is an extruded box, not a bare quad: without the skirt down its
+    // near edges the whole flight reads as a sheet of card from any angle that
+    // shows its underside.
     const slab = (pts: [number, number][], fill: string) => {
-      g.beginPath();
-      g.moveTo(pts[0][0], pts[0][1] + drop);
-      for (let k = 1; k < pts.length; k++) g.lineTo(pts[k][0], pts[k][1] + drop);
-      g.closePath();
-      g.fillStyle = "#191d23"; g.fill();
+      // the far edges' skirts fall under the deck itself, so paint those first
+      // and let the near ones, which are the visible ones, land on top
+      const edges = [0, 1, 2, 3].sort(
+        (a, b) => (pts[a][1] + pts[(a + 1) % 4][1]) - (pts[b][1] + pts[(b + 1) % 4][1]));
+      for (const e of edges) {
+        const a = pts[e], b = pts[(e + 1) % 4];
+        g.beginPath();
+        g.moveTo(a[0], a[1]); g.lineTo(b[0], b[1]);
+        g.lineTo(b[0], b[1] + THICK); g.lineTo(a[0], a[1] + THICK);
+        g.closePath();
+        // the side you see along the run catches less light than the end grain
+        g.fillStyle = e % 2 === 0 ? "#3a414b" : "#2b313a";
+        g.fill();
+        g.strokeStyle = "#191d23"; g.lineWidth = lw * 0.7; g.stroke();
+      }
       g.beginPath();
       g.moveTo(pts[0][0], pts[0][1]);
       for (let k = 1; k < pts.length; k++) g.lineTo(pts[k][0], pts[k][1]);
@@ -1257,12 +1271,24 @@ export class Renderer {
       g.fillStyle = fill; g.fill();
       g.strokeStyle = "#20242b"; g.lineWidth = lw * 0.8; g.stroke();
     };
+    // a railing reads as a railing only if it has uprights along it
     const handrail = (a: [number, number], b: [number, number]) => {
-      g.strokeStyle = "#5d6675"; g.lineWidth = lw;
+      g.strokeStyle = "#4a525f"; g.lineWidth = lw * 0.7;
+      g.beginPath();
+      for (let k = 0.18; k < 0.95; k += 0.22) {
+        const mx = a[0] + (b[0] - a[0]) * k, my = a[1] + (b[1] - a[1]) * k;
+        g.moveTo(mx, my); g.lineTo(mx, my - rail);
+      }
+      g.stroke();
+      g.strokeStyle = "#5d6675"; g.lineWidth = lw * 1.4;
       g.beginPath();
       g.moveTo(a[0], a[1]); g.lineTo(a[0], a[1] - rail);
       g.moveTo(b[0], b[1]); g.lineTo(b[0], b[1] - rail);
+      g.stroke();
+      g.lineWidth = lw;
+      g.beginPath();
       g.moveTo(a[0], a[1] - rail); g.lineTo(b[0], b[1] - rail);
+      g.moveTo(a[0], a[1] - rail * 0.5); g.lineTo(b[0], b[1] - rail * 0.5);
       g.stroke();
     };
 
@@ -1271,13 +1297,19 @@ export class Renderer {
     // overlap in the wrong order
     const parts: { d: number; h: number; draw: () => void }[] = [];
 
-    for (const [pt, pv] of [[INSET, 0.05], [1 - INSET, 0.05], [INSET, 0.95], [1 - INSET, 0.95]]) {
+    // stanchions stand on the outboard side only - the wall side is bolted to
+    // the building, and posts there just clutter the face
+    for (const [pt, pv] of [[INSET, 0.95], [1 - INSET, 0.95]]) {
       parts.push({ d: depth(pt, pv), h: -1, draw: () => {
+        // a stanchion is a box section, so give it a lit face and a shaded one
         const b = P(pt, pv, 0), t = P(pt, pv, fs.h);
-        g.strokeStyle = "#20242b"; g.lineWidth = lw * 2.2;
-        g.beginPath(); g.moveTo(b[0], b[1]); g.lineTo(t[0], t[1]); g.stroke();
-        g.strokeStyle = "#6f7887"; g.lineWidth = lw;
-        g.beginPath(); g.moveTo(b[0], b[1]); g.lineTo(t[0], t[1]); g.stroke();
+        const w = Math.max(1.6, 2.6 * z);
+        g.fillStyle = "#272c34";
+        g.fillRect(t[0] - w / 2, t[1], w, b[1] - t[1]);
+        g.fillStyle = "#6f7887";
+        g.fillRect(t[0] - w / 2, t[1], w * 0.42, b[1] - t[1]);
+        g.fillStyle = "#141820";
+        g.fillRect(t[0] + w / 2 - w * 0.18, t[1], w * 0.18, b[1] - t[1]);
       } });
     }
 

@@ -135,7 +135,15 @@ the same depth below it -- and skipping anything a lamp post or street tree
 already occupies. Where both sides are built up the flight falls back to a
 single tile and climbs steeply; that is roughly one stair in forty. The
 whole two-tile run is what makes the pitch walkable: over one tile a flight
-climbs a storey at about 1.4 storeys per tile, over two at 0.59.
+climbs a storey at about 1.4 storeys per tile, over two at 0.64.
+
+Decks are drawn as extruded boxes, not bare quads. A flat quad has no
+thickness to show, so from any angle that reveals its underside the whole
+flight reads as a sheet of card. Each deck paints a skirt down its four
+edges before its top face, far edges first so the near ones -- the visible
+ones -- land on top. Stanchions are box sections with a lit face and a
+shaded one, and they stand on the outboard side only: the wall side is
+bolted to the building.
 
 Every stair in the level model is drawn this way, not just fire escapes:
 station steps, subway entrances and garage ramps share the routine. A garage
