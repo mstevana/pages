@@ -2,7 +2,7 @@
 // blocks correctly occlude people and cars behind them. Also draws the static
 // street furniture (fences, doors, pit rails) and the elevated skytrain.
 
-import { City, Deco, Fitting, Prop, Station, TRAIN_LEVEL, surfaceUnder, T_BUILDING, T_GROUND, T_ISLAND, T_PARK, T_PIT, T_ROAD, T_SIDEWALK, T_WALL, D_S, D_W, idx, inGrid, isRoad } from "../city/citygen";
+import { City, Deco, Fitting, Prop, Station, TRAIN_LEVEL, hollowAt, surfaceUnder, T_BUILDING, T_GROUND, T_ISLAND, T_PARK, T_PIT, T_ROAD, T_SIDEWALK, T_WALL, D_S, D_W, idx, inGrid, isRoad } from "../city/citygen";
 import { GRID, STORY_H, TILE_H, TILE_W, isNight, isRain, isoX, isoY } from "../engine/util";
 import { PeopleAtlas, FW, FH } from "../sprites/people";
 import { BENCH_H, BENCH_W, STALL_H, STALL_W, TREE_H, TREE_W } from "../sprites/props";
@@ -21,12 +21,23 @@ const TRAIN_ELEV = TRAIN_LEVEL * STORY_H;   // px above ground at zoom 1
 const SECTION_LIP = 5;   // px of wall left standing above a sectioned floor
 const PED_SCALE = 1.2;   // people vs the 30px story: roughly one story tall
 
+// One flight of steps joining two surfaces. `run` is how many tiles of
+// footprint it has along the wall, and `side` which way the extra tile lies.
+interface StairRun {
+  x: number; y: number;      // the tile it starts from
+  rx: number; ry: number;    // the tile it arrives at
+  dx: number; dy: number;    // unit step from the start toward it
+  h: number; base: number;
+  run: number;               // 1 or 2 tiles along the wall
+  side: number;              // -1, 0 or +1: where the second tile sits
+}
+
 interface Entity {
   s: number;    // depth key = tx + ty
   pri: number;  // within-bucket order: 0 elevated structure, 1 ground, 2 trains
   kind: "ped" | "car" | "drop" | "lamp" | "fence" | "pylon" | "deck" | "train" | "prop" | "stair" | "station" | "fitting";
   fitting?: Fitting;
-  stair?: { x: number; y: number; rx: number; ry: number; h: number; base: number };
+  stair?: StairRun;
   station?: Station;
   ped?: Ped;
   car?: Car;
@@ -58,7 +69,8 @@ export class Renderer {
   private buildingId: Int32Array; // connected-component label per WALL/BUILDING tile
   readonly maxStories: number;    // ceiling of the tallest building in the sector
   readonly minLevel: number;      // floor of the deepest surface under the street
-  private stairs: { x: number; y: number; rx: number; ry: number; h: number; base: number }[] = [];
+  private stairs: StairRun[] = [];
+  private stairBlocked = new Set<number>();
   // emissive sources gathered while drawing, blended additively later
   private lampGlows: { x: number; y: number; gy: number; phase: number }[] = [];
   private emissives: { x: number; y: number; r: number; col: [number, number, number]; i: number }[] = [];
@@ -140,6 +152,11 @@ export class Renderer {
   }
 
   private buildStairs(): void {
+    // a stair may not sprawl over a lamp post or a street tree
+    const taken = new Set<number>();
+    for (const pr of this.city.props) taken.add(idx(pr.x, pr.y));
+    for (const l of this.city.lamps) taken.add(idx(l.x, l.y));
+    this.stairBlocked = taken;
     // every stair in the sector is a link in the level model; the ones that
     // climb get a flight drawn up the wall they are bolted to
     const L = this.city.levels;
@@ -147,13 +164,37 @@ export class Renderer {
       for (let e = L.linkStart[a]; e < L.linkStart[a + 1]; e++) {
         const b = L.linkTo[e];
         if (L.z[b] <= L.z[a]) continue;               // take each pair once, going up
-        this.stairs.push({
-          x: L.tile[a] % GRID, y: (L.tile[a] / GRID) | 0,
-          rx: L.tile[b] % GRID, ry: (L.tile[b] / GRID) | 0,
-          h: L.z[b] - L.z[a], base: L.z[a],
-        });
+        const x = L.tile[a] % GRID, y = (L.tile[a] / GRID) | 0;
+        const rx = L.tile[b] % GRID, ry = (L.tile[b] / GRID) | 0;
+        // a garage ramp may reach several tiles for its road mouth, so take a
+        // single step toward the far end rather than the whole offset
+        const ox = rx - x, oy = ry - y;
+        const dx = Math.abs(ox) >= Math.abs(oy) ? Math.sign(ox) : 0;
+        const dy = dx === 0 ? Math.sign(oy) : 0;
+        const room = this.stairRoom(x, y, dx, dy, L.z[a]);
+        this.stairs.push({ x, y, rx, ry, dx, dy, h: L.z[b] - L.z[a], base: L.z[a],
+                           run: room.run, side: room.side });
       }
     }
+  }
+
+  // A flight wants two tiles of footprint along the wall so it can climb at a
+  // walkable pitch. Take the second tile from whichever side is free; if both
+  // sides are built up or in the roadway, fall back to a single steep tile.
+  private stairRoom(x: number, y: number, ax: number, ay: number, base: number): { run: number; side: number } {
+    const ux = -ay, uy = ax;                         // along the wall face
+    const free = (sx: number, sy: number): boolean => {
+      if (!inGrid(sx, sy)) return false;
+      if (this.stairBlocked.has(idx(sx, sy))) return false;
+      if (base < -0.1) return hollowAt(this.city, sx, sy, base);
+      const t = this.city.tiles[idx(sx, sy)];
+      return t === T_GROUND || t === T_SIDEWALK;
+    };
+    const plus = free(x + ux, y + uy), minus = free(x - ux, y - uy);
+    if (plus && minus) return { run: 2, side: (x * 7 + y * 13) % 2 === 0 ? 1 : -1 };
+    if (plus) return { run: 2, side: 1 };
+    if (minus) return { run: 2, side: -1 };
+    return { run: 1, side: 0 };
   }
 
   private buildDecks(): void {
@@ -350,7 +391,8 @@ export class Renderer {
       if (fs.x < x0 || fs.x > x1 || fs.y < y0 || fs.y > y1) continue;
       if (sectioned && section <= 0) continue;
       if (!shown(fs.base)) continue;
-      push({ s: Math.max(fs.x + fs.y, fs.rx + fs.ry), pri: 1, kind: "stair",
+      const ex = fs.x - fs.dy * fs.side, ey = fs.y + fs.dx * fs.side;
+      push({ s: Math.max(fs.x + fs.y, fs.rx + fs.ry, ex + ey), pri: 1, kind: "stair",
              x: fs.x + 0.5, y: fs.y + 0.5, stair: fs });
     }
     for (const l of this.city.lamps) {
@@ -1175,26 +1217,30 @@ export class Renderer {
   }
 
   private drawFireStair(
-    g: CanvasRenderingContext2D, fs: { x: number; y: number; rx: number; ry: number; h: number; base: number },
+    g: CanvasRenderingContext2D, fs: StairRun,
     SX: (x: number, y: number) => number, SY: (x: number, y: number) => number, z: number
   ): void {
-    // A fire escape fills the ground tile it stands on. Two flights, each half
-    // a tile wide, run down the tile's length side by side and offset from one
-    // another by that same half tile; a landing spanning both caps each flight
-    // so an agent can turn the corner onto the next. Footprint: one tile square.
-    const ax = fs.rx - fs.x, ay = fs.ry - fs.y;      // toward the wall it serves
+    // A fire escape is half a tile deep and two tiles long, laid along the wall
+    // it serves. Two flights, each half the depth, run the full length side by
+    // side and offset from one another by that half tile; a landing spanning
+    // both caps each flight so an agent can turn the corner onto the next.
+    // Giving each flight the whole two-tile run is what keeps its pitch
+    // walkable - over a single tile it climbs a storey almost vertically.
+    const ax = fs.dx, ay = fs.dy;                     // toward the wall it serves
     const ux = -ay, uy = ax;                          // along the wall face
     const cx = fs.x + 0.5, cy = fs.y + 0.5;
-    const INSET = 0.05;                               // clear of the tile edges
-    const LAND = 0.22;                                // how much length a landing takes
-    // u runs along the wall, v out from it, both spanning the single tile
-    const wx = (u: number, v: number) => cx + ax * (0.5 - v) + ux * (u - 0.5);
-    const wy = (u: number, v: number) => cy + ay * (0.5 - v) + uy * (u - 0.5);
-    const P = (u: number, v: number, h: number): [number, number] => {
-      const x = wx(u, v), y = wy(u, v);
+    const RUN = fs.run;                               // tiles of length
+    const INSET = 0.05 / RUN;                         // clear of the ends
+    const LAND = 0.2 / RUN;                           // share of the run a landing takes
+    // t runs the length of the footprint, v out from the wall; both 0..1
+    const uStart = fs.side < 0 ? 0.5 - RUN : -0.5;
+    const wx = (t: number, v: number) => cx + ax * (0.5 - v) + ux * (uStart + t * RUN);
+    const wy = (t: number, v: number) => cy + ay * (0.5 - v) + uy * (uStart + t * RUN);
+    const P = (t: number, v: number, h: number): [number, number] => {
+      const x = wx(t, v), y = wy(t, v);
       return [SX(x, y), SY(x, y) - (fs.base + h) * STORY_H * z];
     };
-    const depth = (u: number, v: number) => wx(u, v) + wy(u, v);
+    const depth = (t: number, v: number) => wx(t, v) + wy(t, v);
     const lw = Math.max(1, 0.9 * z);
     const rail = 6.5 * z, drop = 2.4 * z;
 
@@ -1225,9 +1271,9 @@ export class Renderer {
     // overlap in the wrong order
     const parts: { d: number; h: number; draw: () => void }[] = [];
 
-    for (const [pu, pv] of [[INSET, INSET], [1 - INSET, INSET], [INSET, 1 - INSET], [1 - INSET, 1 - INSET]]) {
-      parts.push({ d: depth(pu, pv), h: -1, draw: () => {
-        const b = P(pu, pv, 0), t = P(pu, pv, fs.h);
+    for (const [pt, pv] of [[INSET, 0.05], [1 - INSET, 0.05], [INSET, 0.95], [1 - INSET, 0.95]]) {
+      parts.push({ d: depth(pt, pv), h: -1, draw: () => {
+        const b = P(pt, pv, 0), t = P(pt, pv, fs.h);
         g.strokeStyle = "#20242b"; g.lineWidth = lw * 2.2;
         g.beginPath(); g.moveTo(b[0], b[1]); g.lineTo(t[0], t[1]); g.stroke();
         g.strokeStyle = "#6f7887"; g.lineWidth = lw;
@@ -1239,28 +1285,28 @@ export class Renderer {
       // flights alternate half and direction, so each one starts where the
       // landing below it ended
       const even = lvl % 2 === 0;
-      const vLo = even ? INSET : 0.5, vHi = even ? 0.5 : 1 - INSET;
-      const uFoot = even ? INSET : 1 - INSET;
-      const uHead = even ? 1 - INSET - LAND : INSET + LAND;
-      const outV = even ? 0.5 : 1 - INSET;            // the flight's free side
+      const vLo = even ? 0.05 : 0.5, vHi = even ? 0.5 : 0.95;
+      const tFoot = even ? INSET : 1 - INSET;
+      const tHead = even ? 1 - INSET - LAND : INSET + LAND;
+      const outV = even ? 0.5 : 0.95;                 // the flight's free side
       const h0 = lvl, h1 = lvl + 1;
-      parts.push({ d: (depth(uFoot, vLo) + depth(uHead, vHi)) / 2, h: lvl, draw: () => {
-        slab([P(uFoot, vLo, h0), P(uFoot, vHi, h0), P(uHead, vHi, h1), P(uHead, vLo, h1)], "#79828f");
+      parts.push({ d: (depth(tFoot, vLo) + depth(tHead, vHi)) / 2, h: lvl, draw: () => {
+        slab([P(tFoot, vLo, h0), P(tFoot, vHi, h0), P(tHead, vHi, h1), P(tHead, vLo, h1)], "#79828f");
         g.strokeStyle = "#3b424d"; g.lineWidth = Math.max(0.8, lw * 0.7);
         g.beginPath();
-        for (let t = 0.1; t < 0.96; t += 0.13) {
-          const u = uFoot + (uHead - uFoot) * t;
-          const p0 = P(u, vLo, h0 + t), p1 = P(u, vHi, h0 + t);
+        for (let k = 0.06; k < 0.98; k += 0.075) {
+          const t = tFoot + (tHead - tFoot) * k;
+          const p0 = P(t, vLo, h0 + k), p1 = P(t, vHi, h0 + k);
           g.moveTo(p0[0], p0[1]); g.lineTo(p1[0], p1[1]);
         }
         g.stroke();
-        handrail(P(uFoot, outV, h0), P(uHead, outV, h1));
+        handrail(P(tFoot, outV, h0), P(tHead, outV, h1));
       } });
 
-      const lu0 = even ? 1 - INSET - LAND : INSET, lu1 = even ? 1 - INSET : INSET + LAND;
-      parts.push({ d: (depth(lu0, INSET) + depth(lu1, 1 - INSET)) / 2, h: lvl + 0.5, draw: () => {
-        slab([P(lu0, INSET, h1), P(lu0, 1 - INSET, h1), P(lu1, 1 - INSET, h1), P(lu1, INSET, h1)], "#98a2b0");
-        handrail(P(lu0, 1 - INSET, h1), P(lu1, 1 - INSET, h1));
+      const lt0 = even ? 1 - INSET - LAND : INSET, lt1 = even ? 1 - INSET : INSET + LAND;
+      parts.push({ d: (depth(lt0, 0.05) + depth(lt1, 0.95)) / 2, h: lvl + 0.5, draw: () => {
+        slab([P(lt0, 0.05, h1), P(lt0, 0.95, h1), P(lt1, 0.95, h1), P(lt1, 0.05, h1)], "#98a2b0");
+        handrail(P(lt0, 0.95, h1), P(lt1, 0.95, h1));
       } });
     }
 

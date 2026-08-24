@@ -122,9 +122,23 @@ open, which makes this testable without reading pixels.
 
 ## Fire escapes
 
-A fire escape occupies the whole of the ground tile it stands on. Two
-flights, each half a tile wide, run the tile's length side by side, offset
-from one another by that same half tile; a landing spanning both caps each
-flight so an agent can turn the corner onto the next. The pieces are painted
-back to front within the entity, because the two flights sit at different
-distances from the camera.
+A fire escape is half a tile deep and two tiles long, laid along the wall it
+serves. Two flights, each half the depth, run the full length side by side
+and offset from one another by that half tile; a landing spanning both caps
+each flight so an agent can turn the corner onto the next. The pieces are
+painted back to front within the entity, because the two flights sit at
+different distances from the camera.
+
+The second tile of that footprint is chosen at render time, from whichever
+side of the foot tile is free -- open ground above the street, a hollow at
+the same depth below it -- and skipping anything a lamp post or street tree
+already occupies. Where both sides are built up the flight falls back to a
+single tile and climbs steeply; that is roughly one stair in forty. The
+whole two-tile run is what makes the pitch walkable: over one tile a flight
+climbs a storey at about 1.4 storeys per tile, over two at 0.59.
+
+Every stair in the level model is drawn this way, not just fire escapes:
+station steps, subway entrances and garage ramps share the routine. A garage
+ramp may reach several tiles to find its road mouth, so the drawing takes a
+single step toward the far end rather than the whole offset -- otherwise the
+footprint scales with the distance to the mouth.
