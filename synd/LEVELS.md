@@ -303,3 +303,27 @@ overruns 95% of a storey, scale it to fit. `drawCar` applies `vfit` inside
 `px()`, so every height in the body -- hull, canopy, light bar, fin, cargo box,
 thrusters -- is squashed as one piece rather than clipped somewhere in the
 middle.
+
+## Stub roads and their junctions
+
+A stub road runs from an avenue out to a roundabout of its own. It has to
+reach the avenue's carriageway: the avenue lays a kerb down each of its
+flanks, and a stub that stops on the near side of that kerb leaves itself
+and its roundabout an island no car in the sector can reach.
+
+Two things follow from that kerb, and both were wrong:
+
+- The clear-area test for an eastward or southward stub started **on** the
+  kerb, which is never open ground, so those two directions could never
+  place at all. It starts beyond the kerb now -- the stub is going to pave
+  over that tile anyway.
+- The westward and northward stubs stopped one tile short of the kerb.
+  They now pave through it and touch the avenue lane.
+
+Once the tiles touch, the existing tee pass does the rest: a junction tile
+on the avenue has four road neighbours, which is what that pass looks for
+before opening turning exits. The mouth of each stub is given a zebra so
+the tee reads as a junction rather than two roads that happen to meet.
+
+If a change here ever needs checking, the measure is simple: flood the road
+network from the avenues and count what is left over. It should be nothing.

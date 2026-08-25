@@ -429,6 +429,20 @@ export function generateCity(seed: number): City {
     carveRing(rx0, ry0, true);
   };
 
+  // Zebra across the mouth of a stub where it meets an avenue, so the tee
+  // reads as a junction rather than a road that happens to touch another.
+  const markMouth = (sx: number, sy: number, axis: number): void => {
+    for (const [ox, oy] of axis === 1 ? [[0, 0], [1, 0]] : [[0, 0], [0, 1]]) {
+      const i = idx(sx + ox, sy + oy);
+      if (inGrid(sx + ox, sy + oy) && tiles[i] === T_ROAD) crossing[i] = axis;
+    }
+  };
+
+  // A stub runs from an avenue out to a roundabout of its own. It has to reach
+  // the avenue's carriageway to be any use: stopping on the kerb leaves the
+  // stub and its roundabout an island, unreachable by any car in the sector.
+  // The clear-area test therefore starts beyond the kerb the stub will pave
+  // over, rather than on it - which it could never pass.
   const stubCount = 44; // attempts; many fail the clear-area check in dense grids
   for (let i = 0; i < stubCount; i++) {
     const len = rng.int(5, 13);
@@ -438,14 +452,16 @@ export function generateCity(seed: number): City {
       const y = rng.int(8, GRID - 14);
       if (rng.chance(0.5)) { // heading right (east): ring's left column receives the stub
         const rx0 = ax + 2 + len, ry0 = y - 1;
-        if (!areaClear(ax + 2, ry0 - 1, rx0 + 4, ry0 + 4)) continue;
+        if (!areaClear(ax + 3, ry0 - 1, rx0 + 4, ry0 + 4)) continue;
         placeRoundabout(rx0, ry0);
-        paveRoadH(y, ax + 2, rx0 - 1);
+        paveRoadH(y, ax + 2, rx0 - 1);      // ax+2 is the avenue's east kerb
+        markMouth(ax + 3, y, 2);
       } else { // heading left (west): ring's right column receives the stub
         const rx1 = ax - 3 - len, rx0 = rx1 - 3, ry0 = y - 1;
         if (!areaClear(rx0 - 1, ry0 - 1, ax - 2, ry0 + 4)) continue;
         placeRoundabout(rx0, ry0);
-        paveRoadH(y, rx1 + 1, ax - 2);
+        paveRoadH(y, rx1 + 1, ax - 1);      // ax-1 is the avenue's west kerb
+        markMouth(ax - 2, y, 2);
       }
     } else if (hRoads.length > 0) {
       // vertical stub off a horizontal avenue; stub cols x, x+1
@@ -453,14 +469,16 @@ export function generateCity(seed: number): City {
       const x = rng.int(8, GRID - 14);
       if (rng.chance(0.5)) { // heading down (south): ring's top row receives the stub
         const ry0 = ay + 2 + len, rx0 = x - 1;
-        if (!areaClear(rx0 - 1, ay + 2, rx0 + 4, ry0 + 4)) continue;
+        if (!areaClear(rx0 - 1, ay + 3, rx0 + 4, ry0 + 4)) continue;
         placeRoundabout(rx0, ry0);
         paveRoadV(x, ay + 2, ry0 - 1);
+        markMouth(x, ay + 3, 1);
       } else { // heading up (north): ring's bottom row receives the stub
         const ry1 = ay - 3 - len, ry0 = ry1 - 3, rx0 = x - 1;
         if (!areaClear(rx0 - 1, ry0 - 1, rx0 + 4, ay - 2)) continue;
         placeRoundabout(rx0, ry0);
-        paveRoadV(x, ry1 + 1, ay - 2);
+        paveRoadV(x, ry1 + 1, ay - 1);
+        markMouth(x, ay - 2, 1);
       }
     }
   }
