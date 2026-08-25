@@ -112,6 +112,7 @@ export interface City {
   fittings: Fitting[];       // what furnishes the underground concourses
   garages: { x: number; y: number; w: number; h: number }[]; // parking floors under buildings
   stairRuns: StairRun[];     // the footprint each flight of steps was given
+  ring: Uint8Array;          // 1 on a roundabout's circulating lane
 }
 
 // ---------------------------------------------------------------------------
@@ -876,6 +877,9 @@ export function generateCity(seed: number): City {
     }
   }
 
+  const ring = new Uint8Array(GRID * GRID);
+  for (const i of ringTiles) ring[i] = 1;
+
   const levels = lb.freeze(GRID * GRID);
 
   // ---- 7d. Give every flight of steps a two-tile footprint along the wall.
@@ -885,7 +889,7 @@ export function generateCity(seed: number): City {
   // has to be there, the tree only wants to be. ----
   const stairRuns = layOutStairs(levels, tiles, props, lamps, streetUsed);
 
-  return { seed, tiles, height, bstyle, laneDir, decos, props, crossing, streetUsed, levels, fittings, garages, lamps, roundabouts, vRoads, hRoads, skytrains, stations, stairRuns };
+  return { seed, tiles, height, bstyle, laneDir, decos, props, crossing, streetUsed, levels, fittings, garages, lamps, roundabouts, vRoads, hRoads, skytrains, stations, stairRuns, ring };
 }
 
 // Every stair in the level model gets two tiles of footprint along the wall it

@@ -375,8 +375,12 @@ export class Renderer {
       // Height needs no depth trickery: entities flush after the columns of
       // their own bucket, so a ped on a roof already lands on top of the
       // building it stands on, and nearer columns still occlude it.
-      const alive = p.team === "player" && p.agentIdx >= 0 && p.hp > 0;
-      if (!alive && !shown(p.z)) continue;
+      // Everyone obeys the cut plane, the squad included. An agent the plane
+      // has taken away is not drawn solid here - the ghost pass further down
+      // still shows them through whatever is in the way, which is what makes
+      // a squad two levels below the one you are looking at read as present
+      // but out of sight rather than standing on the pavement.
+      if (!shown(p.z)) continue;
       push({ s: Math.floor(p.x) + Math.floor(p.y), pri: 1, kind: "ped", ped: p, x: p.x, y: p.y });
     }
     for (const c of world.cars) {

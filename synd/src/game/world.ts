@@ -71,6 +71,9 @@ export interface Car {
   pilotOut: boolean;
   occupants: number[];    // agent ped ids
   waitT: number;          // seconds spent stopped behind another car
+  fuse?: number;          // seconds until a neighbouring blast sets this one off
+  chainFrom?: Ped | null; // who gets the credit when that fuse runs out
+  ringT?: number;         // consecutive roundabout tiles it has circulated
   flash?: number;         // seconds of boarding-feedback flash left
   flashOk?: boolean;      // green when the order took, red when it could not
 }
@@ -139,6 +142,11 @@ const BLAST_R = 3.5;      // a wrecked car hurts everyone inside this radius
 const KERB_GAP = 3;       // clear length a car needs to itself at the kerb
 // How long a vehicle lights up to acknowledge an order to board it.
 export const BOARD_FLASH = 0.5;
+
+// A car caught in a blast goes up a beat later, so a row of parked cars cooks
+// off one after another instead of all at once.
+export const CHAIN_FUSE = 0.5;
+export const CHAIN_R = 2.6;     // tiles: touching, or nearly
 
 // Stairs are walked at three quarters of open-ground pace.
 export const STAIR_PACE = 0.75;
@@ -1121,6 +1129,14 @@ export class World {
     }
     c.occupants = [];
     this.explode(c.x, c.y, from);
+    // light the fuse on anything standing alongside
+    for (const o of this.cars) {
+      if (o.id === c.id || o.state === "wreck" || o.z !== c.z) continue;
+      if (o.fuse !== undefined && o.fuse > 0) continue;      // already counting down
+      if (dist2(o.x, o.y, c.x, c.y) > CHAIN_R * CHAIN_R) continue;
+      o.fuse = CHAIN_FUSE;
+      o.chainFrom = from;
+    }
   }
 
   private explode(x: number, y: number, from: Ped | null): void {
@@ -1231,6 +1247,11 @@ export class World {
     for (const f of this.flashes) f.life -= dt;
     this.flashes = this.flashes.filter((f) => f.life > 0);
     for (const c of this.cars) if (c.flash) c.flash = Math.max(0, c.flash - dt);
+    for (const c of this.cars) {
+      if (c.fuse === undefined || c.fuse <= 0 || c.state === "wreck") continue;
+      c.fuse -= dt;
+      if (c.fuse <= 0) { c.fuse = 0; this.destroyCar(c, c.chainFrom ?? null); }
+    }
     for (const t of this.trains) if (t.flash) t.flash = Math.max(0, t.flash - dt);
     for (const pg of this.pings) pg.life -= dt;
     this.pings = this.pings.filter((pg) => pg.life > 0);
@@ -1860,8 +1881,18 @@ export class World {
         if (isRoad(this.city, fx, fy)) options.push(d);
       }
       if (options.length > 0) {
-        // prefer going straight
-        c.dir = options.includes(c.dir) && this.rng.chance(0.75) ? c.dir : this.rng.pick(options);
+        // A ring always offers a way round, so a car that keeps choosing it can
+        // circulate for ever - one was measured going round for forty seconds.
+        // After half a lap it takes the next exit offered, whatever else is on
+        // the table.
+        const onRing = this.city.ring[idx(tx, ty)] === 1;
+        c.ringT = onRing ? (c.ringT ?? 0) + 1 : 0;
+        const leaving = onRing && c.ringT > 6
+          ? options.filter((d) => this.city.ring[idx(tx + DX[d], ty + DY[d])] !== 1)
+          : [];
+        if (leaving.length > 0) c.dir = this.rng.pick(leaving);
+        // otherwise prefer going straight
+        else c.dir = options.includes(c.dir) && this.rng.chance(0.75) ? c.dir : this.rng.pick(options);
       } else {
         // dead end / edge: despawn by wrecking silently at map border
         if (tx <= 1 || ty <= 1 || tx >= GRID - 2 || ty >= GRID - 2) { c.hp = -999; c.state = "wreck"; return; }

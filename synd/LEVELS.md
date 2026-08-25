@@ -349,3 +349,24 @@ Measuring lane discipline from car positions needs care: a car carries its
 previous heading through the first half of a corner tile and only commits to
 the new tile's lane at its centre. Sampling without allowing for that reports
 around a fifth of ring traffic as driving the wrong way when none of it is.
+
+## Being out of sight
+
+An agent obeys the cut plane like everything else, and the ghost pass draws
+the squad over the top of the frame at low alpha whatever the plane is doing.
+Together that gives one rule: solid where you are looking at the level they
+are standing on, transparent everywhere else -- two levels down, two levels
+up, or behind a building. Measured as pixel shift against a frame with the
+squad moved away, an agent on their own level reads at around 220 and a
+ghosted one at around 70.
+
+## Roundabouts
+
+`City.ring` marks a roundabout's circulating lane. A ring always offers a way
+round, so a car that keeps choosing it will circulate for ever -- one was
+measured going round for forty seconds. After half a lap a car takes the next
+exit it is offered whatever else is available, which bounds circulation at
+about fifteen tiles.
+
+Measuring this by time on a ring is misleading: a car held in a queue there
+is not circulating. Count tiles entered instead.
