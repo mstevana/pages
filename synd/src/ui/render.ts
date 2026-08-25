@@ -8,7 +8,7 @@ import { PeopleAtlas, FW, FH } from "../sprites/people";
 import { BENCH_H, BENCH_W, STALL_H, STALL_W, TREE_H, TREE_W } from "../sprites/props";
 import { CAR_MODELS } from "../sprites/cars";
 import { TileArt } from "../sprites/tiles";
-import { Car, Ped, TRAIN_CARS, TRAIN_HALF, TRAIN_SEG, World } from "../game/world";
+import { BOARD_FLASH, Car, Ped, TRAIN_CARS, TRAIN_HALF, TRAIN_SEG, World } from "../game/world";
 import { ITEMS } from "../game/items";
 import { ICON_SIZE, itemIcons } from "../sprites/icons";
 
@@ -55,7 +55,7 @@ interface FenceEdge {
   hazard: boolean;       // yellow pit railing vs park fence
 }
 
-interface TrainSeg { wx: number; wy: number; angle: number; head: boolean; lift: number; }
+interface TrainSeg { wx: number; wy: number; angle: number; head: boolean; lift: number; flash: number; flashOk: boolean; }
 
 interface DeckTile { x: number; y: number; axis: "v" | "h"; pylon: boolean; }
 
@@ -189,6 +189,22 @@ export class Renderer {
         }
       }
     }
+  }
+
+  // Light a vehicle up to acknowledge an order to board it. Every panel a
+  // vehicle draws goes through its own `quad`, so collecting those paths gives
+  // the exact silhouette to brighten - no second body model to keep in step.
+  private flashOver(g: CanvasRenderingContext2D, path: Path2D | null, flash: number, ok: boolean): void {
+    if (!path || flash <= 0) return;
+    // full brightness the instant it is tapped, easing off from there: a
+    // pulsing envelope reads as a flicker over so short a life
+    const f = Math.min(1, flash / BOARD_FLASH);
+    g.save();
+    g.globalCompositeOperation = "lighter";
+    g.globalAlpha = Math.pow(f, 0.75) * 0.6;
+    g.fillStyle = ok ? "#7fc8ff" : "#ff6a55";
+    g.fill(path);
+    g.restore();
   }
 
   private glow(x: number, y: number, r: number, hex: string, intensity: number): void {
@@ -412,7 +428,8 @@ export class Renderer {
           if (wx < x0 || wx > x1 || wy < y0 || wy > y1) continue;
           const angle = line.axis === "v" ? Math.atan2(t.dir, 0) : Math.atan2(0, t.dir);
           push({ s: Math.floor(wx) + Math.floor(wy), pri: 2, kind: "train", x: wx, y: wy,
-                 train: { wx, wy, angle, head: t.dir === 1 ? k === 0 : k === nSeg - 1, lift: line.level * STORY_H } });
+                 train: { wx, wy, angle, head: t.dir === 1 ? k === 0 : k === nSeg - 1, lift: line.level * STORY_H,
+                          flash: t.flash ?? 0, flashOk: t.flashOk ?? true } });
         }
       }
     }
@@ -1494,6 +1511,7 @@ export class Renderer {
       const wx = t.wx + fx * df + rx * dr, wy = t.wy + fy * df + ry * dr;
       return [SX(wx, wy), SY(wx, wy) - lift];
     };
+    const lit = t.flash ? new Path2D() : null;
     const quad = (pts: [number, number][], col: string) => {
       g.fillStyle = col;
       g.beginPath();
@@ -1501,6 +1519,11 @@ export class Renderer {
       for (let i = 1; i < pts.length; i++) g.lineTo(pts[i][0], pts[i][1]);
       g.closePath();
       g.fill();
+      if (lit) {
+        lit.moveTo(pts[0][0], pts[0][1]);
+        for (let i = 1; i < pts.length; i++) lit.lineTo(pts[i][0], pts[i][1]);
+        lit.closePath();
+      }
     };
     const shade = (hex: string, f: number): string => {
       const n = parseInt(hex.slice(1), 16);
@@ -1560,6 +1583,7 @@ export class Renderer {
       g.fillRect(sx - 20 * z, sy - 20 * z, 40 * z, 40 * z);
       g.globalCompositeOperation = "source-over";
     }
+    this.flashOver(g, lit, t.flash, t.flashOk);
   }
 
   // Ring stacks for the car bodywork and canopy: {h} is the fraction of the
@@ -1593,6 +1617,7 @@ export class Renderer {
       const wx = c.x + fx * df + rx * dr, wy = c.y + fy * df + ry * dr;
       return [SX(wx, wy), SY(wx, wy) - lift - c.z * STORY_H * z];
     };
+    const lit = c.flash ? new Path2D() : null;
     const quad = (pts: [number, number][], col: string) => {
       g.fillStyle = col;
       g.beginPath();
@@ -1600,6 +1625,11 @@ export class Renderer {
       for (let i = 1; i < pts.length; i++) g.lineTo(pts[i][0], pts[i][1]);
       g.closePath();
       g.fill();
+      if (lit) {
+        lit.moveTo(pts[0][0], pts[0][1]);
+        for (let i = 1; i < pts.length; i++) lit.lineTo(pts[i][0], pts[i][1]);
+        lit.closePath();
+      }
     };
     // extrude a convex footprint (body-space points) between two heights;
     // side brightness rolls smoothly toward the camera for a rounded hull
@@ -1921,6 +1951,7 @@ export class Renderer {
       g.ellipse(sx, sy, 19 * z, 8.5 * z, 0, 0, Math.PI * 2);
       g.stroke();
     }
+    this.flashOver(g, lit, c.flash ?? 0, c.flashOk ?? true);
   }
 
   private drawPed(

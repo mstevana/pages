@@ -238,3 +238,23 @@ you are already riding does nothing.
 Anything measuring a station in a test needs a search radius that matches the
 platform, not the old five-tile one; and converting a train's position to a
 tile takes `Math.floor`, not `Math.round` -- a track centre sits at x.5.
+
+## Acknowledging a tap on a vehicle
+
+Tapping a car or a train to board it lights the vehicle up for half a second:
+blue when the order took, red when nothing could act on it. Without that, a
+tap that fails -- the wrong side of the platform, no way through to the car,
+a train still moving -- looks exactly like a tap that missed the vehicle
+altogether.
+
+Every panel a vehicle draws goes through its own local `quad`, so the flash
+is built by accumulating those same paths into a `Path2D` and filling it once
+with `globalCompositeOperation = "lighter"`. That gives the exact silhouette
+with no second body model to keep in step with the first -- which matters for
+the car, whose hull is lofted from twenty-segment rings rather than described
+by any polygon you could write down.
+
+Two things to keep in mind if this is ever tuned. The envelope is a single
+decay from full brightness; an oscillating one reads as a flicker over so
+short a life. And measuring it from pixels needs the lit frame bracketed
+between two unlit ones, because the city behind it never stops animating.

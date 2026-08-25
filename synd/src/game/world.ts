@@ -71,6 +71,8 @@ export interface Car {
   pilotOut: boolean;
   occupants: number[];    // agent ped ids
   waitT: number;          // seconds spent stopped behind another car
+  flash?: number;         // seconds of boarding-feedback flash left
+  flashOk?: boolean;      // green when the order took, red when it could not
 }
 
 export interface Projectile {
@@ -119,6 +121,8 @@ export interface Train {
   dwell: number;         // seconds left standing
   stop: number;          // index into the line's stop list it is heading for
   occupants: number[];
+  flash?: number;
+  flashOk?: boolean;
 }
 
 export interface MissionResult {
@@ -133,6 +137,9 @@ const CIV_LIMIT = 90;
 const CAR_LIMIT = 7;
 const BLAST_R = 3.5;      // a wrecked car hurts everyone inside this radius
 const KERB_GAP = 3;       // clear length a car needs to itself at the kerb
+// How long a vehicle lights up to acknowledge an order to board it.
+export const BOARD_FLASH = 0.5;
+
 export const TRAIN_SEG = 1.9;   // length of one car, in tiles
 export const TRAIN_CARS = 4;    // cars in a set
 // A train's u is the middle of the set, not its nose. Tracking the nose meant
@@ -584,13 +591,28 @@ export class World {
 
   cmdBoardCar(sel: boolean[], carId: number): void {
     const car = this.cars.find((c) => c.id === carId);
-    if (!car || car.state === "wreck" || car.state === "drive" || car.state === "stopping") return;
+    if (!car) return;
+    if (car.state === "wreck" || car.state === "drive" || car.state === "stopping") {
+      this.flashVehicle(car, false);
+      return;
+    }
+    let ordered = false;
     for (const a of this.selectedAgents(sel)) {
       if (a.carId !== null) continue;
       a.boardOrder = carId; a.dropOrder = null; a.pickOrder = null; a.giveOrder = null;
       const p = this.pf.walkPath(a.x, a.y, car.x, car.y);
-      if (p) { a.path = p; a.pathIdx = 0; a.state = "walk"; }
+      if (p) { a.path = p; a.pathIdx = 0; a.state = "walk"; ordered = true; }
     }
+    this.flashVehicle(car, ordered);
+  }
+
+  // Acknowledge a tap on a vehicle by lighting it up: green when the order
+  // took, red when nothing could act on it. Without this a tap that fails --
+  // the wrong side of the platform, no way through to the car -- looks
+  // identical to a tap that missed the vehicle altogether.
+  private flashVehicle(v: { flash?: number; flashOk?: boolean }, ok: boolean): void {
+    v.flash = BOARD_FLASH;
+    v.flashOk = ok;
   }
 
   // Is this stretch of kerb spoken for? Only cars at the kerb count - traffic
@@ -678,7 +700,9 @@ export class World {
   // keeps its own timetable, and the only choice is where to get off.
   cmdBoardTrain(sel: boolean[], trainId: number): void {
     const t = this.trains.find((q) => q.id === trainId);
-    if (!t || t.state !== "dwell") { this.notify("TRAIN IN MOTION"); return; }
+    if (!t) return;
+    if (t.state !== "dwell") { this.notify("TRAIN IN MOTION"); this.flashVehicle(t, false); return; }
+    let ordered = false;
     for (const a of this.selectedAgents(sel)) {
       if (a.carId !== null || a.trainId !== null) continue;
       const lvl = this.city.skytrains[t.line].level;
@@ -687,8 +711,10 @@ export class World {
       t.occupants.push(a.id);
       a.trainId = t.id;
       a.path = null;
+      ordered = true;
       this.audio.carStart();
     }
+    this.flashVehicle(t, ordered);
   }
 
   cmdExitTrain(sel: boolean[]): void {
@@ -1182,6 +1208,8 @@ export class World {
     this.beams = this.beams.filter((b) => b.life > 0);
     for (const f of this.flashes) f.life -= dt;
     this.flashes = this.flashes.filter((f) => f.life > 0);
+    for (const c of this.cars) if (c.flash) c.flash = Math.max(0, c.flash - dt);
+    for (const t of this.trains) if (t.flash) t.flash = Math.max(0, t.flash - dt);
     for (const pg of this.pings) pg.life -= dt;
     this.pings = this.pings.filter((pg) => pg.life > 0);
     for (const pt of this.particles) {
