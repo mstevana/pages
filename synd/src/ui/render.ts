@@ -66,6 +66,7 @@ export class Renderer {
   // how many whole buildings the last frame sliced open to keep the squad in
   // view - zero whenever nothing is actually hidden behind one
   cutawayCount = 0;
+  readonly carModels = CAR_MODELS;   // exposed so tests can measure the chassis
   private buildingId: Int32Array; // connected-component label per WALL/BUILDING tile
   readonly maxStories: number;    // ceiling of the tallest building in the sector
   readonly minLevel: number;      // floor of the deepest surface under the street
@@ -1613,9 +1614,12 @@ export class Renderer {
     };
     const fx = Math.cos(c.angle), fy = Math.sin(c.angle);
     const rx = -fy, ry = fx;
+    // every height in this body is scaled by the model's own fit, so a chassis
+    // that would otherwise stand taller than the storey it parks under is
+    // squashed as one piece rather than clipped somewhere in the middle
     const px = (df: number, dr: number, lift: number): [number, number] => {
       const wx = c.x + fx * df + rx * dr, wy = c.y + fy * df + ry * dr;
-      return [SX(wx, wy), SY(wx, wy) - lift - c.z * STORY_H * z];
+      return [SX(wx, wy), SY(wx, wy) - lift * m.vfit - c.z * STORY_H * z];
     };
     const lit = c.flash ? new Path2D() : null;
     const quad = (pts: [number, number][], col: string) => {

@@ -258,3 +258,29 @@ Two things to keep in mind if this is ever tuned. The envelope is a single
 decay from full brightness; an oscillating one reads as a flicker over so
 short a life. And measuring it from pixels needs the lit frame bracketed
 between two unlit ones, because the city behind it never stops animating.
+
+## Walking a staircase
+
+`stairWalk(run)` returns the line an agent follows up a flight: along one
+flight to its head, across the landing there, back along the next. It has to
+match what `drawFireStair` paints, so the two share their INSET, LAND and
+half-tile v-offsets; change one and the other walks through the air beside
+its own staircase.
+
+`climbPath` expands every step that crosses a stair link into that line, and
+marks those waypoints. A marked waypoint is walked at `STAIR_PACE` of open
+ground speed rather than being paced by its climb: the path already traces
+the flights, so the rise is no longer something to compensate for. It also
+gets a much tighter arrival radius -- stair waypoints come every half tile or
+so, and the ordinary one hands back enough of each segment to make the climb
+measurably faster than the pace asks for.
+
+## Vehicle headroom
+
+A car parked in a basement garage has the street's slab a storey over its
+roof, so anything taller than that pokes through. Each model in `CAR_MODELS`
+gets a `vfit`: measure its highest point, roof furniture included, and if that
+overruns 95% of a storey, scale it to fit. `drawCar` applies `vfit` inside
+`px()`, so every height in the body -- hull, canopy, light bar, fin, cargo box,
+thrusters -- is squashed as one piece rather than clipped somewhere in the
+middle.

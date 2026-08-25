@@ -1,10 +1,10 @@
 // Grid pathfinding: 8-way A* for pedestrians, lane-directed A* for cars.
 
-import { City, DBIT, DX, DY, T_ROAD, hollowAt, idx, inGrid, isWalkable, surfaceNear } from "../city/citygen";
+import { City, DBIT, DX, DY, hollowAt, idx, inGrid, isWalkable, StairRun, stairWalk, surfaceNear, T_ROAD } from "../city/citygen";
 import { GRID } from "../engine/util";
 
 const MAX_EXPAND = 60000;
-export interface Step { x: number; y: number; z: number }
+export interface Step { x: number; y: number; z: number; stair?: boolean }
 
 class Heap {
   keys: number[] = [];
@@ -52,6 +52,7 @@ export class Pathfinder {
   private stamp = new Int32Array(GRID * GRID);
   private gen = 0;
   private heap = new Heap();
+  private stairIndex: Map<number, StairRun> | null = null;
 
   constructor(private city: City) {}
 
@@ -170,7 +171,37 @@ export class Pathfinder {
       if (cur !== -1 && stamp2[cur] !== this.gen) break;
     }
     out.reverse();
+    return this.walkTheStairs(out);
+  }
+
+  // A stair link joins two surfaces a storey or more apart, so following it
+  // straight carries an agent up through the middle of its own stairwell. Swap
+  // each such step for the line the staircase actually draws.
+  private walkTheStairs(steps: Step[]): Step[] {
+    const out: Step[] = [];
+    for (let i = 0; i < steps.length; i++) {
+      const a = steps[i], b = steps[i + 1];
+      out.push(a);
+      if (!b || Math.abs(b.z - a.z) < 0.05) continue;
+      const run = this.stairBetween(a, b);
+      if (!run) continue;
+      const line = stairWalk(run);
+      const up = Math.abs(a.z - run.base) < Math.abs(b.z - run.base);
+      if (!up) line.reverse();
+      for (const q of line) out.push({ x: q.x, y: q.y, z: q.z, stair: true });
+    }
     return out;
+  }
+
+  private stairBetween(a: Step, b: Step): StairRun | null {
+    if (!this.stairIndex) {
+      this.stairIndex = new Map();
+      for (const r of this.city.stairRuns) {
+        this.stairIndex.set(idx(r.x, r.y) * 65536 + idx(r.rx, r.ry), r);
+      }
+    }
+    const ta = idx(a.x | 0, a.y | 0), tb = idx(b.x | 0, b.y | 0);
+    return this.stairIndex.get(ta * 65536 + tb) ?? this.stairIndex.get(tb * 65536 + ta) ?? null;
   }
 
   // the search arrays follow however many surfaces the sector turned out to have

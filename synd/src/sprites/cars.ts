@@ -1,3 +1,5 @@
+import { STORY_H } from "../engine/util";
+
 // 24 hover-car chassis. The line-up borrows from the flying taxis and police
 // cruisers of The Fifth Element, the blunt utilitarian machines of Syndicate,
 // and the muscle cars, corpo sedans and armoured SUVs of Cyberpunk 2077.
@@ -28,12 +30,14 @@ export interface CarModel {
   turbo: number;              // pairs of visible thrusters
   livery: Livery;
   body: string; accent: string; glassTint: string;
+  vfit: number;               // vertical scale that keeps it under a storey
 }
 
 const D: Omit<CarModel, "name"> = {
   L: 1.25, W: 0.42, round: 0.4, hull: 8, cabH: 12.5, cabF: 0.34, cabB: -0.6, cabW: 0.74,
   taper: 0.2, cargo: 0, fin: 0, bar: 0, rack: false, spoiler: false, bull: false,
   skirt: false, turbo: 1, livery: "none", body: "#3a4048", accent: "#7a828e", glassTint: "#6fa8c2",
+  vfit: 1,
 };
 const M = (name: string, o: Partial<CarModel>): CarModel => ({ ...D, name, ...o });
 
@@ -95,3 +99,23 @@ export const CAR_MODELS: CarModel[] = [
     cabW: 0.64, taper: 0.48, fin: 5, spoiler: true, skirt: true, turbo: 2, livery: "stripe",
     body: "#2a0f3a", accent: "#ff2fa0" }),
 ];
+
+// A car has to fit under whatever is over it. In a basement garage that is the
+// slab holding up the street, one storey above the floor it is parked on, and
+// anything taller pokes through it. Measure each model's highest point -- roof
+// furniture included, since a light bar is what sticks out -- and squash the
+// whole body to fit if it overruns.
+const GROUND_CLEARANCE = 2;              // px at zoom 1, matching drawCar
+const HEADROOM = 0.95 * STORY_H;         // 95% of the storey it parks under
+
+for (const m of CAR_MODELS) {
+  const top = Math.max(
+    m.cabH + (m.bar ? 2.2 : 0),
+    m.hull + m.cargo,
+    m.hull + m.fin,
+    m.hull + (m.rack ? 4 : 0),
+    m.hull + (m.spoiler ? 4.5 : 0),
+  );
+  const tall = GROUND_CLEARANCE + top;
+  m.vfit = tall <= HEADROOM ? 1 : HEADROOM / tall;
+}

@@ -24,7 +24,7 @@ export interface Ped {
   dir: number;            // 0..7 facing
   hp: number; maxHp: number;
   state: PedState;
-  path: { x: number; y: number; z?: number }[] | null;
+  path: { x: number; y: number; z?: number; stair?: boolean }[] | null;
   pathIdx: number;
   speed: number;
   animT: number;
@@ -139,6 +139,9 @@ const BLAST_R = 3.5;      // a wrecked car hurts everyone inside this radius
 const KERB_GAP = 3;       // clear length a car needs to itself at the kerb
 // How long a vehicle lights up to acknowledge an order to board it.
 export const BOARD_FLASH = 0.5;
+
+// Stairs are walked at three quarters of open-ground pace.
+export const STAIR_PACE = 0.75;
 
 export const TRAIN_SEG = 1.9;   // length of one car, in tiles
 export const TRAIN_CARS = 4;    // cars in a set
@@ -1297,10 +1300,15 @@ export class World {
     const wz = wp.z ?? 0;
     const dz = wz - p.z;
     const d = Math.sqrt(dx * dx + dy * dy);
-    // A rung of stairs is one tile across but several storeys up: it is walked
-    // at the pace of the climb, so an agent visibly works its way up the flank.
-    const step = p.speed * dt * (p.state === "flee" ? 1.15 : 1) / (1 + Math.abs(dz) * 1.5);
-    if (d < Math.max(0.12, step)) {
+    // On a staircase the path already traces the flights, so the walk is a
+    // walk: just a slower one. Anywhere else a step that also climbs is paced
+    // by the climb, which is what keeps a ladder from being taken at a run.
+    const pace = wp.stair ? STAIR_PACE : 1 / (1 + Math.abs(dz) * 1.5);
+    const step = p.speed * dt * (p.state === "flee" ? 1.15 : 1) * pace;
+    // Stair waypoints come every half tile or so, and the ordinary arrival
+    // radius would hand back a good fraction of each segment for free, which
+    // shows up as a climb noticeably faster than the pace asks for.
+    if (d < Math.max(wp.stair ? 0.02 : 0.12, step)) {
       p.x = wp.x; p.y = wp.y; p.z = wz;
       p.pathIdx++;
       if (p.pathIdx >= p.path.length) {

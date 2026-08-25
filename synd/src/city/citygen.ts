@@ -242,6 +242,38 @@ export function kerbAt(c: City, x: number, y: number): Kerb | null {
 // viaduct sits over the first lane with its platform on the lane beside it; a
 // subway tunnel is bored under the middle of the avenue. Everything that has
 // to agree on where a train actually is reads this.
+// The walking line up a flight of steps: along one flight to its head, across
+// the landing there, back along the next. It has to match what drawFireStair
+// paints, or agents walk through the air beside their own staircase.
+export function stairWalk(fs: StairRun): { x: number; y: number; z: number }[] {
+  const ax = fs.dx, ay = fs.dy;                     // toward the wall it serves
+  const ux = -ay, uy = ax;                          // along the wall face
+  const cx = fs.x + 0.5, cy = fs.y + 0.5;
+  const RUN = fs.run;
+  const INSET = 0.05 / RUN, LAND = 0.34 / RUN;
+  const uStart = fs.side < 0 ? 0.5 - RUN : -0.5;
+  const at = (t: number, v: number, h: number) => ({
+    x: cx + ax * (0.5 - v) + ux * (uStart + t * RUN),
+    y: cy + ay * (0.5 - v) + uy * (uStart + t * RUN),
+    z: fs.base + h,
+  });
+  const out: { x: number; y: number; z: number }[] = [];
+  for (let lvl = 0; lvl < fs.h; lvl++) {
+    const top = Math.min(fs.h, lvl + 1);
+    const even = lvl % 2 === 0;
+    const vMid = even ? 0.275 : 0.725;              // the middle of this flight
+    const tFoot = even ? INSET : 1 - INSET;
+    const tHead = even ? 1 - INSET - LAND : INSET + LAND;
+    const tEnd = tFoot + (tHead - tFoot) * Math.min(1, top - lvl);
+    out.push(at(tFoot, vMid, lvl));
+    out.push(at(tEnd, vMid, top));
+    if (top >= lvl + 1 - 1e-6) {                    // a full flight has a landing
+      out.push(at(even ? 1 - INSET - LAND / 2 : INSET + LAND / 2, 0.5, lvl + 1));
+    }
+  }
+  return out;
+}
+
 export function trackCentre(line: Skytrain): number {
   return line.level < 0 ? line.pos + 1.5 : line.pos + 0.5;
 }
