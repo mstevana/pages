@@ -327,3 +327,25 @@ the tee reads as a junction rather than two roads that happen to meet.
 
 If a change here ever needs checking, the measure is simple: flood the road
 network from the avenues and count what is left over. It should be nothing.
+
+## What the cut plane hides
+
+A level above ground shows once the plane is at or over it. A level below
+ground has a floor over its head as well -- the street's slab, or the level
+above it -- and stays hidden until the plane has cut that away. So a section
+taken at street level shows the street, not the garages beneath it, and a
+subway train is invisible from above ground. `shown()` carries both rules;
+anything drawn underground must go through it, trains included.
+
+## Driving routes
+
+`drivePath` is always lane-legal. Where the one-way network cannot reach the
+tile asked for, the car is routed to the nearest tile it can reach. It used
+to fall back to a search that ignored lane direction entirely, which handed
+the player routes running the wrong way down a one-way street for a hundred
+tiles at a stretch -- 5 to 10% of all routes.
+
+Measuring lane discipline from car positions needs care: a car carries its
+previous heading through the first half of a corner tile and only commits to
+the new tile's lane at its centre. Sampling without allowing for that reports
+around a fifth of ring traffic as driving the wrong way when none of it is.

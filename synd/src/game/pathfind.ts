@@ -222,13 +222,16 @@ export class Pathfinder {
 
   // Car path along lane directions. Falls back to undirected road A* if the
   // directed graph can't reach (safety net for odd junctions).
+  // Always a legal route. Where the one-way network cannot reach the tile
+  // asked for, the car is sent to the nearest tile it can reach instead --
+  // this used to fall back to a search that ignored lane direction, which
+  // handed the player routes running the wrong way down a one-way street for
+  // a hundred tiles at a stretch.
   drivePath(sx: number, sy: number, tx: number, ty: number): { x: number; y: number }[] | null {
-    const p = this.roadAStar(sx | 0, sy | 0, tx | 0, ty | 0, true);
-    if (p) return p;
-    return this.roadAStar(sx | 0, sy | 0, tx | 0, ty | 0, false);
+    return this.roadAStar(sx | 0, sy | 0, tx | 0, ty | 0);
   }
 
-  private roadAStar(sx: number, sy: number, tx: number, ty: number, directed: boolean): { x: number; y: number }[] | null {
+  private roadAStar(sx: number, sy: number, tx: number, ty: number): { x: number; y: number }[] | null {
     const c = this.city;
     if (!inGrid(sx, sy) || !inGrid(tx, ty)) return null;
     if (c.tiles[idx(tx, ty)] !== T_ROAD) {
@@ -247,24 +250,29 @@ export class Pathfinder {
     const si = idx(sx, sy), ti = idx(tx, ty);
     g[si] = 0; stamp[si] = this.gen; came[si] = -1;
     heap.push(this.hDist(sx, sy, tx, ty), si);
+    const trace = (n0: number): { x: number; y: number }[] => {
+      const path: { x: number; y: number }[] = [];
+      let n = n0;
+      while (n !== -1 && path.length < 4096) {
+        path.push({ x: (n % GRID) + 0.5, y: ((n / GRID) | 0) + 0.5 });
+        n = came[n];
+      }
+      path.reverse();
+      return path;
+    };
+    // the closest the one-way network gets to the tile asked for
+    let best = si, bestH = this.hDist(sx, sy, tx, ty);
     let expanded = 0;
     while (heap.size > 0 && expanded < MAX_EXPAND) {
       const cur = heap.pop();
-      if (cur === ti) {
-        const path: { x: number; y: number }[] = [];
-        let n = cur;
-        while (n !== -1 && path.length < 4096) {
-          path.push({ x: (n % GRID) + 0.5, y: ((n / GRID) | 0) + 0.5 });
-          n = came[n];
-        }
-        path.reverse();
-        return path;
-      }
+      if (cur === ti) return trace(cur);
       expanded++;
       const cx = cur % GRID, cy = (cur / GRID) | 0;
+      const h = this.hDist(cx, cy, tx, ty);
+      if (h < bestH) { bestH = h; best = cur; }
       const bits = c.laneDir[cur];
       for (let d = 0; d < 4; d++) {
-        if (directed && (bits & DBIT[d]) === 0) continue;
+        if ((bits & DBIT[d]) === 0) continue;
         const nx = cx + DX[d], ny = cy + DY[d];
         if (!inGrid(nx, ny) || c.tiles[idx(nx, ny)] !== T_ROAD) continue;
         const ni = idx(nx, ny);
@@ -275,7 +283,7 @@ export class Pathfinder {
         }
       }
     }
-    return null;
+    return best === si ? null : trace(best);
   }
 
   private hDist(x0: number, y0: number, x1: number, y1: number): number {

@@ -559,9 +559,15 @@ export class World {
   cmdPickup(sel: boolean[], dropId: number): void {
     const d = this.drops.find((dd) => dd.id === dropId);
     if (!d) return;
-    // the first selected agent with a free slot goes to fetch it
+    // the nearest selected agent with somewhere to put it goes to fetch it
     const group = this.selectedAgents(sel).filter((g) => g.carId === null);
-    const a = group.find((g) => g.inv.length < 8);
+    let a: Ped | undefined;
+    let best = Infinity;
+    for (const g of group) {
+      if (g.inv.length >= 8) continue;
+      const d2 = dist2(g.x, g.y, d.x, d.y) + Math.abs(g.z) * 40;   // a storey is a long way
+      if (d2 < best) { best = d2; a = g; }
+    }
     if (!a) {
       if (group.length > 0) this.notify("NO FREE INVENTORY SLOTS");
       return;

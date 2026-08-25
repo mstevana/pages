@@ -362,8 +362,13 @@ export class Renderer {
     // drawn whatever the plane, so it can never be lost behind the view.
     // Anything under the street is only drawn once the plane has cut down to
     // it; on the surface view the ground hides it, as ground does.
+    // What the cut plane leaves visible. Above ground a level shows once the
+    // plane is at or over it. Below ground a level also has a floor over its
+    // head - the street's slab, or the level above it - and stays hidden
+    // until the plane has cut that away, which is why a section taken at the
+    // street shows the street and not the garages beneath it.
     const shown = (ez: number) => ez < -0.01
-      ? sectioned && ez <= section + 0.01
+      ? sectioned && ez <= section + 0.01 && section < ez + 1
       : !sectioned || ez <= section + 0.01;
     for (const p of world.peds) {
       if (p.carId !== null || p.x < x0 || p.x > x1 || p.y < y0 || p.y > y1) continue;
@@ -422,8 +427,8 @@ export class Renderer {
       const segLen = TRAIN_SEG, nSeg = TRAIN_CARS;
       for (const t of world.trains) {
         const line = this.city.skytrains[t.line];
+        if (!shown(line.level)) continue;               // underground unless cut open
         if (sectioned && line.level >= section + 0.01) continue;
-        if (!sectioned && line.level < 0) continue;      // underground unless cut open
         for (let k = 0; k < nSeg; k++) {
           // cars sit either side of the train's middle, so reversing the line
           // swaps which end leads without moving a single car
@@ -1984,7 +1989,7 @@ export class Renderer {
     }
     const sx = SX(p.x, p.y), sy = SY(p.x, p.y) - p.z * STORY_H * z;
     const s = PED_SCALE * z;
-    if (p.state !== "dead") {
+    if (p.state !== "dead" && p.trainId === null) {
       g.fillStyle = "rgba(0,0,0,0.4)";
       g.beginPath(); g.ellipse(sx, sy, 5 * z, 2.2 * z, 0, 0, Math.PI * 2); g.fill();
     }
@@ -1993,6 +1998,9 @@ export class Renderer {
       g.lineWidth = 1.5;
       g.beginPath(); g.ellipse(sx, sy, 6.5 * z, 3 * z, 0, 0, Math.PI * 2); g.stroke();
     }
+    // Riding: the marker says who is aboard and where, but the agent itself is
+    // inside the carriage and has no business being drawn on its roof.
+    if (p.trainId !== null) return;
     if (p.vip && p.state !== "dead") {
       g.fillStyle = `rgba(255,255,255,${0.5 + 0.5 * Math.sin(time * 5)})`;
       g.beginPath();
