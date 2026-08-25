@@ -275,6 +275,25 @@ gets a much tighter arrival radius -- stair waypoints come every half tile or
 so, and the ordinary one hands back enough of each segment to make the climb
 measurably faster than the pace asks for.
 
+## Underground walls
+
+Where a hollow meets the earth, a wall stands up from the floor along the
+shared edge. Which edge that is depends on the neighbour: `-x` is the tile
+diamond's **upper left** edge, `-y` its upper right, `+x` its lower right,
+`+y` its lower left. Naming the wrong pair of corners puts every panel one
+corner round, which along a straight boundary comes out as a sawtooth -- and
+worse, lands the `-x` wall on the same edge as the `+y` one, so the boundary
+that should carry it is left bare.
+
+## Cars in a garage
+
+Every car in one garage faces the same way. That is not only how a car park
+looks, it makes keeping them apart a matter of two distances -- a car's
+length along that facing, its width across it -- instead of a general
+box-overlap test. A candidate bay is rejected if it is within both of an
+existing one. Placement is by rejection rather than a fixed grid, so a
+garage takes as many cars as its shape allows and no more.
+
 ## Vehicle headroom
 
 A car parked in a basement garage has the street's slab a storey over its

@@ -292,10 +292,16 @@ export class Renderer {
             const nb = surfaceUnder(this.city, tx + dx2, ty + dy2, section);
             if (nb >= 0 && Math.abs(this.city.levels.z[nb] - fzz) < 0.01) continue;
             const wallH = 9 * z;
-            const a1: [number, number] = dx2 === -1 ? [sx, sy + th / 2] : dy2 === -1 ? [sx + tw / 2, sy]
-                     : dx2 === 1 ? [sx + tw, sy + th / 2] : [sx + tw / 2, sy + th];
-            const a2: [number, number] = dx2 === -1 ? [sx + tw / 2, sy + th] : dy2 === -1 ? [sx + tw, sy + th / 2]
-                     : dx2 === 1 ? [sx + tw / 2, sy + th] : [sx, sy + th / 2];
+            // The four edges of the diamond, each shared with the neighbour it
+            // faces: -x is the upper left one, not the lower left. Putting the
+            // wall on the wrong edge shifts every panel one corner round, and
+            // a straight boundary comes out as a sawtooth.
+            const top: [number, number] = [sx + tw / 2, sy];
+            const right: [number, number] = [sx + tw, sy + th / 2];
+            const bottom: [number, number] = [sx + tw / 2, sy + th];
+            const left: [number, number] = [sx, sy + th / 2];
+            const a1 = dx2 === -1 ? left : dy2 === -1 ? top : dx2 === 1 ? right : bottom;
+            const a2 = dx2 === -1 ? top : dy2 === -1 ? right : dx2 === 1 ? bottom : left;
             g.fillStyle = near ? "#20242c" : "#161a20";
             g.beginPath();
             g.moveTo(a1[0], a1[1]);

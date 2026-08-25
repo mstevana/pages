@@ -235,18 +235,31 @@ export class World {
       });
     }
 
-    // the garages are not empty: a few cars stand on each floor
+    // The garages are not empty: a few cars stand on each floor, parked in
+    // bays. Every car in one garage faces the same way, which makes keeping
+    // them apart a matter of two distances - a car's length along that facing,
+    // its width across it - rather than a general box-overlap test.
+    const BAY_LONG = 3.2;      // a car is 2.7 tiles at its longest
+    const BAY_WIDE = 1.5;      // and a shade over one tile across
     for (const gar of city.garages) {
       const n = Math.max(2, Math.min(6, Math.floor((gar.w * gar.h) / 9)));
-      for (let k = 0; k < n; k++) {
+      const facing = this.rng.chance(0.5) ? 0 : Math.PI / 2;
+      const bays: { along: number; across: number }[] = [];
+      for (let k = 0, tries = 0; k < n && tries < 80; tries++) {
         const gx = gar.x + 1 + this.rng.int(0, Math.max(0, gar.w - 3));
         const gy = gar.y + 1 + this.rng.int(0, Math.max(0, gar.h - 3));
         if (surfaceNear(city, gx, gy, GARAGE_LEVEL, 0.01) < 0) continue;
-        const car = this.spawnCar(gx + 0.5, gy + 0.5, this.rng.chance(0.5) ? 1 : 2);
+        const along = facing === 0 ? gx + 0.5 : gy + 0.5;
+        const across = facing === 0 ? gy + 0.5 : gx + 0.5;
+        if (bays.some((b) => Math.abs(b.along - along) < BAY_LONG
+                          && Math.abs(b.across - across) < BAY_WIDE)) continue;
+        bays.push({ along, across });
+        const car = this.spawnCar(gx + 0.5, gy + 0.5, facing === 0 ? 1 : 2);
         car.state = "parked";
         car.pilotOut = true;
         car.z = GARAGE_LEVEL;
-        car.angle = this.rng.chance(0.5) ? 0 : Math.PI / 2;
+        car.angle = facing;
+        k++;
       }
     }
 
