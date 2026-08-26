@@ -630,11 +630,13 @@ export class Renderer {
             const level = Math.min(d.level, stories - 1);
             const img = d.kind === "videowall"
               ? art.ads[d.variant % art.ads.length][(adFrame + d.variant) % 4]
+              : d.kind === "megawall"
+              ? art.megawalls[d.variant % art.megawalls.length][(adFrame + d.variant) % 6]
               : d.kind === "billboard" ? art.billboards[d.variant % art.billboards.length]
               : d.kind === "shopwin" ? art.shops[d.variant % art.shops.length]
               : art.neons[d.variant % art.neons.length];
-            const sxAd = d.kind === "videowall" ? 1.2 : d.kind === "neon" ? 1.1 : 1.0;
-            const syAd = d.kind === "videowall" ? 1.7 : d.kind === "neon" ? 1.5
+            const sxAd = d.kind === "videowall" || d.kind === "megawall" ? 1.2 : d.kind === "neon" ? 1.1 : 1.0;
+            const syAd = d.kind === "videowall" || d.kind === "megawall" ? 1.7 : d.kind === "neon" ? 1.5
               : d.kind === "billboard" ? 2.0 : 1.2;
             const inset = 2;
             g.save();
@@ -658,7 +660,9 @@ export class Renderer {
                 : groundY + TILE_H * z - (level + 1) * STORY_H * z + 2 * z;
               const cxAd = anchX + (img.width / 2) * sxAd * z;
               const cyAd = anchY + (img.width / 2) * (d.face === 0 ? 0.5 : -0.5) * sxAd * z + (img.height / 2) * syAd * z;
-              if (d.kind === "videowall") {
+              if (d.kind === "megawall") {
+                this.glow(cxAd, cyAd, img.width * sxAd * z * 1.05, art.adColors[(d.variant * 3) % art.adColors.length], art.night ? 0.3 : 0.1);
+              } else if (d.kind === "videowall") {
                 this.glow(cxAd, cyAd, img.width * sxAd * z * 1.15, art.adColors[d.variant % art.adColors.length], art.night ? 0.2 : 0.07);
               } else if (d.kind === "billboard") {
                 this.glow(cxAd, cyAd, img.width * sxAd * z * 1.1, art.adColors[d.variant % art.adColors.length], art.night ? 0.14 : 0.05);

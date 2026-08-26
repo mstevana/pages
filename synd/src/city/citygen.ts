@@ -47,7 +47,7 @@ export const DBIT = [D_N, D_E, D_S, D_W];
 export interface Deco {
   x: number; y: number;      // wall tile carrying the deco
   face: 0 | 1;               // 0 = SW face (south neighbor open), 1 = SE face (east neighbor open)
-  kind: "videowall" | "neon" | "door" | "billboard" | "shopwin";
+  kind: "videowall" | "neon" | "door" | "billboard" | "shopwin" | "megawall";
   variant: number;           // which ad / sign / door design
   level: number;             // story on the wall (0-based)
 }
@@ -557,18 +557,23 @@ export function generateCity(seed: number): City {
 
         // upper storeys: a big billboard, a videowall, or a neon sign
         if (onStreet && !upperTaken.has(key)) {
-          if (hgt >= 3 && rng.chance(0.035)) {
-            decos.push({ x, y, face, kind: "billboard", variant: rng.int(0, 7), level: rng.int(1, hgt - 2) });
+          if (hgt >= 5 && rng.chance(0.012)) {
+            // an advertisement wall wants three clear storeys and is rare
+            // enough that meeting one is an event
+            decos.push({ x, y, face, kind: "megawall", variant: rng.int(0, 5), level: rng.int(1, hgt - 3) });
+            upperTaken.add(key);
+          } else if (hgt >= 3 && rng.chance(0.035)) {
+            decos.push({ x, y, face, kind: "billboard", variant: rng.int(0, 31), level: rng.int(1, hgt - 2) });
             upperTaken.add(key);
           } else if (hgt >= 2 && rng.chance(0.06)) {
-            decos.push({ x, y, face, kind: rng.chance(0.45) ? "videowall" : "neon", variant: rng.int(0, 7), level: rng.int(1, Math.max(1, hgt - 1)) });
+            decos.push({ x, y, face, kind: rng.chance(0.45) ? "videowall" : "neon", variant: rng.int(0, 31), level: rng.int(1, Math.max(1, hgt - 1)) });
             upperTaken.add(key);
           }
         }
         // street level: a lit shop window, otherwise an entrance
         if (!groundTaken.has(key)) {
           if (onStreet && rng.chance(0.66)) {
-            decos.push({ x, y, face, kind: "shopwin", variant: rng.int(0, 23), level: 0 });
+            decos.push({ x, y, face, kind: "shopwin", variant: rng.int(0, 95), level: 0 });
             groundTaken.add(key);
           } else if (((x * 3 + y * 5) % 4 === 0) && rng.chance(0.35)) {
             decos.push({ x, y, face, kind: "door", variant: rng.int(0, 3), level: 0 });

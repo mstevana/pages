@@ -419,3 +419,18 @@ either, cars only the second, and `layOutStairs` skips both -- a ramp drawn
 as a switchback staircase is not a ramp. Anything counting ways underground
 has to look at the link kind, and anything tracing one has to follow the
 whole chain: a ramp reaches its depth over four links, not one.
+
+## Signage
+
+Four pools, each four times the size it was: 32 video wall designs across
+eight animated layouts, 32 neon signs across four shapes, 32 billboards
+across eight layouts, and 96 shopfronts from six sign styles by four window
+treatments by the names and colours. On top of those, six advertisement
+walls three storeys tall and two wide, animated over six frames -- rare
+enough that a sector carries about three.
+
+A pool being four times the size does not put four times as many designs on
+screen: a sector only ever places forty to sixty of each of the upper-storey
+kinds, so the count you can observe is bounded by that, not by the pool.
+Shopfronts are the exception -- there are eighteen hundred of them, and all
+96 designs show up.

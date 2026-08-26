@@ -23,6 +23,7 @@ export interface TileArt {
   lamp: HTMLCanvasElement;
   ads: HTMLCanvasElement[][];    // [variant][frame]
   neons: HTMLCanvasElement[];
+  megawalls: HTMLCanvasElement[][];
   billboards: HTMLCanvasElement[];
   shops: HTMLCanvasElement[];
   trees: HTMLCanvasElement[];
@@ -405,21 +406,31 @@ export function buildTileArt(seed: number, weather: Weather): TileArt {
   // ---- animated ad videowalls (8 designs x 4 frames, 24x14) ----
   const AD_W = 24, AD_H = 14;
   const ads: HTMLCanvasElement[][] = [];
-  const adTexts = ["SYND CORP", "GRID CAB", "RAMEN 24H", "SOMA+", "OBEY", "VOLT BAR", "NEO AIR", "EYE-X"];
-  const adCols = ["#25e0ff", "#ffe32f", "#ff7a1f", "#7dff3f", "#ff2fa0", "#b06bff", "#8fe8ff", "#ff4d6d"];
-  for (let v = 0; v < 8; v++) {
+  const adTexts = [
+    "SYND CORP", "GRID CAB", "RAMEN 24H", "SOMA+", "OBEY", "VOLT BAR", "NEO AIR", "EYE-X",
+    "KIRO GEN", "NULL-7", "HAZE", "TOKAI OIL", "PACIFICA", "DERM LAB", "ZERO CAL", "MAG-LEV",
+    "ARC TRUST", "BLUE MILE", "OSSUARY", "SILK ROW", "HYPNOS", "TERRA-9", "GLASS EYE", "REBOOT",
+    "VITA-SYN", "KRONE", "FATHOM", "IRON MOTH", "SUNSET CO", "LUMEN", "BASALT", "ECHO WARE",
+  ];
+  const adCols = [
+    "#25e0ff", "#ffe32f", "#ff7a1f", "#7dff3f", "#ff2fa0", "#b06bff", "#8fe8ff", "#ff4d6d",
+    "#3affc8", "#ffd0e8", "#c2ff2f", "#ff9f45", "#6ea8ff", "#ff5ecb", "#a0ffd8", "#ffb3b3",
+  ];
+  const AD_STYLES = 8;
+  for (let v = 0; v < 32; v++) {
     const frames: HTMLCanvasElement[] = [];
     for (let f = 0; f < 4; f++) {
       const c = makeCanvas(AD_W, AD_H);
       const g = ctx2d(c);
       g.fillStyle = "#06070c";
       g.fillRect(0, 0, AD_W, AD_H);
-      const col = adCols[v];
-      switch (v % 4) {
+      const col = adCols[v % adCols.length];
+      const ad = adTexts[v % adTexts.length];
+      switch (v % AD_STYLES) {
         case 0: { // scrolling text
           g.fillStyle = col;
           g.font = "bold 7px monospace";
-          const t = adTexts[v] + "  " + adTexts[v];
+          const t = ad + "  " + ad;
           g.fillText(t, 2 - f * 6, 9);
           break;
         }
@@ -427,7 +438,7 @@ export function buildTileArt(seed: number, weather: Weather): TileArt {
           if (f !== 3) {
             g.fillStyle = col;
             g.font = "bold 6px monospace";
-            g.fillText(adTexts[v].slice(0, 8), 1, 9);
+            g.fillText(ad.slice(0, 8), 1, 9);
           }
           g.strokeStyle = col;
           g.strokeRect(0.5, 0.5, AD_W - 1, AD_H - 1);
@@ -453,7 +464,47 @@ export function buildTileArt(seed: number, weather: Weather): TileArt {
           g.fillRect(0, 10, AD_W, 1);
           g.fillStyle = "#fff";
           g.font = "bold 6px monospace";
-          g.fillText(adTexts[v].slice(0, 6), 2, 8 + (f % 2));
+          g.fillText(ad.slice(0, 6), 2, 8 + (f % 2));
+          break;
+        }
+        case 4: { // a wipe of colour crossing the panel
+          g.fillStyle = col;
+          g.fillRect(0, 0, AD_W * ((f + 1) / 4), AD_H);
+          g.fillStyle = "#06070c";
+          g.font = "bold 6px monospace";
+          g.fillText(ad.slice(0, 7), 2, 9);
+          break;
+        }
+        case 5: { // rings pulsing outward
+          g.strokeStyle = col;
+          for (let k = 0; k < 3; k++) {
+            g.globalAlpha = 1 - ((f + k) % 4) / 4;
+            g.beginPath();
+            g.ellipse(AD_W / 2, AD_H / 2, 2 + ((f + k) % 4) * 3, 1.5 + ((f + k) % 4) * 1.8, 0, 0, Math.PI * 2);
+            g.stroke();
+          }
+          g.globalAlpha = 1;
+          break;
+        }
+        case 6: { // a logo block beside a ticker
+          g.fillStyle = col;
+          g.fillRect(1, 2, 9, AD_H - 4);
+          g.fillStyle = "#06070c";
+          g.fillRect(3, 5, 5, 2);
+          g.fillStyle = col;
+          g.font = "bold 5px monospace";
+          g.fillText(ad.slice(0, 9), 12 - f * 3, 9);
+          break;
+        }
+        default: { // a level meter climbing and falling
+          for (let b = 0; b < 8; b++) {
+            const on = ((b + f) % 8) < 5;
+            g.fillStyle = on ? adCols[(v + b) % adCols.length] : "#141821";
+            g.fillRect(1 + b * 3, AD_H - 2 - (b % 4) * 2 - (on ? 4 : 0), 2, 3 + (b % 4) * 2);
+          }
+          g.fillStyle = col;
+          g.font = "bold 5px monospace";
+          g.fillText(ad.slice(0, 8), 1, 5);
           break;
         }
       }
@@ -465,20 +516,108 @@ export function buildTileArt(seed: number, weather: Weather): TileArt {
     ads.push(frames);
   }
 
+  // ---- the big ones: advertisement walls three storeys tall and two wide,
+  // animated like the small panels but at a scale you see from down the street
+  const MW_W = 48, MW_H = 52;
+  const megawalls: HTMLCanvasElement[][] = [];
+  for (let v = 0; v < 6; v++) {
+    const frames: HTMLCanvasElement[] = [];
+    const a1 = adCols[(v * 3) % adCols.length];
+    const a2 = adCols[(v * 3 + 5) % adCols.length];
+    const name = adTexts[(v * 5) % adTexts.length];
+    for (let f = 0; f < 6; f++) {
+      const c = makeCanvas(MW_W, MW_H);
+      const g = ctx2d(c);
+      g.fillStyle = "#05060a";
+      g.fillRect(0, 0, MW_W, MW_H);
+      switch (v % 3) {
+        case 0: {                       // a face on a colour field, blinking
+          g.fillStyle = a1; g.fillRect(2, 2, MW_W - 4, MW_H - 16);
+          g.fillStyle = "#05060a";
+          g.beginPath(); g.arc(MW_W / 2, 20, 13, 0, Math.PI * 2); g.fill();
+          g.fillStyle = a2;
+          const open = f % 6 !== 4;
+          g.fillRect(MW_W / 2 - 8, open ? 16 : 18, 5, open ? 3 : 1);
+          g.fillRect(MW_W / 2 + 3, open ? 16 : 18, 5, open ? 3 : 1);
+          break;
+        }
+        case 1: {                       // a skyline with searchlights sweeping
+          g.fillStyle = a2; g.fillRect(2, 2, MW_W - 4, MW_H - 16);
+          g.fillStyle = "#05060a";
+          for (let b = 0; b < 8; b++) g.fillRect(3 + b * 6, 14 + ((b * 5 + v) % 14), 5, 30);
+          g.strokeStyle = a1; g.lineWidth = 2; g.globalAlpha = 0.8;
+          g.beginPath();
+          g.moveTo(6 + f * 7, MW_H - 16); g.lineTo(20 + f * 4, 4);
+          g.stroke();
+          g.globalAlpha = 1; g.lineWidth = 1;
+          break;
+        }
+        default: {                      // a grid of tiles flipping over
+          for (let gy = 0; gy < 6; gy++) for (let gx = 0; gx < 6; gx++) {
+            const on = ((gx * 3 + gy * 5 + f * 7) % 11) < 5;
+            g.fillStyle = on ? a1 : a2;
+            g.fillRect(3 + gx * 7.4, 3 + gy * 5.4, 6.4, 4.4);
+          }
+          break;
+        }
+      }
+      // the brand plate along the bottom, the same on every frame
+      g.fillStyle = "#05060a"; g.fillRect(2, MW_H - 14, MW_W - 4, 12);
+      g.fillStyle = a1;
+      g.font = "bold 9px monospace"; g.textAlign = "center";
+      g.fillText(name.slice(0, 10), MW_W / 2, MW_H - 5);
+      g.textAlign = "left";
+      g.strokeStyle = "rgba(0,0,0,0.55)"; g.strokeRect(0.5, 0.5, MW_W - 1, MW_H - 1);
+      g.fillStyle = "rgba(0,0,0,0.22)";
+      for (let y = 0; y < MW_H; y += 3) g.fillRect(0, y, MW_W, 1);
+      if (!night) { g.fillStyle = "rgba(0,0,0,0.12)"; g.fillRect(0, 0, MW_W, MW_H); }
+      frames.push(c);
+    }
+    megawalls.push(frames);
+  }
+
   // ---- neon signs ----
-  const neonTexts = ["BAR", "GUNS", "HOTEL", "CLUB", "XXX", "NOODLE", "CLINIC", "PAWN"];
+  const neonTexts = [
+    "BAR", "GUNS", "HOTEL", "CLUB", "XXX", "NOODLE", "CLINIC", "PAWN",
+    "SAKE", "MOTEL", "TATTOO", "LOANS", "KARAOKE", "DINER", "CHEMS", "ARCADE",
+    "ODEON", "BATHS", "GRILL", "CHOP", "DICE", "VAULT", "SALON", "TAXI",
+    "OYSTER", "RELAY", "MOTH", "AMP", "KIOSK", "LOTUS", "STEAM", "ORBIT",
+  ];
   const neons: HTMLCanvasElement[] = [];
-  for (let v = 0; v < 8; v++) {
+  for (let v = 0; v < 32; v++) {
     const c = makeCanvas(26, 10);
     const g = ctx2d(c);
     const col = adCols[(v + 3) % adCols.length];
+    const name = neonTexts[v % neonTexts.length];
     g.shadowColor = col;
     g.shadowBlur = night ? 5 : 2;
     g.strokeStyle = col;
-    g.strokeRect(1.5, 1.5, 23, 7);
     g.fillStyle = col;
+    g.lineWidth = 1;
+    switch (v % 4) {
+      case 0:                                   // boxed
+        g.strokeRect(1.5, 1.5, 23, 7);
+        break;
+      case 1:                                   // a lozenge
+        g.beginPath();
+        g.ellipse(13, 5, 11.5, 4, 0, 0, Math.PI * 2);
+        g.stroke();
+        break;
+      case 2:                                   // underscored, with a tick
+        g.beginPath();
+        g.moveTo(2, 8.5); g.lineTo(24, 8.5);
+        g.moveTo(24, 8.5); g.lineTo(24, 4);
+        g.stroke();
+        break;
+      default:                                  // an arrow pointing the way in
+        g.beginPath();
+        g.moveTo(2, 1.5); g.lineTo(20, 1.5); g.lineTo(24.5, 5); g.lineTo(20, 8.5); g.lineTo(2, 8.5);
+        g.closePath();
+        g.stroke();
+        break;
+    }
     g.font = "bold 6px monospace";
-    g.fillText(neonTexts[v], 3, 7);
+    g.fillText(name.slice(0, 7), 3, 7);
     neons.push(c);
   }
 
@@ -503,21 +642,26 @@ export function buildTileArt(seed: number, weather: Weather): TileArt {
 
   // ---- big facade billboards (24 x 26, spans two storeys) ----
   const BB_W = 24, BB_H = 26;
-  const bbTexts = ["EUROCORP", "ZEN-X", "NEW YOU", "SYNTH", "OBEY", "V-COLA", "ARM+", "DREAM"];
+  const bbTexts = [
+    "EUROCORP", "ZEN-X", "NEW YOU", "SYNTH", "OBEY", "V-COLA", "ARM+", "DREAM",
+    "HALCYON", "MIRRORS", "NULL CO", "SAFE-T", "ELYSIA", "GENE-9", "OUTLOOK", "VELVET",
+    "MERIDIAN", "PALE SUN", "CIVIX", "AURA", "TITAN OIL", "SOFT WAR", "KIN", "LATTICE",
+    "ORPHEUS", "DUSTLINE", "HOLLOW", "PRIME CUT", "NOVA MED", "BRASS", "QUIET", "SIGNAL",
+  ];
   const billboards: HTMLCanvasElement[] = [];
-  for (let v = 0; v < 8; v++) {
+  for (let v = 0; v < 32; v++) {
     const c = makeCanvas(BB_W, BB_H);
     const g = ctx2d(c);
     const a1 = adCols[v % adCols.length];
     const a2 = adCols[(v + 3) % adCols.length];
     g.fillStyle = "#0a0b10";
     g.fillRect(0, 0, BB_W, BB_H);
-    switch (v % 4) {
+    switch (v % 8) {
       case 0: // colour field with a headline
         g.fillStyle = a1; g.fillRect(1, 1, BB_W - 2, BB_H - 2);
         g.fillStyle = "#0a0b10"; g.fillRect(2, BB_H - 11, BB_W - 4, 9);
         g.fillStyle = a1; g.font = "bold 6px monospace"; g.textAlign = "center";
-        g.fillText(bbTexts[v], BB_W / 2, BB_H - 4);
+        g.fillText(bbTexts[v % bbTexts.length], BB_W / 2, BB_H - 4);
         break;
       case 1: { // portrait silhouette
         g.fillStyle = a2; g.fillRect(1, 1, BB_W - 2, BB_H - 2);
@@ -526,7 +670,7 @@ export function buildTileArt(seed: number, weather: Weather): TileArt {
         g.beginPath(); g.ellipse(BB_W / 2, 25, 10, 8, 0, Math.PI, 0); g.fill();
         g.fillStyle = "#0a0b10"; g.fillRect(1, BB_H - 8, BB_W - 2, 7);
         g.fillStyle = a1; g.font = "bold 5px monospace"; g.textAlign = "center";
-        g.fillText(bbTexts[v], BB_W / 2, BB_H - 2.5);
+        g.fillText(bbTexts[v % bbTexts.length], BB_W / 2, BB_H - 2.5);
         break;
       }
       case 2: // diagonal split
@@ -534,8 +678,54 @@ export function buildTileArt(seed: number, weather: Weather): TileArt {
         g.fillStyle = a2;
         g.beginPath(); g.moveTo(1, BB_H - 1); g.lineTo(BB_W - 1, 1); g.lineTo(BB_W - 1, BB_H - 1); g.closePath(); g.fill();
         g.fillStyle = "#0a0b10"; g.font = "bold 6px monospace"; g.textAlign = "center";
-        g.fillText(bbTexts[v], BB_W / 2, BB_H / 2 + 2);
+        g.fillText(bbTexts[v % bbTexts.length], BB_W / 2, BB_H / 2 + 2);
         break;
+      case 3: { // a horizon band with a sun over it
+        g.fillStyle = a2; g.fillRect(1, 1, BB_W - 2, BB_H - 2);
+        g.fillStyle = a1;
+        g.beginPath(); g.arc(BB_W / 2, 12, 7, 0, Math.PI * 2); g.fill();
+        g.fillStyle = a2;
+        for (let k = 0; k < 4; k++) g.fillRect(2, 9 + k * 3, BB_W - 4, 1.4);
+        g.fillStyle = "#0a0b10"; g.fillRect(1, BB_H - 9, BB_W - 2, 8);
+        g.fillStyle = a1; g.font = "bold 6px monospace"; g.textAlign = "center";
+        g.fillText(bbTexts[v % bbTexts.length], BB_W / 2, BB_H - 3);
+        break;
+      }
+      case 4: { // stacked type, no image at all
+        g.fillStyle = "#0a0b10"; g.fillRect(1, 1, BB_W - 2, BB_H - 2);
+        g.strokeStyle = a1; g.strokeRect(2.5, 2.5, BB_W - 5, BB_H - 5);
+        g.fillStyle = a1; g.font = "bold 7px monospace"; g.textAlign = "center";
+        const w = bbTexts[v % bbTexts.length].split(/[ -]/);
+        g.fillText(w[0].slice(0, 7), BB_W / 2, 12);
+        g.fillStyle = a2; g.font = "bold 5px monospace";
+        g.fillText((w[1] ?? "NOW").slice(0, 8), BB_W / 2, 20);
+        break;
+      }
+      case 5: { // a bottle silhouette
+        g.fillStyle = a1; g.fillRect(1, 1, BB_W - 2, BB_H - 2);
+        g.fillStyle = "#0a0b10";
+        g.fillRect(BB_W / 2 - 2, 3, 4, 5);
+        g.fillRect(BB_W / 2 - 5, 8, 10, 12);
+        g.fillStyle = a2; g.fillRect(BB_W / 2 - 4, 12, 8, 4);
+        g.fillStyle = "#0a0b10"; g.fillRect(1, BB_H - 8, BB_W - 2, 7);
+        g.fillStyle = a1; g.font = "bold 5px monospace"; g.textAlign = "center";
+        g.fillText(bbTexts[v % bbTexts.length], BB_W / 2, BB_H - 2.5);
+        break;
+      }
+      case 6: { // chevrons marching up the board
+        g.fillStyle = "#0a0b10"; g.fillRect(1, 1, BB_W - 2, BB_H - 2);
+        for (let k = 0; k < 5; k++) {
+          g.strokeStyle = k % 2 === 0 ? a1 : a2;
+          g.lineWidth = 2;
+          g.beginPath();
+          g.moveTo(3, BB_H - 4 - k * 4); g.lineTo(BB_W / 2, BB_H - 8 - k * 4); g.lineTo(BB_W - 3, BB_H - 4 - k * 4);
+          g.stroke();
+        }
+        g.lineWidth = 1;
+        g.fillStyle = a1; g.font = "bold 6px monospace"; g.textAlign = "center";
+        g.fillText(bbTexts[v % bbTexts.length].slice(0, 8), BB_W / 2, 7);
+        break;
+      }
       default: { // product block with a data grid
         g.fillStyle = a2; g.fillRect(1, 1, BB_W - 2, BB_H - 2);
         g.fillStyle = "#0a0b10";
@@ -544,7 +734,7 @@ export function buildTileArt(seed: number, weather: Weather): TileArt {
         }
         g.fillStyle = "#0a0b10"; g.fillRect(1, BB_H - 9, BB_W - 2, 8);
         g.fillStyle = a1; g.font = "bold 6px monospace"; g.textAlign = "center";
-        g.fillText(bbTexts[v], BB_W / 2, BB_H - 3);
+        g.fillText(bbTexts[v % bbTexts.length], BB_W / 2, BB_H - 3);
         break;
       }
     }
@@ -560,14 +750,17 @@ export function buildTileArt(seed: number, weather: Weather): TileArt {
   const SH_W = 24, SH_H = 22;
   const shopNames = ["RAMEN", "TECH", "AMMO", "MEDS", "BAR", "CHIP", "WEAR", "CASH",
                      "SUSHI", "INK", "PAWN", "CLINIC", "VR", "GRILL", "PARTS", "SOY",
-                     "NOIR", "CYBER", "TEA", "ARMS", "LOAN", "DYE", "FUEL", "MASK"];
+                     "NOIR", "CYBER", "TEA", "ARMS", "LOAN", "DYE", "FUEL", "MASK",
+                     "BAO", "OPTIC", "SCRAP", "BREW", "KELP", "WIRE", "SALT", "GLASS",
+                     "FERRY", "CROW", "ASH", "PLUM", "RIVET", "MOSS", "COIN", "PIPE",
+                     "LANTERN", "CINDER", "HUSK", "TALLOW", "SPINE", "QUILL", "ONYX", "FLINT"];
   const shops: HTMLCanvasElement[] = [];
-  for (let v = 0; v < 24; v++) {
+  for (let v = 0; v < 96; v++) {
     const c = makeCanvas(SH_W, SH_H);
     const g = ctx2d(c);
     const sign = adCols[(v + 5) % adCols.length];
-    const signStyle = v % 3;
-    const winStyle = Math.floor(v / 3) % 4;
+    const signStyle = v % 6;
+    const winStyle = Math.floor(v / 6) % 4;
     const name = shopNames[v % shopNames.length];
     const frame = tint("#20242c", ambient, blue);
     const trim = tint("#3a3f47", ambient, blue);
@@ -579,7 +772,21 @@ export function buildTileArt(seed: number, weather: Weather): TileArt {
     g.strokeStyle = sign;
     g.fillStyle = sign;
     g.lineWidth = 1;
-    if (signStyle === 0) {            // boxed fascia
+    if (signStyle === 3) {            // a pair of stacked bars
+      g.fillRect(1, 1, SH_W - 2, 2);
+      g.strokeRect(1.5, 4.5, SH_W - 3, 4);
+      g.font = "bold 4px monospace"; g.textAlign = "center";
+      g.fillText(name.slice(0, 9), SH_W / 2, 8);
+    } else if (signStyle === 4) {     // a hanging blade sign
+      g.strokeRect(2.5, 0.5, 5, 11);
+      g.beginPath(); g.moveTo(7.5, 3); g.lineTo(SH_W - 2, 3); g.stroke();
+      g.font = "bold 4px monospace"; g.textAlign = "left";
+      g.fillText(name.slice(0, 6), 9, 8);
+    } else if (signStyle === 5) {     // a bare tube over the glass
+      g.beginPath(); g.moveTo(2, 3.5); g.lineTo(SH_W - 2, 3.5); g.stroke();
+      g.font = "bold 5px monospace"; g.textAlign = "center";
+      g.fillText(name.slice(0, 7), SH_W / 2, 9);
+    } else if (signStyle === 0) {     // boxed fascia
       g.strokeRect(1.5, 1.5, SH_W - 3, 7);
       g.font = "bold 5px monospace"; g.textAlign = "center";
       g.fillText(name.slice(0, 7), SH_W / 2, 7);
@@ -651,7 +858,7 @@ export function buildTileArt(seed: number, weather: Weather): TileArt {
 
   return {
     weather, ground, sidewalk, road, roadDashV, roadDashH, roadPuddle,
-    park, island, block, pitFloor, pitWallNW, pitWallNE, lamp, ads, neons,
+    park, island, block, pitFloor, pitWallNW, pitWallNE, lamp, ads, neons, megawalls,
     billboards, shops, trees, benches, stalls, crossV, crossH,
     cutCap: tint("#7c818c", ambient, blue),
     cutFloor: tint("#31343d", ambient, blue),
