@@ -396,3 +396,26 @@ vanish.
 When testing a ramp, aim at its own mouth. Routing from a garage to some tile
 clear across a one-way city tests the search budget, not the ramp, and will
 report failures that have nothing to do with it.
+
+## The metro
+
+A concourse reaches ten tiles along the line and five either side of it, and
+its floor stands `TRACK_DROP` above the track it serves, so the trench reads
+as a trench rather than the train sitting on the platform. A subway rides the
+floor of that trench; everything else -- boarding, the cut plane, the station
+record -- still gates on the platform level, because a train a third of a
+storey below the platform would otherwise be out of reach of anyone standing
+on it.
+
+Access is by ramp, two per station, one at each end. A ramp gains a storey
+every two tiles, so reaching a platform two storeys down takes four; it is
+laid straight along the kerb where there is room and folded into an L or a U
+where there is not. Its mouth is an opening in the pavement with a rail round
+three sides and the roundel on a post, which is what makes it findable from
+across the street.
+
+Ramps are `LINK_ESCALATOR` and garage ramps are `LINK_RAMP`: people take
+either, cars only the second, and `layOutStairs` skips both -- a ramp drawn
+as a switchback staircase is not a ramp. Anything counting ways underground
+has to look at the link kind, and anything tracing one has to follow the
+whole chain: a ramp reaches its depth over four links, not one.

@@ -2,7 +2,7 @@
 // blocks correctly occlude people and cars behind them. Also draws the static
 // street furniture (fences, doors, pit rails) and the elevated skytrain.
 
-import { City, D_S, D_W, Deco, Fitting, idx, inGrid, isRoad, PLATFORM_LONG, PLATFORM_WIDE, Prop, StairRun, surfaceUnder, T_BUILDING, T_GROUND, T_ISLAND, T_PARK, T_PIT, T_ROAD, T_SIDEWALK, T_WALL, trackCentre, TRAIN_LEVEL } from "../city/citygen";
+import { City, D_S, D_W, Deco, Fitting, idx, inGrid, isRoad, MetroRamp, PLATFORM_LONG, PLATFORM_WIDE, Prop, StairRun, surfaceUnder, T_BUILDING, T_GROUND, T_ISLAND, T_PARK, T_PIT, T_ROAD, T_SIDEWALK, T_WALL, TRACK_DROP, trackCentre, TRAIN_LEVEL } from "../city/citygen";
 import { GRID, STORY_H, TILE_H, TILE_W, isNight, isRain, isoX, isoY } from "../engine/util";
 import { PeopleAtlas, FW, FH } from "../sprites/people";
 import { BENCH_H, BENCH_W, STALL_H, STALL_W, TREE_H, TREE_W } from "../sprites/props";
@@ -35,10 +35,11 @@ interface PlatTile {
 interface Entity {
   s: number;    // depth key = tx + ty
   pri: number;  // within-bucket order: 0 elevated structure, 1 ground, 2 trains
-  kind: "ped" | "car" | "drop" | "lamp" | "fence" | "pylon" | "deck" | "train" | "prop" | "stair" | "platform" | "fitting";
+  kind: "ped" | "car" | "drop" | "lamp" | "fence" | "pylon" | "deck" | "train" | "prop" | "stair" | "platform" | "fitting" | "metro";
   fitting?: Fitting;
   stair?: StairRun;
   plat?: PlatTile;
+  ramp?: MetroRamp;
   ped?: Ped;
   car?: Car;
   drop?: { x: number; y: number; item: { type: string } };
@@ -290,8 +291,13 @@ export class Renderer {
           const fzz = this.city.levels.z[floor];
           for (const [dx2, dy2, near] of [[-1, 0, false], [0, -1, false], [1, 0, true], [0, 1, true]] as const) {
             const nb = surfaceUnder(this.city, tx + dx2, ty + dy2, section);
-            if (nb >= 0 && Math.abs(this.city.levels.z[nb] - fzz) < 0.01) continue;
-            const wallH = 9 * z;
+            const nbz = nb >= 0 ? this.city.levels.z[nb] : -99;
+            if (nb >= 0 && Math.abs(nbz - fzz) < 0.01) continue;
+            if (nb >= 0 && nbz > fzz) continue;         // the neighbour walls its own side
+            // against earth a wall stands a fixed height; against a lower floor
+            // it stands exactly as tall as the step down to it, which is what
+            // makes a track trench read as a trench
+            const wallH = nb >= 0 ? (fzz - nbz) * STORY_H * z : 9 * z;
             // The four edges of the diamond, each shared with the neighbour it
             // faces: -x is the upper left one, not the lower left. Putting the
             // wall on the wrong edge shifts every panel one corner round, and
@@ -405,6 +411,12 @@ export class Renderer {
       push({ s: Math.max(fs.x + fs.y, fs.rx + fs.ry, ex + ey), pri: 1, kind: "stair",
              x: fs.x + 0.5, y: fs.y + 0.5, stair: fs });
     }
+    for (const r of this.city.ramps) {
+      const m0 = r.steps[0];
+      if (m0.x < x0 - 2 || m0.x > x1 + 2 || m0.y < y0 - 2 || m0.y > y1 + 2) continue;
+      if (!shown(0)) continue;
+      push({ s: m0.x + m0.y, pri: 1, kind: "metro", x: m0.x + 0.5, y: m0.y + 0.5, ramp: r });
+    }
     for (const l of this.city.lamps) {
       if (l.x < x0 || l.x > x1 || l.y < y0 || l.y > y1) continue;
       if (!shown(0)) continue;
@@ -443,8 +455,11 @@ export class Renderer {
           const wy = line.axis === "v" ? u + 0.5 : across;
           if (wx < x0 || wx > x1 || wy < y0 || wy > y1) continue;
           const angle = line.axis === "v" ? Math.atan2(t.dir, 0) : Math.atan2(0, t.dir);
+          // a subway rides the floor of its trench, a storey-third below the
+          // platform everything else gates on
+          const railZ = line.level < 0 ? line.level - TRACK_DROP : line.level;
           push({ s: Math.floor(wx) + Math.floor(wy), pri: 2, kind: "train", x: wx, y: wy,
-                 train: { wx, wy, angle, head: t.dir === 1 ? k === 0 : k === nSeg - 1, lift: line.level * STORY_H,
+                 train: { wx, wy, angle, head: t.dir === 1 ? k === 0 : k === nSeg - 1, lift: railZ * STORY_H,
                           flash: t.flash ?? 0, flashOk: t.flashOk ?? true } });
         }
       }
@@ -1031,6 +1046,10 @@ export class Renderer {
       this.drawFitting(g, e.fitting, SX, SY, z, art, time);
       return;
     }
+    if (e.kind === "metro" && e.ramp) {
+      this.drawMetroEntrance(g, e.ramp, SX, SY, z, art, time);
+      return;
+    }
     if (e.kind === "platform" && e.plat) {
       this.drawPlatform(g, e.plat, SX, SY, z, art);
       return;
@@ -1194,6 +1213,70 @@ export class Renderer {
 
   // A platform: the deck widened either side of the track, railed along both
   // edges and lit, so a stop is legible from street level.
+  // The head of a ramp into the metro: a lit opening in the pavement, a rail
+  // round the three sides you should not walk off, and the roundel on a post
+  // so it reads as an entrance from across the street.
+  private drawMetroEntrance(
+    g: CanvasRenderingContext2D, r: MetroRamp,
+    SX: (x: number, y: number) => number, SY: (x: number, y: number) => number, z: number,
+    art: TileArt, time: number
+  ): void {
+    const m = r.steps[0], nxt = r.steps[1] ?? m;
+    const dx = Math.sign(nxt.x - m.x), dy = Math.sign(nxt.y - m.y);   // the way down
+    const P = (u: number, v: number, h: number): [number, number] => {
+      // u runs down the ramp, v across it
+      const wx = m.x + 0.5 + dx * u - dy * v;
+      const wy = m.y + 0.5 + dy * u + dx * v;
+      return [SX(wx, wy), SY(wx, wy) - h];
+    };
+    // the opening: the mouth tile is a hole, dark, with the first step showing
+    const a = P(-0.5, -0.5, 0), b = P(0.5, -0.5, 0), c = P(0.5, 0.5, 0), d = P(-0.5, 0.5, 0);
+    g.fillStyle = "#0c0f14";
+    g.beginPath();
+    g.moveTo(a[0], a[1]); g.lineTo(b[0], b[1]); g.lineTo(c[0], c[1]); g.lineTo(d[0], d[1]);
+    g.closePath(); g.fill();
+    // a couple of treads catching the light from below
+    for (let k = 1; k <= 3; k++) {
+      const t0 = P(-0.5 + k * 0.25, -0.45, k * 1.6 * z), t1 = P(-0.5 + k * 0.25, 0.45, k * 1.6 * z);
+      g.strokeStyle = `rgba(120,150,170,${0.5 - k * 0.12})`;
+      g.lineWidth = Math.max(1, z);
+      g.beginPath(); g.moveTo(t0[0], t0[1]); g.lineTo(t1[0], t1[1]); g.stroke();
+    }
+    // rail round the three closed sides
+    const rail = 7 * z;
+    const post = (q: [number, number]) => {
+      g.strokeStyle = art.night ? "#5a6472" : "#8b95a3";
+      g.lineWidth = Math.max(1, 0.9 * z);
+      g.beginPath(); g.moveTo(q[0], q[1]); g.lineTo(q[0], q[1] - rail); g.stroke();
+    };
+    const bar = (q: [number, number], w: [number, number]) => {
+      g.strokeStyle = art.night ? "#6c7686" : "#9aa4b2";
+      g.lineWidth = Math.max(1, 0.9 * z);
+      g.beginPath();
+      g.moveTo(q[0], q[1] - rail); g.lineTo(w[0], w[1] - rail);
+      g.moveTo(q[0], q[1] - rail * 0.5); g.lineTo(w[0], w[1] - rail * 0.5);
+      g.stroke();
+      post(q); post(w);
+    };
+    bar(P(-0.5, -0.5, 0), P(0.5, -0.5, 0));
+    bar(P(-0.5, 0.5, 0), P(0.5, 0.5, 0));
+    bar(P(-0.5, -0.5, 0), P(-0.5, 0.5, 0));
+    // the sign: a post at the near corner carrying the roundel
+    const foot = P(-0.55, 0.62, 0);
+    const H = 20 * z;
+    g.fillStyle = art.night ? "#39414c" : "#59616c";
+    g.fillRect(foot[0] - 0.9 * z, foot[1] - H, 1.8 * z, H);
+    const cx2 = foot[0], cy2 = foot[1] - H - 5 * z;
+    const rr = 5.6 * z;
+    const pulse = art.night ? 0.75 + 0.25 * Math.sin(time * 2 + m.x) : 1;
+    g.strokeStyle = `rgba(58,150,220,${pulse})`;
+    g.lineWidth = Math.max(1.6, 2.2 * z);
+    g.beginPath(); g.arc(cx2, cy2, rr, 0, Math.PI * 2); g.stroke();
+    g.fillStyle = `rgba(228,238,248,${pulse})`;
+    g.fillRect(cx2 - rr * 1.25, cy2 - rr * 0.30, rr * 2.5, rr * 0.60);
+    if (art.night) this.glow(cx2, cy2, 15 * z, "#3a96dc", 0.45);
+  }
+
   private drawPlatform(
     g: CanvasRenderingContext2D, p: PlatTile,
     SX: (x: number, y: number) => number, SY: (x: number, y: number) => number, z: number, art: TileArt
