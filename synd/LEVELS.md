@@ -87,12 +87,14 @@ every layer is exercised. Still to do:
   two lots in five. Each has a ramp linking a `SURF_BASEMENT` tile to a road
   tile within four tiles of the lot, so every garage is reachable by car and
   on foot. Parked cars carry `Car.z = GARAGE_LEVEL`.
-- **−2, the subway.** A running tunnel under a road, with a concourse
-  (`HALL_LONG` × `HALL_WIDE`) on every other cross avenue. Concourses are
-  furnished from `City.fittings` — ticket offices, shops, food counters,
-  benches, maps and columns — and each has two stairs up to the street.
-  Subway lines are ordinary `Skytrain`s with `level: SUBWAY_LEVEL`, so they
-  reuse the dwell/reverse/boarding machinery unchanged.
+- **−2 and −3, the subway.** Two lines that cross: one running north–south at
+  `SUBWAY_LEVEL`, one east–west at `SUBWAY_DEEP`. Each is a running tunnel
+  under a road with a concourse (`HALL_LONG` × `HALL_WIDE`) on every other
+  cross avenue. Concourses are furnished from `City.fittings` — ticket
+  offices, shops, food counters, benches, maps and columns — and each has two
+  ramps up to the street. Subway lines are ordinary `Skytrain`s with a
+  negative `level`, so they reuse the dwell/reverse/boarding machinery
+  unchanged.
 
 ## Testing against the level model
 
@@ -418,7 +420,32 @@ Ramps are `LINK_ESCALATOR` and garage ramps are `LINK_RAMP`: people take
 either, cars only the second, and `layOutStairs` skips both -- a ramp drawn
 as a switchback staircase is not a ramp. Anything counting ways underground
 has to look at the link kind, and anything tracing one has to follow the
-whole chain: a ramp reaches its depth over four links, not one.
+whole chain: a ramp reaches its depth over as many links as it has steps,
+not one.
+
+## Two lines, two depths
+
+One line is a shuttle, not a network, so the metro always runs a second one
+across the first. The two cannot share a depth: at the crossing the trains
+would drive through each other, and the second line's concourse would find
+every tile of the first already spoken for and leave holes in its own tunnel.
+So the second line is bored a storey deeper, and the crossing tile carries
+three floors -- the street at 0, the shallow track at -2.375, the deep one at
+-3.375.
+
+That means nothing underground may be keyed by tile alone. `underSurf` is
+keyed by tile *and* storey (`uk()`), because a garage at -1, one tunnel at -2
+and another at -3 legitimately pass through the same tile. The same goes for
+tests: a probe that counts floors at exactly -2, or reads a track at exactly
+-2.375, sees one line and misses the other. Read the depth off the line or
+the station and measure relative to that.
+
+A ramp's length follows its depth -- two tiles a storey, so four tiles to the
+shallow line and six to the deep one -- which is why the straight, L and U
+shapes are laid out from `RUN` rather than written out.
+
+Not built yet: the two concourses do not connect to each other where they
+cross. Changing lines means going up to the street and back down.
 
 ## Signage
 
