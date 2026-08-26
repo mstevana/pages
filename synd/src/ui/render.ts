@@ -35,7 +35,8 @@ interface PlatTile {
 interface Entity {
   s: number;    // depth key = tx + ty
   pri: number;  // within-bucket order: 0 elevated structure, 1 ground, 2 trains
-  kind: "ped" | "car" | "drop" | "lamp" | "fence" | "pylon" | "deck" | "train" | "prop" | "stair" | "platform" | "fitting" | "metro";
+  kind: "ped" | "car" | "drop" | "lamp" | "fence" | "pylon" | "deck" | "train" | "prop" | "stair" | "platform" | "fitting" | "metro" | "gramp";
+  gramp?: RampPart;
   fitting?: Fitting;
   stair?: StairRun;
   plat?: PlatTile;
@@ -48,6 +49,16 @@ interface Entity {
   prop?: Prop;
   deckAxis?: "v" | "h";
   x: number; y: number;
+}
+
+// One tile of a garage ramp. A tile out in the open is cut open as a trench;
+// the tile where the ramp goes under the building instead gets a portal
+// painted on the face it enters through.
+interface RampPart {
+  x: number; y: number;
+  dx: number; dy: number;      // the way down
+  zNear: number; zFar: number; // storeys, at the near and far edge of the tile
+  portal: boolean;
 }
 
 interface FenceEdge {
@@ -73,6 +84,8 @@ export class Renderer {
   readonly minLevel: number;      // floor of the deepest surface under the street
   private stairs: StairRun[] = [];
   private platforms: PlatTile[] = [];
+  rampParts: RampPart[] = [];      // exposed so tests can find the trenches
+  private trench = new Set<number>();   // ramp tiles that are open to the sky
   // the cut plane in force this frame, for pieces drawn away from the block pass
   private secOn = false;
   private secAt = 0;
@@ -128,6 +141,7 @@ export class Renderer {
     this.buildFences();
     this.buildDecks();
     this.buildPlatforms();
+    this.buildGarageRamps();
   }
 
   private buildFences(): void {
@@ -157,8 +171,37 @@ export class Renderer {
     }
   }
 
+  // A garage ramp out in the open is a hole in the street, not a room under
+  // it: whatever is part-way down one is still in plain sight, and hiding it
+  // with the rest of the basement is what made a car look like it sank
+  // through the pavement.
+  private inTrench(x: number, y: number, z: number, sectioned: boolean, section: number): boolean {
+    if (z <= -1 || z >= -0.01) return false;
+    if (sectioned && section < 0) return false;
+    return this.trench.has(idx(Math.floor(x), Math.floor(y)));
+  }
+
   private buildStairs(): void {
     this.stairs = this.city.stairRuns;
+  }
+
+  // A ramp is trenched tile by tile until it reaches the building it serves;
+  // that tile gets the portal and the rest of the run is inside, out of sight.
+  private buildGarageRamps(): void {
+    for (const r of this.city.garageRamps) {
+      for (let k = 1; k < r.steps.length; k++) {
+        const a = r.steps[k - 1], b = r.steps[k];
+        const t = this.city.tiles[idx(b.x, b.y)];
+        const solid = t === T_WALL || t === T_BUILDING;
+        this.rampParts.push({
+          x: b.x, y: b.y,
+          dx: Math.sign(b.x - a.x), dy: Math.sign(b.y - a.y),
+          zNear: a.z, zFar: b.z, portal: solid,
+        });
+        if (!solid) this.trench.add(idx(b.x, b.y));
+        if (solid) break;
+      }
+    }
   }
 
   private buildPlatforms(): void {
@@ -386,12 +429,12 @@ export class Renderer {
       // still shows them through whatever is in the way, which is what makes
       // a squad two levels below the one you are looking at read as present
       // but out of sight rather than standing on the pavement.
-      if (!shown(p.z)) continue;
+      if (!shown(p.z) && !this.inTrench(p.x, p.y, p.z, sectioned, section)) continue;
       push({ s: Math.floor(p.x) + Math.floor(p.y), pri: 1, kind: "ped", ped: p, x: p.x, y: p.y });
     }
     for (const c of world.cars) {
       if (c.x < x0 || c.x > x1 || c.y < y0 || c.y > y1) continue;
-      if (!shown(c.z)) continue;
+      if (!shown(c.z) && !this.inTrench(c.x, c.y, c.z, sectioned, section)) continue;
       push({ s: Math.floor(c.x) + Math.floor(c.y), pri: 1, kind: "car", car: c, x: c.x, y: c.y });
     }
     for (const pt of this.platforms) {
@@ -416,6 +459,18 @@ export class Renderer {
       if (m0.x < x0 - 2 || m0.x > x1 + 2 || m0.y < y0 - 2 || m0.y > y1 + 2) continue;
       if (!shown(0)) continue;
       push({ s: m0.x + m0.y, pri: 1, kind: "metro", x: m0.x + 0.5, y: m0.y + 0.5, ramp: r });
+    }
+    // Each tile of a garage ramp sits in its own bucket, so a car part-way down
+    // the trench is drawn between the segment it is on and the one in front of
+    // it. Drawing the whole ramp at one depth would paint over the car.
+    for (const rp of this.rampParts) {
+      if (rp.x < x0 - 1 || rp.x > x1 + 1 || rp.y < y0 - 1 || rp.y > y1 + 1) continue;
+      if (!shown(0)) continue;
+      // A portal belongs to the wall it is cut into. Once the plane has sliced
+      // that wall down to a kerb there is no wall left to hang it on.
+      if (rp.portal && sectioned && section < 1) continue;
+      push({ s: rp.x + rp.y, pri: rp.portal ? 1 : 0, kind: "gramp",
+             x: rp.x + 0.5, y: rp.y + 0.5, gramp: rp });
     }
     for (const l of this.city.lamps) {
       if (l.x < x0 || l.x > x1 || l.y < y0 || l.y > y1) continue;
@@ -697,7 +752,7 @@ export class Renderer {
     // squad drives down into a garage
     for (const c of world.cars) {
       if (c.state !== "player" || c.occupants.length === 0) continue;
-      if (shown(c.z)) continue;                        // already drawn solid
+      if (shown(c.z) || this.inTrench(c.x, c.y, c.z, sectioned, section)) continue;   // already drawn solid
       this.drawCar(g, c, art, SX, SY, z);
     }
     g.globalAlpha = 1;
@@ -1054,6 +1109,10 @@ export class Renderer {
       this.drawMetroEntrance(g, e.ramp, SX, SY, z, art, time);
       return;
     }
+    if (e.kind === "gramp" && e.gramp) {
+      this.drawGarageRamp(g, e.gramp, SX, SY, z, art);
+      return;
+    }
     if (e.kind === "platform" && e.plat) {
       this.drawPlatform(g, e.plat, SX, SY, z, art);
       return;
@@ -1220,6 +1279,129 @@ export class Renderer {
   // The head of a ramp into the metro: a lit opening in the pavement, a rail
   // round the three sides you should not walk off, and the roundel on a post
   // so it reads as an entrance from across the street.
+  // The way down into a basement garage. Out in the open the ramp is a trench
+  // cut into the street, with a retaining wall down either side; where it goes
+  // under the building it becomes a portal in the wall it passes through, lit
+  // from inside. Without it the car simply sinks through the pavement.
+  private drawGarageRamp(
+    g: CanvasRenderingContext2D, r: RampPart,
+    SX: (x: number, y: number) => number, SY: (x: number, y: number) => number, z: number,
+    art: TileArt
+  ): void {
+    const HALF = 0.42;                     // the trench, leaving a kerb either side
+    const OPEN = 0.72;                     // headroom at the portal, in storeys
+    // u runs down the ramp from the near edge of the tile, v across it
+    const P = (u: number, v: number, h: number): [number, number] => {
+      const wx = r.x + 0.5 + r.dx * u - r.dy * v;
+      const wy = r.y + 0.5 + r.dy * u + r.dx * v;
+      return [SX(wx, wy), SY(wx, wy) - h * STORY_H * z];
+    };
+    const quad = (a: [number, number], b: [number, number], c: [number, number], d: [number, number], fill: string) => {
+      g.fillStyle = fill;
+      g.beginPath();
+      g.moveTo(a[0], a[1]); g.lineTo(b[0], b[1]); g.lineTo(c[0], c[1]); g.lineTo(d[0], d[1]);
+      g.closePath(); g.fill();
+    };
+
+    if (r.portal) {
+      // Only the face the ramp enters through is worth drawing, and only when
+      // it is turned towards the camera - the other two are behind the block.
+      if (r.dx > 0 || r.dy > 0) return;
+      const lo = r.zNear, hi = r.zNear + OPEN;
+      const jamb = HALF + 0.06;
+      // The opening starts below street level, so how much of it can be seen
+      // is set by the trench in front: the sight line grazing that trench's
+      // near rim is the lowest the eye reaches. Without the clip the portal
+      // spills out over the pavement as a black slab.
+      g.save();
+      {
+        const a0 = P(-1.5, -jamb, 0), b0 = P(-1.5, jamb, 0);
+        const ex = (b0[0] - a0[0]) * 200, ey = (b0[1] - a0[1]) * 200;
+        const far = 4000;
+        g.beginPath();
+        g.moveTo(a0[0] - ex, a0[1] - ey);
+        g.lineTo(b0[0] + ex, b0[1] + ey);
+        g.lineTo(b0[0] + ex, b0[1] + ey - far);
+        g.lineTo(a0[0] - ex, a0[1] - ey - far);
+        g.closePath();
+        g.clip();
+      }
+      // the reveal around the opening, then the opening itself
+      quad(P(-0.5, -jamb, lo), P(-0.5, jamb, lo), P(-0.5, jamb, hi + 0.1), P(-0.5, -jamb, hi + 0.1),
+           art.night ? "#22252c" : "#3a3e46");
+      quad(P(-0.5, -HALF, lo), P(-0.5, HALF, lo), P(-0.5, HALF, hi), P(-0.5, -HALF, hi), "#07080b");
+      // the floor of it catching what light gets in
+      quad(P(-0.5, -HALF, lo), P(-0.5, HALF, lo), P(-0.34, HALF, lo - 0.08), P(-0.34, -HALF, lo - 0.08),
+           "#15181e");
+      // lintel band, and the hazard stripe painted on it
+      quad(P(-0.5, -jamb, hi), P(-0.5, jamb, hi), P(-0.5, jamb, hi + 0.1), P(-0.5, -jamb, hi + 0.1),
+           art.night ? "#4a4438" : "#6e6650");
+      const a = P(-0.5, -jamb, hi + 0.055), b = P(-0.5, jamb, hi + 0.055);
+      g.strokeStyle = art.night ? "#8a7a2c" : "#d8c24a";
+      g.lineWidth = Math.max(1, 1.6 * z);
+      g.beginPath(); g.moveTo(a[0], a[1]); g.lineTo(b[0], b[1]); g.stroke();
+      // a light over the door, and the glow it throws on the reveal
+      const lamp = P(-0.5, 0, hi + 0.05);
+      g.fillStyle = art.night ? "#ffd489" : "#f0e6c8";
+      g.fillRect(lamp[0] - 1.6 * z, lamp[1] - 0.8 * z, 3.2 * z, 1.6 * z);
+      g.restore();
+      if (art.night) this.glow(lamp[0], lamp[1], 12 * z, "#ffcc77", 0.35);
+      return;
+    }
+
+    // The trench. A hole in the ground shows only what fits inside its own
+    // opening: a sight line grazing the near rim is the lowest thing the eye
+    // can reach, so everything the deck and walls project below that rim is
+    // behind the pavement in front and must not be painted over it. Clipping
+    // to the rim is what makes the cut read as sunk rather than piled up.
+    const rim: [number, number][] = [
+      P(-0.5, -HALF, 0), P(0.5, -HALF, 0), P(0.5, HALF, 0), P(-0.5, HALF, 0),
+    ];
+    g.save();
+    g.beginPath();
+    g.moveTo(rim[0][0], rim[0][1]);
+    for (let k = 1; k < 4; k++) g.lineTo(rim[k][0], rim[k][1]);
+    g.closePath();
+    g.clip();
+    // the walls of the cut, then the deck over them: whichever walls face away
+    // from the eye end up behind the deck, which is where they belong
+    for (const v of [-HALF, HALF]) {
+      quad(P(-0.5, v, 0), P(0.5, v, 0), P(0.5, v, r.zFar), P(-0.5, v, r.zNear),
+           art.night ? "#191c22" : "#282c33");
+    }
+    quad(P(-0.5, -HALF, 0), P(-0.5, HALF, 0), P(-0.5, HALF, r.zNear), P(-0.5, -HALF, r.zNear),
+         art.night ? "#20242b" : "#31353d");
+    const nl = P(-0.5, -HALF, r.zNear), nr = P(-0.5, HALF, r.zNear);
+    const fl = P(0.5, -HALF, r.zFar), fr = P(0.5, HALF, r.zFar);
+    quad(nl, nr, fr, fl, art.night ? "#2b2f36" : "#464b53");
+    // it gets darker the further under the street it goes
+    for (let k = 0; k < 3; k++) {
+      const u0 = -0.5 + k / 3, u1 = -0.5 + (k + 1) / 3;
+      const h0 = r.zNear + (r.zFar - r.zNear) * (u0 + 0.5);
+      const h1 = r.zNear + (r.zFar - r.zNear) * (u1 + 0.5);
+      const shade = 0.1 + 0.16 * k - r.zNear * 0.35;
+      quad(P(u0, -HALF, h0), P(u0, HALF, h0), P(u1, HALF, h1), P(u1, -HALF, h1),
+           `rgba(0,0,0,${Math.max(0, Math.min(0.8, shade)).toFixed(3)})`);
+    }
+    // chevrons down the middle, fading as the deck drops away
+    g.strokeStyle = art.night ? "rgba(190,170,90,0.4)" : "rgba(228,208,110,0.5)";
+    g.lineWidth = Math.max(1, 0.8 * z);
+    for (let k = 0; k < 2; k++) {
+      const u = -0.3 + k * 0.42;
+      const h = r.zNear + (r.zFar - r.zNear) * (u + 0.5);
+      const a2 = P(u, -HALF * 0.7, h), b2 = P(u + 0.14, 0, h), c2 = P(u, HALF * 0.7, h);
+      g.beginPath(); g.moveTo(a2[0], a2[1]); g.lineTo(b2[0], b2[1]); g.lineTo(c2[0], c2[1]); g.stroke();
+    }
+    g.restore();
+    // the rim itself, so the edge of the cut in the pavement reads
+    g.strokeStyle = art.night ? "#5c626c" : "#9aa1ac";
+    g.lineWidth = Math.max(1, 0.9 * z);
+    for (const v of [-HALF, HALF]) {
+      const a2 = P(-0.5, v, 0), b2 = P(0.5, v, 0);
+      g.beginPath(); g.moveTo(a2[0], a2[1]); g.lineTo(b2[0], b2[1]); g.stroke();
+    }
+  }
+
   private drawMetroEntrance(
     g: CanvasRenderingContext2D, r: MetroRamp,
     SX: (x: number, y: number) => number, SY: (x: number, y: number) => number, z: number,

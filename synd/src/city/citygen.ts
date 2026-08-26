@@ -65,6 +65,15 @@ export interface MetroRamp {
   station: number;           // index into City.stations
 }
 
+// The way down into a basement garage: the carriageway tile it opens off,
+// then the tiles it steps down through to the garage floor. Kept so the
+// renderer can cut the trench and hang a portal on the wall it goes under -
+// a ramp that works but is not drawn just looks like a car sinking into the
+// pavement.
+export interface GarageRamp {
+  steps: { x: number; y: number; z: number }[];   // the mouth first, at z 0
+}
+
 export interface Fitting {
   x: number; y: number;
   z: number;
@@ -130,6 +139,7 @@ export interface City {
   stairRuns: StairRun[];     // the footprint each flight of steps was given
   ring: Uint8Array;          // 1 on a roundabout's circulating lane
   ramps: MetroRamp[];        // the ways down into the metro
+  garageRamps: GarageRamp[]; // ...and the ways down into the garages
 }
 
 // ---------------------------------------------------------------------------
@@ -777,6 +787,7 @@ export function generateCity(seed: number): City {
   // cut down from the carriageway. ----
   const fittings: Fitting[] = [];
   const ramps: MetroRamp[] = [];
+  const garageRamps: GarageRamp[] = [];
   const garages: { x: number; y: number; w: number; h: number }[] = [];
   // Underground floors stack: a garage at -1, the first line's tunnel at -2 and
   // the second's at -3 can all pass through the same tile. Key the lookup by
@@ -810,11 +821,15 @@ export function generateCity(seed: number): City {
         const w = x1 - x0 + 1, h = y1 - y0 + 1;
         if (lot.length < 12 || w < 3 || h < 3 || !rng.chance(0.4)) continue;
 
-        // the ramp: a carriageway tile within reach of the lot's edge
-        let mouth = -1, into = -1;
-        outer:
-        for (let ry = y0 - 3; ry <= y1 + 3; ry++) {
-          for (let rx2 = x0 - 3; rx2 <= x1 + 3; rx2++) {
+        // The ramp: a carriageway tile within reach of the lot's edge. The
+        // search runs from the far corner back, so an entrance is found on the
+        // south or east side of the block wherever there is one - those are the
+        // faces the camera sees, and a portal on the other two is a portal
+        // nobody will ever look at. A run that would be dug through a lamp post
+        // or a street tree is passed over while any other candidate remains.
+        let mouth = -1, into = -1, best = 1e9;
+        for (let ry = y0 - 4; ry <= y1 + 4; ry++) {
+          for (let rx2 = x0 - 4; rx2 <= x1 + 4; rx2++) {
             if (!inGrid(rx2, ry) || tiles[idx(rx2, ry)] !== T_ROAD) continue;
             // the nearest lot tile to it, if that tile is close enough to ramp to
             let bd = 1e9, bi = -1;
@@ -823,7 +838,27 @@ export function generateCity(seed: number): City {
               const d = Math.abs(jx - rx2) + Math.abs(jy - ry);
               if (d < bd) { bd = d; bi = j; }
             }
-            if (bi >= 0 && bd <= 4) { mouth = idx(rx2, ry); into = bi; break outer; }
+            if (bi < 0 || bd > 5) continue;
+            // walk the run this mouth would dig, to find where it meets the
+            // building and which way it is heading when it gets there
+            const bx = bi % GRID, by = (bi / GRID) | 0;
+            let wx = rx2, wy = ry, clear = true, facing = false, hit = false;
+            while (wx !== bx || wy !== by) {
+              const px = wx, py = wy;
+              if (wx !== bx) wx += Math.sign(bx - wx); else wy += Math.sign(by - wy);
+              const w = idx(wx, wy);
+              if (streetUsed[w]) clear = false;
+              if (!hit && (tiles[w] === T_WALL || tiles[w] === T_BUILDING)) {
+                hit = true;
+                facing = wx < px || wy < py;
+              }
+            }
+            // An entrance on a face the camera never sees is an entrance
+            // nobody sees, so it is worth walking a little further along the
+            // block to find one that faces front.
+            const score = (facing ? 0 : 8) + (bd > 4 ? 2 : 0) + (clear ? 0 : 1);
+            if (score < best) { best = score; mouth = idx(rx2, ry); into = bi; }
+            if (best === 0) { ry = y1 + 4; break; }
           }
         }
         if (mouth < 0 || groundSurf[mouth] < 0) continue;
@@ -845,6 +880,7 @@ export function generateCity(seed: number): City {
           run.push(idx(cx2, cy2));
         }
         let prev = groundSurf[mouth];
+        const steps = [{ x: mx, y: my, z: 0 }];
         for (let k = 0; k < run.length; k++) {
           const last = k === run.length - 1;
           // eighths of a storey keep every height exact in a Float32Array
@@ -852,7 +888,10 @@ export function generateCity(seed: number): City {
           const here = last ? underSurf.get(uk(run[k], GARAGE_LEVEL))! : lb.add(run[k], z, SURF_BASEMENT);
           lb.link(prev, here, LINK_RAMP, 1.4);
           prev = here;
+          steps.push({ x: run[k] % GRID, y: (run[k] / GRID) | 0, z });
+          streetUsed[run[k]] = 1;                  // nothing else stands in the trench
         }
+        garageRamps.push({ steps });
       }
     }
   }
@@ -1014,7 +1053,7 @@ export function generateCity(seed: number): City {
   // has to be there, the tree only wants to be. ----
   const stairRuns = layOutStairs(levels, tiles, props, lamps, streetUsed);
 
-  return { seed, tiles, height, bstyle, laneDir, decos, props, crossing, streetUsed, levels, fittings, garages, lamps, roundabouts, vRoads, hRoads, skytrains, stations, stairRuns, ring, ramps };
+  return { seed, tiles, height, bstyle, laneDir, decos, props, crossing, streetUsed, levels, fittings, garages, lamps, roundabouts, vRoads, hRoads, skytrains, stations, stairRuns, ring, ramps, garageRamps };
 }
 
 // Every stair in the level model gets two tiles of footprint along the wall it

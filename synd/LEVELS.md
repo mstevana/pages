@@ -423,6 +423,46 @@ has to look at the link kind, and anything tracing one has to follow the
 whole chain: a ramp reaches its depth over as many links as it has steps,
 not one.
 
+## Drawing a hole in the ground
+
+A garage ramp that works is not a garage ramp that shows. The run of surfaces
+the car drives down lives entirely under the street, and `shown()` hides
+everything under the street from the surface view, so the car simply sank
+through the pavement and vanished. `City.garageRamps` records each run so the
+renderer can cut it open.
+
+Two pieces, one per tile of the run and each in its own depth bucket, so a car
+part-way down is drawn between the tile it is on and the tile in front of it:
+
+- **Out in the open**, a trench: a deck sloping from the near edge of the tile
+  to the far one, walls down either side, chevrons, and the rim of the cut
+  stroked into the pavement.
+- **Where it goes under the building**, a portal: a dark opening in the base of
+  the wall it passes through, with a lintel, a hazard stripe and a light over
+  the door.
+
+Both are clipped, and the clip is the whole trick. A hole shows only what fits
+inside its own opening -- a sight line grazing the near rim is the lowest thing
+the eye can reach, and anything the deck projects below that rim is behind the
+pavement in front of it. Drawn unclipped the trench reads as a slab piled on
+the road rather than a cut into it, because the sunk deck spills downscreen
+over ground that should be in front of it. The trench clips to its own rim; the
+portal clips to the half-plane above the rim of the tile in front, or the
+opening spreads out across the pavement as a black wedge.
+
+A portal is only worth drawing on a face the camera can see -- the two whose
+outward normals point at the eye. So the mouth search scores its candidates:
+an entrance that will face front beats one four tiles closer, and a run that
+would be dug through a lamp post loses to one that would not. That lifts the
+entrances facing front from about three quarters to 92-97%; the rest open on a
+face this projection never shows, and their trench slides under the building as
+it should. A few more are simply behind a taller block, the same way anything
+at street level is.
+
+One exception to `shown()` goes with this: something part-way down an open
+trench is in plain sight, not in a basement, so a car or an agent between 0 and
+-1 on a trench tile stays drawn solid. Below -1 it is inside, and hidden again.
+
 ## Two lines, two depths
 
 One line is a shuttle, not a network, so the metro always runs a second one
