@@ -66,7 +66,7 @@ export interface Car {
   state: "drive" | "stopping" | "parked" | "player" | "wreck" | "launching" | "docking";
   model: number;          // which of the 24 chassis designs
   glide: { x: number; y: number; a: number } | null; // kerb <-> lane manoeuvre
-  path: { x: number; y: number }[] | null;
+  path: { x: number; y: number; z?: number }[] | null;
   pathIdx: number;
   pilotOut: boolean;
   occupants: number[];    // agent ped ids
@@ -520,7 +520,14 @@ export class World {
       if (a.carId !== null) {
         const car = this.cars.find((c) => c.id === a.carId);
         if (car && car.state === "player" && car.occupants[0] === a.id) {
-          const p = this.pf.drivePath(car.x, car.y, tx, ty);
+          // A tap on a garage floor, or a car already down one, needs the route
+          // that knows about ramps; on the street the flat road search is both
+          // cheaper and better at holding the lane.
+          const here = surfaceNear(this.city, car.x | 0, car.y | 0, car.z, 0.01);
+          const wantsLevels = car.z < -0.01 || (tSurf >= 0 && this.city.levels.z[tSurf] < -0.01);
+          const p = wantsLevels && here >= 0 && tSurf >= 0
+            ? this.pf.carPath(car.x, car.y, here, tx, ty, tSurf)
+            : this.pf.drivePath(car.x, car.y, tx, ty);
           if (p) { car.path = p; car.pathIdx = 0; anyMoved = true; }
         }
         continue;
@@ -1816,13 +1823,15 @@ export class World {
       }
       const wp = c.path[c.pathIdx];
       const dx = wp.x - c.x, dy = wp.y - c.y;
+      const wz = wp.z ?? 0;
       const d = Math.sqrt(dx * dx + dy * dy);
       const step = c.speed * dt;
       if (d < Math.max(0.15, step)) {
-        c.x = wp.x; c.y = wp.y; c.pathIdx++;
+        c.x = wp.x; c.y = wp.y; c.z = wz; c.pathIdx++;
         if (c.pathIdx >= c.path.length) { c.path = null; c.speed = 0; }
       } else {
         c.x += (dx / d) * step; c.y += (dy / d) * step;
+        c.z += (wz - c.z) * Math.min(1, step / d);      // ride the ramp down
         // world-space heading, smoothed so path corners do not snap
         if (d > 0.2) {
           const target = Math.atan2(dy, dx);
@@ -1832,10 +1841,12 @@ export class World {
           c.angle += da * Math.min(1, dt * 10);
         }
       }
-      // keep the riders with the car
+      // keep the riders with the car, height included: without it a squad that
+      // drives down a ramp is left standing at street level, and steps out of
+      // the car a storey above the floor it parked on
       for (const oid of c.occupants) {
         const p = this.peds.find((q) => q.id === oid);
-        if (p) { p.x = c.x; p.y = c.y; }
+        if (p) { p.x = c.x; p.y = c.y; p.z = c.z; }
       }
       return;
     }

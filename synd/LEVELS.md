@@ -370,3 +370,29 @@ about fifteen tiles.
 
 Measuring this by time on a ring is misleading: a car held in a queue there
 is not circulating. Count tiles entered instead.
+
+## Driving into a garage
+
+A garage ramp is a run of tiles stepping down from the carriageway to the
+basement floor, one surface each, joined end to end by `LINK_RAMP`. A single
+link straight from the road to the basement -- which is what it used to be --
+is something a person can take and a car cannot: there is nothing under the
+car on the way down. Heights step in eighths of a storey, which keeps every
+one of them exact in a `Float32Array`.
+
+`Pathfinder.carPath` drives on the level model: the carriageway keeps its
+one-way lanes, a garage floor and its ramp are open in every direction, and
+the two are joined only by `LINK_RAMP` -- a car will not take a staircase.
+`cmdMove` uses it when either end of the trip is below ground and the flat
+road search otherwise, which is cheaper and holds the lane better.
+
+Two things follow from a car changing level and are easy to miss. Its riders
+have to take its height with it, or a squad that drives down a ramp is left
+standing on the street and steps out a storey above the floor. And the cut
+plane hides the car along with everything else underground, so the player's
+own car joins the ghost pass -- otherwise driving into a garage makes it
+vanish.
+
+When testing a ramp, aim at its own mouth. Routing from a garage to some tile
+clear across a one-way city tests the search budget, not the ramp, and will
+report failures that have nothing to do with it.

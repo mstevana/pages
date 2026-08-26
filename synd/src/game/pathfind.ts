@@ -1,6 +1,6 @@
 // Grid pathfinding: 8-way A* for pedestrians, lane-directed A* for cars.
 
-import { City, DBIT, DX, DY, hollowAt, idx, inGrid, isWalkable, StairRun, stairWalk, surfaceNear, T_ROAD } from "../city/citygen";
+import { City, DBIT, DX, DY, hollowAt, idx, inGrid, isWalkable, LINK_RAMP, StairRun, stairWalk, SURF_GROUND, surfaceNear, T_ROAD } from "../city/citygen";
 import { GRID } from "../engine/util";
 
 const MAX_EXPAND = 60000;
@@ -229,6 +229,64 @@ export class Pathfinder {
   // a hundred tiles at a stretch.
   drivePath(sx: number, sy: number, tx: number, ty: number): { x: number; y: number }[] | null {
     return this.roadAStar(sx | 0, sy | 0, tx | 0, ty | 0);
+  }
+
+  // Driving that knows about levels: the street keeps its one-way lanes, a
+  // garage floor and the ramp down to it are open in every direction, and the
+  // two are joined only by links a car can actually take.
+  carPath(sx: number, sy: number, sSurf: number, tx: number, ty: number, tSurf: number): Step[] | null {
+    const c = this.city, L = c.levels;
+    if (sSurf < 0 || tSurf < 0 || sSurf >= L.count || tSurf >= L.count) return null;
+    const step = (s: number): Step => ({
+      x: (L.tile[s] % GRID) + 0.5, y: ((L.tile[s] / GRID) | 0) + 0.5, z: L.z[s],
+    });
+    if (sSurf === tSurf) return [step(tSurf)];
+    this.ensureSurfaceScratch(L.count);
+    this.gen++;
+    const { g2, came2, stamp2, heap } = this;
+    heap.clear();
+    g2[sSurf] = 0; stamp2[sSurf] = this.gen; came2[sSurf] = -1;
+    heap.push(0, sSurf);
+    // a car may sit on a road tile, or on the floor of a garage, never on a roof
+    const drivable = (s: number): boolean =>
+      L.z[s] < -0.01 ? true : L.kind[s] === SURF_GROUND && c.tiles[L.tile[s]] === T_ROAD;
+    let expanded = 0;
+    while (heap.size > 0 && expanded < MAX_EXPAND) {
+      const cur = heap.pop();
+      if (cur === tSurf) {
+        const out: Step[] = [];
+        let n = cur;
+        while (n !== -1 && out.length < 4096) { out.push(step(n)); n = came2[n]; }
+        out.reverse();
+        return out;
+      }
+      expanded++;
+      const cx = L.tile[cur] % GRID, cy = (L.tile[cur] / GRID) | 0, cz = L.z[cur];
+      const onStreet = cz > -0.01;
+      const bits = c.laneDir[L.tile[cur]];
+      for (let d = 0; d < 4; d++) {
+        // one-way discipline applies on the carriageway and nowhere else
+        if (onStreet && (bits & DBIT[d]) === 0) continue;
+        const nx = cx + DX[d], ny = cy + DY[d];
+        if (!inGrid(nx, ny)) continue;
+        const ns = surfaceNear(c, nx, ny, cz, 0.01);
+        if (ns < 0 || !drivable(ns)) continue;
+        this.relaxSurf(cur, ns, 1, nx, ny, tx, ty);
+      }
+      for (let e = L.linkStart[cur]; e < L.linkStart[cur + 1]; e++) {
+        if (L.linkKind[e] !== LINK_RAMP) continue;      // stairs are for people
+        const ns = L.linkTo[e];
+        this.relaxSurf(cur, ns, L.linkCost[e], L.tile[ns] % GRID, (L.tile[ns] / GRID) | 0, tx, ty);
+      }
+    }
+    return null;
+  }
+
+  private relaxSurf(cur: number, ni: number, cost: number, nx: number, ny: number, tx: number, ty: number): void {
+    const ng = this.g2[cur] + cost;
+    if (this.stamp2[ni] === this.gen && ng >= this.g2[ni]) return;
+    this.stamp2[ni] = this.gen; this.g2[ni] = ng; this.came2[ni] = cur;
+    this.heap.push(ng + this.hDist(nx, ny, tx, ty), ni);
   }
 
   private roadAStar(sx: number, sy: number, tx: number, ty: number): { x: number; y: number }[] | null {

@@ -674,6 +674,13 @@ export class Renderer {
       if (p.state === "dead" || p.carId !== null) continue;
       if (p.team === "player" || p.vip) this.drawPed(g, p, world, people, SX, SY, z, time);
     }
+    // and the car they are riding in, which is the only thing on screen once a
+    // squad drives down into a garage
+    for (const c of world.cars) {
+      if (c.state !== "player" || c.occupants.length === 0) continue;
+      if (shown(c.z)) continue;                        // already drawn solid
+      this.drawCar(g, c, art, SX, SY, z);
+    }
     g.globalAlpha = 1;
 
     // ---- loot beacons: drawn over everything so drops behind buildings

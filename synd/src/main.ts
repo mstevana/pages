@@ -418,10 +418,14 @@ function pointerEnd(ev: PointerEvent): void {
     }
   }
   if (lead && lead.carId !== null) {
-    // driving: tap road to drive, tap nearby off-road to dismount
+    // driving: tap road or garage floor to drive there, tap anywhere else to
+    // get out
+    const surf = pickSurface(p.x, p.y);
+    const onFloor = surf.surf >= 0 && city && city.levels.z[surf.surf] < -0.01;
     const tileIsRoad = city && t.x >= 0 && t.y >= 0 && t.x < GRID && t.y < GRID &&
       city.tiles[idx(t.x | 0, t.y | 0)] === T_ROAD;
-    if (tileIsRoad) w.cmdMove(w.uiSelected, t.x, t.y);
+    if (onFloor) w.cmdMove(w.uiSelected, surf.x, surf.y, surf.surf);
+    else if (tileIsRoad) w.cmdMove(w.uiSelected, t.x, t.y);
     else w.cmdExitCar(w.uiSelected);
     followCam = true;
     return;

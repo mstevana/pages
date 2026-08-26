@@ -138,6 +138,7 @@ export const SURF_BASEMENT = 4;  // under a building
 export const LINK_STAIR = 0;     // fire escape, station stair
 export const LINK_LADDER = 1;    // manhole, shaft
 export const LINK_ESCALATOR = 2;
+export const LINK_RAMP = 3;      // a slope a car can take, not just a person
 
 export interface Levels {
   start: Int32Array;        // GRID*GRID + 1 offsets into z/kind/tile
@@ -791,12 +792,33 @@ export function generateCity(seed: number): City {
             if (bi >= 0 && bd <= 4) { mouth = idx(rx2, ry); into = bi; break outer; }
           }
         }
-        if (mouth < 0) continue;
+        if (mouth < 0 || groundSurf[mouth] < 0) continue;
 
         for (const j of lot) underSurf.set(j, lb.add(j, GARAGE_LEVEL, SURF_BASEMENT));
         garages.push({ x: x0, y: y0, w, h });
-        const rampSurf = underSurf.get(into)!;
-        if (groundSurf[mouth] >= 0) lb.link(groundSurf[mouth], rampSurf, LINK_STAIR, 3);
+
+        // The ramp proper: a run of tiles stepping down from the carriageway to
+        // the garage floor, one surface each, joined end to end. A single link
+        // straight from the road to the basement is something a person can take
+        // and a car cannot - there is nothing under the car on the way down.
+        const mx = mouth % GRID, my = (mouth / GRID) | 0;
+        const ix = into % GRID, iy = (into / GRID) | 0;
+        const run: number[] = [];
+        let cx2 = mx, cy2 = my;
+        while (cx2 !== ix || cy2 !== iy) {
+          if (cx2 !== ix) cx2 += Math.sign(ix - cx2);
+          else cy2 += Math.sign(iy - cy2);
+          run.push(idx(cx2, cy2));
+        }
+        let prev = groundSurf[mouth];
+        for (let k = 0; k < run.length; k++) {
+          const last = k === run.length - 1;
+          // eighths of a storey keep every height exact in a Float32Array
+          const z = last ? GARAGE_LEVEL : -Math.round((8 * (k + 1)) / run.length) / 8;
+          const here = last ? underSurf.get(run[k])! : lb.add(run[k], z, SURF_BASEMENT);
+          lb.link(prev, here, LINK_RAMP, 1.4);
+          prev = here;
+        }
       }
     }
   }
