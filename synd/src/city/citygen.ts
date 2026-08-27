@@ -857,6 +857,16 @@ export function generateCity(seed: number): City {
               // three tiles is the shortest run that keeps every step under
               // half a storey, which is the difference between a ramp and a drop
               if (!reached || steps.length < 3) continue;
+              // Never open a garage onto a pedestrian crossing. The zebra runs
+              // across the carriageway, so a mouth on one - or on the tile
+              // either side of it along the road - would have cars turning off
+              // the ramp straight through people on foot.
+              const m = idx(rx2, ry);
+              const bx2 = -dy, by2 = dx;            // along the carriageway
+              const onZebra = crossing[m] !== 0
+                || (inGrid(rx2 + bx2, ry + by2) && crossing[idx(rx2 + bx2, ry + by2)] !== 0)
+                || (inGrid(rx2 - bx2, ry - by2) && crossing[idx(rx2 - bx2, ry - by2)] !== 0);
+              if (onZebra) continue;
               // The portal ends up on the face the run enters the building
               // through, and only two of the four ever face the camera, so it
               // is worth walking along the block to find one that does.

@@ -459,6 +459,26 @@ took the slab over its head away: -2 for the first line, -3 for the second.
 Clamp it to the slider's own range and the tap can never put the plane
 somewhere the slider cannot get back from.
 
+## Who runs and who does not
+
+Police never flee. Gunfire and deaths already only alerted civilians, but the
+traffic dodge did not make that distinction: an officer who had jumped clear of
+a car was left in the flee state for good, sprinting at the dodge pace forever,
+because `followPath` only ever clears the state back to idle from "walk". So
+the dodge now puts civilians into flee and everyone else into a walk, `speed`
+is handed back when the dodge cooldown runs out, and `startFlee` refuses a cop
+outright. Measured: nought flee-frames through a shooting, a killing beside
+them and a car driven through them, against 69 before, and their pace comes
+back to the 2.9 they spawned with rather than sticking at the 4.6 sprint.
+
+Rival agents deploy as fire teams. Thirty lone gunmen scattered across the
+sector read as thirty accidents; the roster is broken into threes and fours
+(the sizes chosen so the last team is never left short) and each team set down
+together. They also hold together afterwards: each one wanders about its team's
+patch rather than about wherever the last wander left it, or thirty random
+walks pull the teams apart inside a minute. Eight groups per sector, and they
+are still eight twenty seconds later.
+
 ## Getting out of the way of traffic
 
 The ordinary flee runs directly away from whatever caused it. For a car in the
@@ -510,6 +530,14 @@ diagonal. Now the mouth is a road tile, the first step is off the road, and the
 direction never changes; since both are axis-aligned, crossing the kerb in a
 straight line *is* crossing it square. Three tiles is the shortest run allowed,
 because that is what keeps every step under half a storey.
+
+A mouth is never put on a pedestrian crossing, nor on the tile either side of
+one along the carriageway: a garage that opens onto a zebra has cars turning
+off the ramp straight through people on foot. This is a hard reject rather
+than a preference, and it costs nothing - about half the mouths were landing
+on a zebra, because the search likes the corner of the block and that is
+exactly where the crossings are painted, and every garage still finds a mouth
+somewhere else along the same kerb.
 
 A portal is only worth drawing on a face the camera can see -- the two whose
 outward normals point at the eye. So the mouth search scores its candidates: an

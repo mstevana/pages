@@ -32,6 +32,9 @@ export interface Ped {
   thinkT: number;         // AI repath/decide timer
   fleeFrom: { x: number; y: number } | null;
   dodgeT: number;         // cooldown after jumping clear of a car
+  dodgeSpeed: number;     // the pace to go back to afterwards, 0 when not dodging
+  homeX: number;          // the patch this one patrols, -1 for none
+  homeY: number;
   fireCd: number;
   aimT: number;              // reaction delay remaining before the first shot
   aimTargetId: number | null; // who this NPC is currently drawing a bead on
@@ -111,6 +114,17 @@ export interface Ping {
 const PING_FADE = 0.45;    // seconds to die back once everyone has arrived
 const PING_MAX = 45;       // ...and a ceiling, so a stuck agent cannot pin it
 const PING_MIN = 0.9;      // every marker is up this long, even a refused one
+
+// How much a car takes before it is written off. A blast still does for one
+// outright, whatever this is - that is the `dmg >= 200` rule in damageCar, and
+// it is what makes a chain of parked cars go up together.
+const CAR_HP = 180;
+
+// Rival agents deploy as fire teams rather than one at a time.
+const SQUAD_MIN = 3;
+const SQUAD_MAX = 4;
+const SQUAD_SPREAD = 2.5;   // tiles they are set down within
+const SQUAD_ROAM = 4;       // ...and how far they drift from the team's patch
 
 // Getting out of the way of traffic.
 const DODGE_MIN_SPEED = 2.2;   // slower than this and it is not a threat
@@ -385,9 +399,27 @@ export class World {
       case "killall": {
         const count = 30;
         m.enemiesLeft = count;
-        for (let i = 0; i < count; i++) {
-          const p = this.farPoint(start, 40 + this.rng.int(0, 110));
-          this.spawnEnemy(p.x, p.y);
+        // Rivals work in fire teams, not as thirty lone gunmen. Break the
+        // roster into threes and fours - the sizes are chosen so the last
+        // team is never left short - and set each team down together on its
+        // own corner of the sector.
+        const sizes: number[] = [];
+        for (let left = count; left > 0;) {
+          const opts = [SQUAD_MIN, SQUAD_MAX].filter((n) => n <= left && (left - n === 0 || left - n >= SQUAD_MIN));
+          const n = opts.length > 0 ? this.rng.pick(opts) : left;
+          sizes.push(n); left -= n;
+        }
+        for (const n of sizes) {
+          const c = this.farPoint(start, 40 + this.rng.int(0, 110));
+          for (let k = 0; k < n; k++) {
+            const nw = this.pf.nearestWalkable(
+              (c.x + this.rng.float(-SQUAD_SPREAD, SQUAD_SPREAD)) | 0,
+              (c.y + this.rng.float(-SQUAD_SPREAD, SQUAD_SPREAD)) | 0, 5);
+            const e = this.spawnEnemy(nw ? nw.x + 0.5 : c.x, nw ? nw.y + 0.5 : c.y);
+            // they wander about the team's patch, not about wherever the last
+            // wander left them: thirty random walks pull the teams apart
+            e.homeX = c.x; e.homeY = c.y;
+          }
         }
         m.text = "ELIMINATE all 30 rival syndicate agents operating in this sector. They are hunting you too.";
         break;
@@ -403,7 +435,7 @@ export class World {
       id: nextId++, team, model: 0, x, y, z: 0, dir: 0,
       hp: 30, maxHp: 30, state: "idle", path: null, pathIdx: 0,
       speed: 2.2, animT: 0, deadT: 0, thinkT: this.rng.float(0, 2),
-      fleeFrom: null, dodgeT: 0, fireCd: 0, aimT: 0, aimTargetId: null, weapon: null,
+      fleeFrom: null, dodgeT: 0, dodgeSpeed: 0, homeX: -1, homeY: -1, fireCd: 0, aimT: 0, aimTargetId: null, weapon: null,
       agentIdx: -1, inv: [], sel: -1, shieldOn: false, shield: 0,
       fireAt: null, dropOrder: null, pickOrder: null, giveOrder: null, carId: null, boardOrder: null,
       trainId: null, vip: false, persuaded: false, followId: null, hostileCop: false,
@@ -442,7 +474,7 @@ export class World {
     const car: Car = {
       id: nextId++, x, y, z: 0, angle: Math.atan2(DY[dir], DX[dir]), dir, speed: 0,
       model: this.rng.int(0, 23), glide: null,
-      hp: 90, state: "drive", path: null, pathIdx: 0, pilotOut: false, occupants: [], waitT: 0,
+      hp: CAR_HP, state: "drive", path: null, pathIdx: 0, pilotOut: false, occupants: [], waitT: 0,
     };
     this.cars.push(car);
     return car;
@@ -1121,7 +1153,15 @@ export class World {
   // the side, so this picks a target square across the car's line, on whichever
   // side they are already nearer, and sprints for it.
   private dodgeTraffic(dt: number): void {
-    for (const p of this.peds) if (p.dodgeT > 0) p.dodgeT -= dt;
+    for (const p of this.peds) {
+      if (p.dodgeT <= 0) continue;
+      p.dodgeT -= dt;
+      // the sprint is for the step aside, not for good: hand the pace back
+      if (p.dodgeT <= 0 && p.dodgeSpeed > 0 && p.state !== "flee") {
+        p.speed = p.dodgeSpeed;
+        p.dodgeSpeed = 0;
+      }
+    }
     for (const c of this.cars) {
       if (c.state === "wreck" || c.speed < DODGE_MIN_SPEED) continue;
       const fx = Math.cos(c.angle), fy = Math.sin(c.angle);
@@ -1148,8 +1188,11 @@ export class World {
       const path = this.pf.walkPath(p.x, p.y, tx, ty);
       if (!path) continue;
       p.path = path; p.pathIdx = 0;
-      p.state = "flee";
-      p.fleeFrom = { x: c.x, y: c.y };
+      // A civilian who has had to jump for it stays rattled and keeps running.
+      // An officer steps aside and gets back to the beat: police do not flee.
+      if (p.team === "civ") { p.state = "flee"; p.fleeFrom = { x: c.x, y: c.y }; }
+      else p.state = "walk";
+      if (p.dodgeSpeed === 0) p.dodgeSpeed = p.speed;
       p.speed = DODGE_SPEED;
       p.thinkT = 1.4;          // long enough to finish the step before rethinking
       p.dodgeT = DODGE_COOLDOWN;
@@ -1298,6 +1341,7 @@ export class World {
   }
 
   private startFlee(p: Ped, from: { x: number; y: number }): void {
+    if (p.team === "cop") return;      // an officer does not run from us
     p.state = "flee";
     p.fleeFrom = { ...from };
     p.thinkT = 0;
@@ -1755,8 +1799,10 @@ export class World {
       if (path) { p.path = path; p.pathIdx = 0; p.state = "walk"; }
     } else if (!hunting && p.thinkT <= 0) {
       p.thinkT = this.rng.float(3, 7);
-      const tx = clamp(p.x + this.rng.float(-8, 8), 2, GRID - 3);
-      const ty = clamp(p.y + this.rng.float(-8, 8), 2, GRID - 3);
+      const ax = p.homeX >= 0 ? p.homeX : p.x, ay = p.homeY >= 0 ? p.homeY : p.y;
+      const roam = p.homeX >= 0 ? SQUAD_ROAM : 8;
+      const tx = clamp(ax + this.rng.float(-roam, roam), 2, GRID - 3);
+      const ty = clamp(ay + this.rng.float(-roam, roam), 2, GRID - 3);
       const path = this.pf.walkPath(p.x, p.y, tx, ty);
       if (path) { p.path = path; p.pathIdx = 0; p.state = "walk"; }
     }
