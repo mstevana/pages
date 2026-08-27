@@ -409,12 +409,23 @@ record -- still gates on the platform level, because a train a third of a
 storey below the platform would otherwise be out of reach of anyone standing
 on it.
 
-Access is by ramp, two per station, one at each end. A ramp gains a storey
-every two tiles, so reaching a platform two storeys down takes four; it is
-laid straight along the kerb where there is room and folded into an L or a U
-where there is not. Its mouth is an opening in the pavement with a rail round
-three sides and the roundel on a post, which is what makes it findable from
-across the street.
+Access is by ramp, two per station, **one for each platform**. The track
+trench splits the concourse in two and there is no crossing it except along
+the rails, so a ramp is placed for the left-hand kerb and another for the
+right-hand one, each taking whichever end of the hall it can reach. Placing
+them by end instead - one at each far end, first kerb that fits - left seven
+of sixteen platform sides with no way out at all.
+
+For the same reason the bends turn *away* from the track. An L or a U folded
+towards the middle of the hall walks straight into the trench, and the tile it
+lands on is at track height, not platform height, so the ramp ends on the
+rails. Any step whose offset crosses the centre line is rejected outright.
+
+A ramp gains a storey every two tiles, so reaching a platform two storeys down
+takes four and the deeper line six; it is laid straight along the kerb where
+there is room and folded into an L or a U where there is not. Its mouth is an
+opening in the pavement with a rail round three sides and the roundel on a
+post, which is what makes it findable from across the street.
 
 Ramps are `LINK_ESCALATOR` and garage ramps are `LINK_RAMP`: people take
 either, cars only the second, and `layOutStairs` skips both -- a ramp drawn
@@ -422,6 +433,18 @@ as a switchback staircase is not a ramp. Anything counting ways underground
 has to look at the link kind, and anything tracing one has to follow the
 whole chain: a ramp reaches its depth over as many links as it has steps,
 not one.
+
+## Cutting the section to something you tapped
+
+Tapping an agent's portrait drops the section plane onto the storey that agent
+is standing on. The storey that *shows* a height is the one it reaches up into
+-- its ceiling, not its floor -- so the plane wants `ceil(z)`, not `round(z)`:
+an agent on a skytrain platform at 2.125 needs the plane at 3, and one on a
+garage ramp at -0.5 needs it at 0. Underground the same expression already
+lands right, because a level below the street is only shown by the plane that
+took the slab over its head away: -2 for the first line, -3 for the second.
+Clamp it to the slider's own range and the tap can never put the plane
+somewhere the slider cannot get back from.
 
 ## Drawing a hole in the ground
 

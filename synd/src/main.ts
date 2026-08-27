@@ -439,18 +439,34 @@ function pointerEnd(ev: PointerEvent): void {
 canvas.addEventListener("pointerup", pointerEnd);
 canvas.addEventListener("pointercancel", pointerEnd);
 
+// Cut the section to the storey something actually stands on. The plane has
+// to be at or above a height to show it, and a level below the street also
+// needs the floor over its head taken away, so the storey that shows a height
+// is the one it reaches up into - the ceiling of it, not the floor.
+function sectionTo(z: number): void {
+  const want = Math.ceil(z - 1e-6);
+  const lo = slider ? slider.minLevel : 0;
+  const hi = renderer ? renderer.maxStories : want;
+  sectionLevel = Math.max(lo, Math.min(hi, want));
+}
+
 function handlePanelTap(hit: ReturnType<Panel["hit"]>): void {
   const w = world!;
   audio.click();
   switch (hit.type) {
     case "doll": {
       w.uiSelected = [false, false, false, false];
-      if (w.agents[hit.i] && w.agents[hit.i].hp > 0) w.uiSelected[hit.i] = true;
+      if (w.agents[hit.i] && w.agents[hit.i].hp > 0) {
+        w.uiSelected[hit.i] = true;
+        sectionTo(w.agents[hit.i].z);
+      }
       followCam = true;
       break;
     }
     case "emblem": {
       for (let i = 0; i < 4; i++) w.uiSelected[i] = w.agents[i] ? w.agents[i].hp > 0 : false;
+      const first = w.selectedAgents(w.uiSelected)[0];
+      if (first) sectionTo(first.z);
       followCam = true;
       break;
     }

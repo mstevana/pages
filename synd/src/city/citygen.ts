@@ -1000,42 +1000,53 @@ export function generateCity(seed: number): City {
         u_turn.push([0, -b * (RUN - 2)]);
         return [straight, bendLate, bendEarly, u_turn];
       };
-      let built = 0;
-      for (const sgn of [1, -1]) {                       // one at each far end
-        if (built >= 2 && sgn === -1) break;
-        for (const side of [-2, 1]) {                    // the two kerbs
-          const mouthDu = sgn * (HALL_LONG + 2);
-          const mouth = tileAt(mouthDu, side);
-          if (!openStreet(mouth)) continue;
-          let chosen: { x: number; y: number; z: number }[] | null = null;
-          for (const shape of shapes(-sgn, side > 0 ? 1 : -1)) {
-            const steps: { x: number; y: number; z: number }[] = [{ x: mouth!.x, y: mouth!.y, z: 0 }];
-            let ok = true;
-            for (let k = 0; k < shape.length; k++) {
-              const t = tileAt(mouthDu + shape[k][0], side + shape[k][1]);
-              if (t === null) { ok = false; break; }
-              const last = k === shape.length - 1;
-              // eighths of a storey, so every height is exact in float32
-              const z = last ? FLOOR_Z
-                : -Math.round((8 * (k + 1) * -FLOOR_Z) / RUN) / 8;
-              if (last && !underSurf.has(uk(t.i, FLOOR_Z))) { ok = false; break; }  // must land on the concourse
-              steps.push({ x: t.x, y: t.y, z });
+      // The track splits the concourse in two, and the only way across it is
+      // along the rails. So the platforms are served one side at a time: a
+      // ramp for the left-hand kerb and a ramp for the right-hand one, each
+      // taking whichever end of the hall it can get. A platform whose only
+      // exit is on the far side of the line is not an exit.
+      for (const side of [-2, 1]) {                      // the two kerbs
+        const away = side > 0 ? -1 : 1;                  // bends turn away from the track
+        let done = false;
+        for (const sgn of [1, -1]) {                     // try each far end in turn
+          if (done) break;
+          for (const reach of [HALL_LONG + 2, HALL_LONG + 1, HALL_LONG + 3]) {
+            const mouthDu = sgn * reach;
+            const mouth = tileAt(mouthDu, side);
+            if (!openStreet(mouth)) continue;
+            let chosen: { x: number; y: number; z: number }[] | null = null;
+            for (const shape of shapes(-sgn, away)) {
+              const steps: { x: number; y: number; z: number }[] = [{ x: mouth!.x, y: mouth!.y, z: 0 }];
+              let ok = true;
+              for (let k = 0; k < shape.length; k++) {
+                const dv = side + shape[k][1];
+                // never step onto the track, nor cross to the other platform
+                if (dv === 0 || (dv < 0) !== (side < 0)) { ok = false; break; }
+                const t = tileAt(mouthDu + shape[k][0], dv);
+                if (t === null) { ok = false; break; }
+                const last = k === shape.length - 1;
+                // eighths of a storey, so every height is exact in float32
+                const z = last ? FLOOR_Z
+                  : -Math.round((8 * (k + 1) * -FLOOR_Z) / RUN) / 8;
+                if (last && !underSurf.has(uk(t.i, FLOOR_Z))) { ok = false; break; }  // must land on the concourse
+                steps.push({ x: t.x, y: t.y, z });
+              }
+              if (ok) { chosen = steps; break; }
             }
-            if (ok) { chosen = steps; break; }
+            if (!chosen) continue;
+            let prev = groundSurf[mouth!.i];
+            for (let k = 1; k < chosen.length; k++) {
+              const t = idx(chosen[k].x, chosen[k].y);
+              const last = k === chosen.length - 1;
+              const here = last ? underSurf.get(uk(t, FLOOR_Z))! : lb.add(t, chosen[k].z, SURF_TUNNEL);
+              lb.link(prev, here, LINK_ESCALATOR, 1.6);
+              prev = here;
+            }
+            streetUsed[mouth!.i] = 1;
+            ramps.push({ steps: chosen, station: stationIdx });
+            done = true;
+            break;                                        // one per side is enough
           }
-          if (!chosen) continue;
-          let prev = groundSurf[mouth!.i];
-          for (let k = 1; k < chosen.length; k++) {
-            const t = idx(chosen[k].x, chosen[k].y);
-            const last = k === chosen.length - 1;
-            const here = last ? underSurf.get(uk(t, FLOOR_Z))! : lb.add(t, chosen[k].z, SURF_TUNNEL);
-            lb.link(prev, here, LINK_ESCALATOR, 1.6);
-            prev = here;
-          }
-          streetUsed[mouth!.i] = 1;
-          ramps.push({ steps: chosen, station: stationIdx });
-          built++;
-          break;                                          // one per end is enough
         }
       }
     }
