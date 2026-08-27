@@ -434,6 +434,19 @@ has to look at the link kind, and anything tracing one has to follow the
 whole chain: a ramp reaches its depth over as many links as it has steps,
 not one.
 
+## The tapped-destination marker
+
+The marker holds until everyone ordered there has arrived, rather than fading
+on a fixed timer, so it answers "have they got there yet" and not just "the tap
+registered". It watches the movers themselves -- the agents' paths, or the
+path of the car they are riding in -- and starts fading only once the last of
+them stops. A fresh order removes the previous marker: it is no longer waiting
+on anybody, and leaving it up would pin a ring to a destination nobody is going
+to. Every marker is up for a minimum first, so a refused one still reads.
+
+The shockwave runs on its own repeating clock rather than on the remaining
+life, or a held marker would freeze into a decal instead of pulsing.
+
 ## Cutting the section to something you tapped
 
 Tapping an agent's portrait drops the section plane onto the storey that agent
@@ -445,6 +458,23 @@ lands right, because a level below the street is only shown by the plane that
 took the slab over its head away: -2 for the first line, -3 for the second.
 Clamp it to the slider's own range and the tap can never put the plane
 somewhere the slider cannot get back from.
+
+## Getting out of the way of traffic
+
+The ordinary flee runs directly away from whatever caused it. For a car in the
+road that means running down the road in front of it, keeping pace with the
+bumper until it catches up -- which is why civilians looked like they were
+failing to react when they were reacting exactly as told. What saves someone is
+a step to the *side*, so a pedestrian with a car bearing down picks a square
+across its line, on whichever side they are already nearer, and sprints for it;
+if that way is a wall they try the other.
+
+The look-ahead scales with the car's speed, so the warning is a fixed amount of
+time rather than a fixed distance. Driving a car at speed 9 down a line of
+twelve people standing on its route used to kill six of them; it now kills one
+-- the one already under the bumper when the car pulls away, who never had a
+warning to get. Running people down is still perfectly possible, which is the
+point: a pedestrian gets a chance, not immunity.
 
 ## Drawing a hole in the ground
 
@@ -473,14 +503,32 @@ over ground that should be in front of it. The trench clips to its own rim; the
 portal clips to the half-plane above the rim of the tile in front, or the
 opening spreads out across the pavement as a black wedge.
 
+The run leaves the carriageway at right angles to it and goes straight in. It
+used to dog-leg -- all the way along x, then all the way along y -- which put a
+kink in the middle of the trench and had cars turning off the road on the
+diagonal. Now the mouth is a road tile, the first step is off the road, and the
+direction never changes; since both are axis-aligned, crossing the kerb in a
+straight line *is* crossing it square. Three tiles is the shortest run allowed,
+because that is what keeps every step under half a storey.
+
 A portal is only worth drawing on a face the camera can see -- the two whose
-outward normals point at the eye. So the mouth search scores its candidates:
-an entrance that will face front beats one four tiles closer, and a run that
-would be dug through a lamp post loses to one that would not. That lifts the
-entrances facing front from about three quarters to 92-97%; the rest open on a
-face this projection never shows, and their trench slides under the building as
-it should. A few more are simply behind a taller block, the same way anything
-at street level is.
+outward normals point at the eye. So the mouth search scores its candidates: an
+entrance that will face front beats a nearer one, and a run that would be dug
+through a lamp post loses to one that would not. About three quarters end up
+facing front; the rest have no road on their south or east side to leave from,
+so they open on a face this projection never shows and their trench slides
+under the building as it should. A few more are simply behind a taller block,
+the same way anything at street level is. Straightening the run cost some of
+that -- the dog-leg could reach around a corner to a better face -- and it is
+the right trade: a ramp that reads wrong from every angle is worse than one
+whose door faces away.
+
+Seen from the garage the ramp is drawn differently: there is no street left to
+cut into and nothing in front to hide behind, so it becomes a deck on skirts
+running down out of the ceiling, unclipped, with the portal tile and everything
+past it drawn as deck too. Those tiles are skipped from the street view because
+a wall is in front of them -- but leaving them out of the garage view stopped
+the ramp a tile short of the floor it serves.
 
 One exception to `shown()` goes with this: something part-way down an open
 trench is in plain sight, not in a basement, so a car or an agent between 0 and

@@ -821,47 +821,52 @@ export function generateCity(seed: number): City {
         const w = x1 - x0 + 1, h = y1 - y0 + 1;
         if (lot.length < 12 || w < 3 || h < 3 || !rng.chance(0.4)) continue;
 
-        // The ramp: a carriageway tile within reach of the lot's edge. The
-        // search runs from the far corner back, so an entrance is found on the
-        // south or east side of the block wherever there is one - those are the
-        // faces the camera sees, and a portal on the other two is a portal
-        // nobody will ever look at. A run that would be dug through a lamp post
-        // or a street tree is passed over while any other candidate remains.
-        let mouth = -1, into = -1, best = 1e9;
-        for (let ry = y0 - 4; ry <= y1 + 4; ry++) {
-          for (let rx2 = x0 - 4; rx2 <= x1 + 4; rx2++) {
+        // The ramp leaves the carriageway at right angles to it and runs
+        // straight into the block. A slip road cutting across the traffic on
+        // the diagonal is not how a garage entrance is built, and the dog-leg
+        // it used to take put a kink in the middle of the trench.
+        const lotSet = new Set(lot);
+        const rampable = (t: number) =>
+          tiles[t] === T_SIDEWALK || tiles[t] === T_GROUND
+          || tiles[t] === T_PARK || tiles[t] === T_WALL || lotSet.has(t);
+        let mouth = -1, run: number[] | null = null, best = 1e9;
+        for (let ry = y0 - 5; ry <= y1 + 5 && best > 0; ry++) {
+          for (let rx2 = x0 - 5; rx2 <= x1 + 5 && best > 0; rx2++) {
             if (!inGrid(rx2, ry) || tiles[idx(rx2, ry)] !== T_ROAD) continue;
-            // the nearest lot tile to it, if that tile is close enough to ramp to
-            let bd = 1e9, bi = -1;
-            for (const j of lot) {
-              const jx = j % GRID, jy = (j / GRID) | 0;
-              const d = Math.abs(jx - rx2) + Math.abs(jy - ry);
-              if (d < bd) { bd = d; bi = j; }
-            }
-            if (bi < 0 || bd > 5) continue;
-            // walk the run this mouth would dig, to find where it meets the
-            // building and which way it is heading when it gets there
-            const bx = bi % GRID, by = (bi / GRID) | 0;
-            let wx = rx2, wy = ry, clear = true, facing = false, hit = false;
-            while (wx !== bx || wy !== by) {
-              const px = wx, py = wy;
-              if (wx !== bx) wx += Math.sign(bx - wx); else wy += Math.sign(by - wy);
-              const w = idx(wx, wy);
-              if (streetUsed[w]) clear = false;
-              if (!hit && (tiles[w] === T_WALL || tiles[w] === T_BUILDING)) {
-                hit = true;
-                facing = wx < px || wy < py;
+            // which way the carriageway runs here; at a corner it runs both,
+            // and the ramp may leave on either of the two perpendiculars
+            const roadX = (inGrid(rx2 - 1, ry) && tiles[idx(rx2 - 1, ry)] === T_ROAD)
+                       || (inGrid(rx2 + 1, ry) && tiles[idx(rx2 + 1, ry)] === T_ROAD);
+            const roadY = (inGrid(rx2, ry - 1) && tiles[idx(rx2, ry - 1)] === T_ROAD)
+                       || (inGrid(rx2, ry + 1) && tiles[idx(rx2, ry + 1)] === T_ROAD);
+            const dirs: [number, number][] = [];
+            if (roadX) dirs.push([0, 1], [0, -1]);
+            if (roadY) dirs.push([1, 0], [-1, 0]);
+            for (const [dx, dy] of dirs) {
+              const steps: number[] = [];
+              let cx = rx2, cy = ry, reached = false, clear = true;
+              for (let k = 0; k < 5; k++) {
+                cx += dx; cy += dy;
+                if (!inGrid(cx, cy)) break;
+                const t = idx(cx, cy);
+                if (!rampable(t)) break;
+                steps.push(t);
+                if (streetUsed[t]) clear = false;
+                if (lotSet.has(t)) { reached = true; break; }
               }
+              // three tiles is the shortest run that keeps every step under
+              // half a storey, which is the difference between a ramp and a drop
+              if (!reached || steps.length < 3) continue;
+              // The portal ends up on the face the run enters the building
+              // through, and only two of the four ever face the camera, so it
+              // is worth walking along the block to find one that does.
+              const facing = dx < 0 || dy < 0;
+              const score = (facing ? 0 : 16) + (steps.length > 4 ? 2 : 0) + (clear ? 0 : 1);
+              if (score < best) { best = score; mouth = idx(rx2, ry); run = steps; }
             }
-            // An entrance on a face the camera never sees is an entrance
-            // nobody sees, so it is worth walking a little further along the
-            // block to find one that faces front.
-            const score = (facing ? 0 : 8) + (bd > 4 ? 2 : 0) + (clear ? 0 : 1);
-            if (score < best) { best = score; mouth = idx(rx2, ry); into = bi; }
-            if (best === 0) { ry = y1 + 4; break; }
           }
         }
-        if (mouth < 0 || groundSurf[mouth] < 0) continue;
+        if (mouth < 0 || run === null || groundSurf[mouth] < 0) continue;
 
         for (const j of lot) underSurf.set(uk(j, GARAGE_LEVEL), lb.add(j, GARAGE_LEVEL, SURF_BASEMENT));
         garages.push({ x: x0, y: y0, w, h });
@@ -871,14 +876,6 @@ export function generateCity(seed: number): City {
         // straight from the road to the basement is something a person can take
         // and a car cannot - there is nothing under the car on the way down.
         const mx = mouth % GRID, my = (mouth / GRID) | 0;
-        const ix = into % GRID, iy = (into / GRID) | 0;
-        const run: number[] = [];
-        let cx2 = mx, cy2 = my;
-        while (cx2 !== ix || cy2 !== iy) {
-          if (cx2 !== ix) cx2 += Math.sign(ix - cx2);
-          else cy2 += Math.sign(iy - cy2);
-          run.push(idx(cx2, cy2));
-        }
         let prev = groundSurf[mouth];
         const steps = [{ x: mx, y: my, z: 0 }];
         for (let k = 0; k < run.length; k++) {

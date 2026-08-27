@@ -31,6 +31,7 @@ export interface Ped {
   deadT: number;          // time since death
   thinkT: number;         // AI repath/decide timer
   fleeFrom: { x: number; y: number } | null;
+  dodgeT: number;         // cooldown after jumping clear of a car
   fireCd: number;
   aimT: number;              // reaction delay remaining before the first shot
   aimTargetId: number | null; // who this NPC is currently drawing a bead on
@@ -96,7 +97,29 @@ export interface Particle {
   kind: FxKind; lift: number; liftV: number; grow: number; drag: number;
 }
 export interface Flash { x: number; y: number; life: number; maxLife: number; r: number; ring: boolean; }
-export interface Ping { x: number; y: number; z: number; life: number; maxLife: number; ok: boolean; }
+// A tapped destination. The ring holds while anyone ordered there is still on
+// their way, so the marker answers "have they got there yet" rather than just
+// "the tap registered".
+export interface Ping {
+  x: number; y: number; z: number;
+  age: number;             // seconds since the tap - drives the shockwave
+  fade: number;            // 1 while someone is still walking, then down to 0
+  ok: boolean;
+  movers: number[];        // the agents ordered there
+  carId: number | null;    // ...or the car they are riding in
+}
+const PING_FADE = 0.45;    // seconds to die back once everyone has arrived
+const PING_MAX = 45;       // ...and a ceiling, so a stuck agent cannot pin it
+const PING_MIN = 0.9;      // every marker is up this long, even a refused one
+
+// Getting out of the way of traffic.
+const DODGE_MIN_SPEED = 2.2;   // slower than this and it is not a threat
+const DODGE_LOOK = 0.85;       // seconds of the car's travel they look ahead
+const DODGE_LOOK_MAX = 11;     // tiles, however fast it is going
+const DODGE_WIDE = 1.5;        // tiles either side of its line that count as in the way
+const DODGE_CLEAR = 2.6;       // tiles they try to put between themselves and it
+const DODGE_SPEED = 4.6;       // a sprint, not a jog
+const DODGE_COOLDOWN = 1.2;    // seconds before they will jump again
 
 export interface Mission {
   kind: ObjectiveKind;
@@ -380,7 +403,7 @@ export class World {
       id: nextId++, team, model: 0, x, y, z: 0, dir: 0,
       hp: 30, maxHp: 30, state: "idle", path: null, pathIdx: 0,
       speed: 2.2, animT: 0, deadT: 0, thinkT: this.rng.float(0, 2),
-      fleeFrom: null, fireCd: 0, aimT: 0, aimTargetId: null, weapon: null,
+      fleeFrom: null, dodgeT: 0, fireCd: 0, aimT: 0, aimTargetId: null, weapon: null,
       agentIdx: -1, inv: [], sel: -1, shieldOn: false, shield: 0,
       fireAt: null, dropOrder: null, pickOrder: null, giveOrder: null, carId: null, boardOrder: null,
       trainId: null, vip: false, persuaded: false, followId: null, hostileCop: false,
@@ -515,6 +538,11 @@ export class World {
     const group = this.selectedAgents(sel);
     let n = 0;
     let anyMoved = false;
+    // a fresh order supersedes the last one: the old marker is no longer
+    // waiting on anybody, so it goes rather than sitting on a dead destination
+    const ids = new Set(group.map((a) => a.id));
+    this.pings = this.pings.filter((pg) => !pg.movers.some((m) => ids.has(m)));
+    const riding: number[] = [];
     for (const a of group) {
       a.fireAt = null; a.dropOrder = null; a.pickOrder = null; a.giveOrder = null; a.boardOrder = null;
       if (a.carId !== null) {
@@ -528,7 +556,7 @@ export class World {
           const p = wantsLevels && here >= 0 && tSurf >= 0
             ? this.pf.carPath(car.x, car.y, here, tx, ty, tSurf)
             : this.pf.drivePath(car.x, car.y, tx, ty);
-          if (p) { car.path = p; car.pathIdx = 0; anyMoved = true; }
+          if (p) { car.path = p; car.pathIdx = 0; anyMoved = true; riding.push(car.id); }
         }
         continue;
       }
@@ -546,13 +574,14 @@ export class World {
       n++;
     }
     // the marker belongs at the height that was tapped, not on the street
-    this.addPing(tx, ty, anyMoved, tSurf >= 0 ? this.city.levels.z[tSurf] : 0);
+    this.addPing(tx, ty, anyMoved, tSurf >= 0 ? this.city.levels.z[tSurf] : 0,
+                 group.filter((a) => a.carId === null).map((a) => a.id), riding[0] ?? null);
   }
 
   // a marker at a tapped destination: green when someone is on their way,
-  // red when nothing could path there
-  addPing(x: number, y: number, ok: boolean, z = 0): void {
-    this.pings.push({ x, y, z, life: 1.1, maxLife: 1.1, ok });
+  // red when nothing could path there. It holds until they get there.
+  addPing(x: number, y: number, ok: boolean, z = 0, movers: number[] = [], carId: number | null = null): void {
+    this.pings.push({ x, y, z, age: 0, fade: 1, ok, movers, carId });
   }
 
   cmdShoot(sel: boolean[], tx: number, ty: number, tz = 0): void {
@@ -1085,6 +1114,51 @@ export class World {
     return null;
   }
 
+  // Anyone on foot with a car bearing down on them gets out of its way. The
+  // ordinary flee runs directly away from what scared it, which for a car in
+  // the road means running down the road in front of it - the pedestrian keeps
+  // pace with the bumper until it catches them. What saves them is a step to
+  // the side, so this picks a target square across the car's line, on whichever
+  // side they are already nearer, and sprints for it.
+  private dodgeTraffic(dt: number): void {
+    for (const p of this.peds) if (p.dodgeT > 0) p.dodgeT -= dt;
+    for (const c of this.cars) {
+      if (c.state === "wreck" || c.speed < DODGE_MIN_SPEED) continue;
+      const fx = Math.cos(c.angle), fy = Math.sin(c.angle);
+      // the faster it comes, the earlier they see it
+      const look = Math.min(DODGE_LOOK_MAX, 2 + c.speed * DODGE_LOOK);
+      for (const p of this.peds) {
+        if (p.state === "dead" || p.carId !== null || p.team === "player") continue;
+        if (p.dodgeT > 0 || Math.abs(p.z - c.z) > 0.6) continue;
+        const relx = p.x - c.x, rely = p.y - c.y;
+        const along = relx * fx + rely * fy;
+        if (along < 0 || along > look) continue;
+        const side = relx * -fy + rely * fx;
+        if (Math.abs(side) > DODGE_WIDE) continue;
+        this.dodge(p, c, fx, fy, side);
+      }
+    }
+  }
+
+  private dodge(p: Ped, c: Car, fx: number, fy: number, side: number): void {
+    // out the near way first, and the other way if that is a wall
+    const first = side >= 0 ? 1 : -1;
+    for (const sgn of [first, -first]) {
+      const tx = p.x + -fy * sgn * DODGE_CLEAR, ty = p.y + fx * sgn * DODGE_CLEAR;
+      const path = this.pf.walkPath(p.x, p.y, tx, ty);
+      if (!path) continue;
+      p.path = path; p.pathIdx = 0;
+      p.state = "flee";
+      p.fleeFrom = { x: c.x, y: c.y };
+      p.speed = DODGE_SPEED;
+      p.thinkT = 1.4;          // long enough to finish the step before rethinking
+      p.dodgeT = DODGE_COOLDOWN;
+      return;
+    }
+    // nowhere to go sideways: at least stop walking further into it
+    p.dodgeT = DODGE_COOLDOWN;
+  }
+
   // a car driven at speed runs down whoever is under its nose
   private runDownPeds(c: Car): void {
     if (c.speed < 2.5) return;
@@ -1242,6 +1316,7 @@ export class World {
     if (this.popTimer <= 0) { this.popTimer = 1.2; this.populate(); }
 
     this.updateMission(dt, viewRadius);
+    this.dodgeTraffic(dt);
     for (const p of this.peds) this.updatePed(p, dt);
     for (const t of this.trains) this.updateTrain(t, dt);
     for (const c of this.cars) this.updateCar(c, dt);
@@ -1260,8 +1335,23 @@ export class World {
       if (c.fuse <= 0) { c.fuse = 0; this.destroyCar(c, c.chainFrom ?? null); }
     }
     for (const t of this.trains) if (t.flash) t.flash = Math.max(0, t.flash - dt);
-    for (const pg of this.pings) pg.life -= dt;
-    this.pings = this.pings.filter((pg) => pg.life > 0);
+    for (const pg of this.pings) {
+      pg.age += dt;
+      // still on the way if anyone ordered there has a path left to walk, or
+      // the car they are riding in still has one to drive
+      let waiting = false;
+      for (const id of pg.movers) {
+        const a = this.agents.find((q) => q.id === id);
+        if (a && a.hp > 0 && a.path !== null) { waiting = true; break; }
+      }
+      if (!waiting && pg.carId !== null) {
+        const c = this.cars.find((q) => q.id === pg.carId);
+        if (c && c.state !== "wreck" && c.path !== null && c.path.length > 0) waiting = true;
+      }
+      const hold = pg.age < PING_MIN || (waiting && pg.age < PING_MAX);
+      pg.fade = hold ? 1 : Math.max(0, pg.fade - dt / PING_FADE);
+    }
+    this.pings = this.pings.filter((pg) => pg.fade > 0);
     for (const pt of this.particles) {
       pt.x += pt.vx * dt; pt.y += pt.vy * dt;
       pt.vx *= pt.drag; pt.vy *= pt.drag;

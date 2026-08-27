@@ -2,7 +2,7 @@
 // blocks correctly occlude people and cars behind them. Also draws the static
 // street furniture (fences, doors, pit rails) and the elevated skytrain.
 
-import { City, D_S, D_W, Deco, Fitting, idx, inGrid, isRoad, MetroRamp, PLATFORM_LONG, PLATFORM_WIDE, Prop, StairRun, surfaceUnder, T_BUILDING, T_GROUND, T_ISLAND, T_PARK, T_PIT, T_ROAD, T_SIDEWALK, T_WALL, TRACK_DROP, trackCentre, TRAIN_LEVEL } from "../city/citygen";
+import { City, D_S, D_W, Deco, Fitting, GARAGE_LEVEL, idx, inGrid, isRoad, MetroRamp, PLATFORM_LONG, PLATFORM_WIDE, Prop, StairRun, surfaceUnder, T_BUILDING, T_GROUND, T_ISLAND, T_PARK, T_PIT, T_ROAD, T_SIDEWALK, T_WALL, TRACK_DROP, trackCentre, TRAIN_LEVEL } from "../city/citygen";
 import { GRID, STORY_H, TILE_H, TILE_W, isNight, isRain, isoX, isoY } from "../engine/util";
 import { PeopleAtlas, FW, FH } from "../sprites/people";
 import { BENCH_H, BENCH_W, STALL_H, STALL_W, TREE_H, TREE_W } from "../sprites/props";
@@ -58,7 +58,8 @@ interface RampPart {
   x: number; y: number;
   dx: number; dy: number;      // the way down
   zNear: number; zFar: number; // storeys, at the near and far edge of the tile
-  portal: boolean;
+  portal: boolean;             // the tile the run goes under the building at
+  inside: boolean;             // past that, and only ever seen from below
 }
 
 interface FenceEdge {
@@ -86,6 +87,7 @@ export class Renderer {
   private platforms: PlatTile[] = [];
   rampParts: RampPart[] = [];      // exposed so tests can find the trenches
   private trench = new Set<number>();   // ramp tiles that are open to the sky
+  private rampBelow = false;            // the plane is under the street this frame
   // the cut plane in force this frame, for pieces drawn away from the block pass
   private secOn = false;
   private secAt = 0;
@@ -189,17 +191,22 @@ export class Renderer {
   // that tile gets the portal and the rest of the run is inside, out of sight.
   private buildGarageRamps(): void {
     for (const r of this.city.garageRamps) {
+      let under = false;
       for (let k = 1; k < r.steps.length; k++) {
         const a = r.steps[k - 1], b = r.steps[k];
         const t = this.city.tiles[idx(b.x, b.y)];
         const solid = t === T_WALL || t === T_BUILDING;
+        // The run carries on under the building after the portal. Those tiles
+        // are behind a wall from the street, but at the plane that shows the
+        // garage they are the part that reaches the floor, and leaving them
+        // out stopped the ramp a tile short of it.
         this.rampParts.push({
           x: b.x, y: b.y,
           dx: Math.sign(b.x - a.x), dy: Math.sign(b.y - a.y),
-          zNear: a.z, zFar: b.z, portal: solid,
+          zNear: a.z, zFar: b.z, portal: solid && !under, inside: under,
         });
         if (!solid) this.trench.add(idx(b.x, b.y));
-        if (solid) break;
+        if (solid) under = true;
       }
     }
   }
@@ -463,13 +470,21 @@ export class Renderer {
     // Each tile of a garage ramp sits in its own bucket, so a car part-way down
     // the trench is drawn between the segment it is on and the one in front of
     // it. Drawing the whole ramp at one depth would paint over the car.
+    const rampBelow = sectioned && section < -0.01;
+    this.rampBelow = rampBelow;
     for (const rp of this.rampParts) {
       if (rp.x < x0 - 1 || rp.x > x1 + 1 || rp.y < y0 - 1 || rp.y > y1 + 1) continue;
-      if (!shown(0)) continue;
+      // A ramp belongs to the garage as much as to the street. At the plane
+      // that shows the garage floor it is the only thing saying how a car got
+      // in, so it is drawn there too - and drawn whole, since there is no
+      // pavement left in front of it to hide behind.
+      if (!shown(0) && !(rampBelow && section >= GARAGE_LEVEL - 0.01)) continue;
+      if (rp.inside && !rampBelow) continue;             // behind the wall from up here
       // A portal belongs to the wall it is cut into. Once the plane has sliced
-      // that wall down to a kerb there is no wall left to hang it on.
-      if (rp.portal && sectioned && section < 1) continue;
-      push({ s: rp.x + rp.y, pri: rp.portal ? 1 : 0, kind: "gramp",
+      // that wall down to a kerb there is no wall left to hang it on; below the
+      // street there is no wall at all and the whole run draws as trench.
+      if (rp.portal && sectioned && section >= 0 && section < 1) continue;
+      push({ s: rp.x + rp.y, pri: rp.portal && !rampBelow ? 1 : 0, kind: "gramp",
              x: rp.x + 0.5, y: rp.y + 0.5, gramp: rp });
     }
     for (const l of this.city.lamps) {
@@ -949,15 +964,17 @@ export class Renderer {
 
     // ---- tap-destination markers ----
     for (const pg of world.pings) {
-      const t = 1 - pg.life / pg.maxLife;      // 0 fresh -> 1 gone
-      const fade = 1 - t;
       if (!shown(pg.z)) continue;
+      const fade = pg.fade;
       const mx = SX(pg.x, pg.y), my = SY(pg.x, pg.y) - pg.z * STORY_H * z;
       const col = pg.ok ? "79,220,106" : "224,64,64";
       const rx = (TILE_W / 2) * z, ry = (TILE_H / 2) * z;
-      // expanding shockwave ring
+      // The shockwave repeats on its own clock for as long as the marker is
+      // held, so a destination somebody is still walking to keeps reading as
+      // live instead of freezing into a decal.
+      const t = (pg.age % 1.1) / 1.1;          // 0 fresh -> 1 gone
       const grow = 0.35 + t * 1.5;
-      g.strokeStyle = `rgba(${col},${0.8 * fade})`;
+      g.strokeStyle = `rgba(${col},${0.8 * fade * (1 - t)})`;
       g.lineWidth = 2.5;
       g.beginPath();
       g.ellipse(mx, my, rx * grow, ry * grow, 0, 0, Math.PI * 2);
@@ -1303,7 +1320,7 @@ export class Renderer {
       g.closePath(); g.fill();
     };
 
-    if (r.portal) {
+    if (r.portal && !this.rampBelow) {
       // Only the face the ramp enters through is worth drawing, and only when
       // it is turned towards the camera - the other two are behind the block.
       if (r.dx > 0 || r.dy > 0) return;
@@ -1349,6 +1366,27 @@ export class Renderer {
       return;
     }
 
+    const nl0 = P(-0.5, -HALF, r.zNear), nr0 = P(-0.5, HALF, r.zNear);
+    const fl0 = P(0.5, -HALF, r.zFar), fr0 = P(0.5, HALF, r.zFar);
+    if (this.rampBelow) {
+      // Seen from the garage there is no street left to cut into and nothing
+      // in front to hide behind: the ramp is a deck on skirts, running down
+      // out of the ceiling to the floor it serves.
+      for (const v of [-HALF, HALF]) {
+        quad(P(-0.5, v, r.zNear), P(0.5, v, r.zFar), P(0.5, v, GARAGE_LEVEL), P(-0.5, v, GARAGE_LEVEL),
+             art.night ? "#191c22" : "#282c33");
+      }
+      quad(nl0, nr0, fr0, fl0, art.night ? "#2b2f36" : "#464b53");
+      g.strokeStyle = art.night ? "rgba(190,170,90,0.4)" : "rgba(228,208,110,0.5)";
+      g.lineWidth = Math.max(1, 0.8 * z);
+      for (let k = 0; k < 2; k++) {
+        const u = -0.3 + k * 0.42;
+        const h = r.zNear + (r.zFar - r.zNear) * (u + 0.5);
+        const a2 = P(u, -HALF * 0.7, h), b2 = P(u + 0.14, 0, h), c2 = P(u, HALF * 0.7, h);
+        g.beginPath(); g.moveTo(a2[0], a2[1]); g.lineTo(b2[0], b2[1]); g.lineTo(c2[0], c2[1]); g.stroke();
+      }
+      return;
+    }
     // The trench. A hole in the ground shows only what fits inside its own
     // opening: a sight line grazing the near rim is the lowest thing the eye
     // can reach, so everything the deck and walls project below that rim is
@@ -1371,9 +1409,7 @@ export class Renderer {
     }
     quad(P(-0.5, -HALF, 0), P(-0.5, HALF, 0), P(-0.5, HALF, r.zNear), P(-0.5, -HALF, r.zNear),
          art.night ? "#20242b" : "#31353d");
-    const nl = P(-0.5, -HALF, r.zNear), nr = P(-0.5, HALF, r.zNear);
-    const fl = P(0.5, -HALF, r.zFar), fr = P(0.5, HALF, r.zFar);
-    quad(nl, nr, fr, fl, art.night ? "#2b2f36" : "#464b53");
+    quad(nl0, nr0, fr0, fl0, art.night ? "#2b2f36" : "#464b53");
     // it gets darker the further under the street it goes
     for (let k = 0; k < 3; k++) {
       const u0 = -0.5 + k / 3, u1 = -0.5 + (k + 1) / 3;
