@@ -130,7 +130,7 @@ const SQUAD_ROAM = 4;       // ...and how far they drift from the team's patch
 const DODGE_MIN_SPEED = 2.2;   // slower than this and it is not a threat
 const DODGE_LOOK = 0.85;       // seconds of the car's travel they look ahead
 const DODGE_LOOK_MAX = 11;     // tiles, however fast it is going
-const DODGE_WIDE = 1.5;        // tiles either side of its line that count as in the way
+const DODGE_WIDE = 0.85;       // tiles either side of its line - runDownPeds kills at 0.6
 const DODGE_CLEAR = 2.6;       // tiles they try to put between themselves and it
 const DODGE_SPEED = 4.6;       // a sprint, not a jog
 const DODGE_COOLDOWN = 1.2;    // seconds before they will jump again
@@ -955,6 +955,13 @@ export class World {
                         life: 0.12, maxLife: 0.12, color: def.color, w: 2 });
       for (const p of this.peds) {
         if (p === shooter || p.state === "dead" || p.carId !== null) continue;
+        // The beam passes through its own side. Every other weapon fires a
+        // projectile, and those have always skipped the shooter's team; the
+        // laser was checking only the shooter himself, so a squad standing in
+        // a line had one agent cutting down the other three.
+        if (p.team === shooter.team) continue;
+        if (shooter.team === "cop" && p.team === "civ") continue;
+        if (shooter.team === "enemy" && p.team === "cop") continue;
         if (this.pointSegDist(p.x, p.y, shooter.x, shooter.y, ex, ey) < 0.5
             && Math.abs(p.z - this.zAlong(shooter, p.x, p.y, ex, ey, ez)) < 0.8) {
           this.damagePed(p, def.damage, shooter);
@@ -1163,16 +1170,24 @@ export class World {
       }
     }
     for (const c of this.cars) {
-      if (c.state === "wreck" || c.speed < DODGE_MIN_SPEED) continue;
+      // Only the squad's own car. Traffic yields to anyone in front of it, so
+      // an NPC car is never actually about to hit anybody - and having the
+      // pavement scatter every time a taxi went past was the whole complaint.
+      if (c.state !== "player" || c.speed < DODGE_MIN_SPEED) continue;
       const fx = Math.cos(c.angle), fy = Math.sin(c.angle);
       // the faster it comes, the earlier they see it
       const look = Math.min(DODGE_LOOK_MAX, 2 + c.speed * DODGE_LOOK);
       for (const p of this.peds) {
         if (p.state === "dead" || p.carId !== null || p.team === "player") continue;
         if (p.dodgeT > 0 || Math.abs(p.z - c.z) > 0.6) continue;
+        // Standing in the road is what makes it their problem. Someone on the
+        // pavement is not about to be hit, however close the car passes.
+        if (!isRoad(this.city, p.x | 0, p.y | 0)) continue;
         const relx = p.x - c.x, rely = p.y - c.y;
         const along = relx * fx + rely * fy;
         if (along < 0 || along > look) continue;
+        // ...and only if the car is coming at them rather than past them: the
+        // corridor is barely wider than the one it actually runs people down in
         const side = relx * -fy + rely * fx;
         if (Math.abs(side) > DODGE_WIDE) continue;
         this.dodge(p, c, fx, fy, side);

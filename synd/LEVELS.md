@@ -459,6 +459,19 @@ took the slab over its head away: -2 for the first line, -3 for the second.
 Clamp it to the slider's own range and the tap can never put the plane
 somewhere the slider cannot get back from.
 
+## Friendly fire
+
+Every weapon but one fires a projectile, and projectiles have always skipped
+the shooter's own team. The laser is hitscan -- it walks a beam out to its
+range and damages everyone it passes through -- and it was checking only
+whether a ped *was* the shooter, not whose side they were on. A squad strung
+out in a line had one agent cutting down the other three: measured at full
+health each, the three behind the muzzle went to nought. They take nothing now,
+and the target at the far end still dies.
+
+Gauss is not the same case and is left alone: it is a blast, and a blast that
+spared your own side would be a different weapon.
+
 ## Who runs and who does not
 
 Police never flee. Gunfire and deaths already only alerted civilians, but the
@@ -492,9 +505,24 @@ if that way is a wall they try the other.
 The look-ahead scales with the car's speed, so the warning is a fixed amount of
 time rather than a fixed distance. Driving a car at speed 9 down a line of
 twelve people standing on its route used to kill six of them; it now kills one
--- the one already under the bumper when the car pulls away, who never had a
-warning to get. Running people down is still perfectly possible, which is the
-point: a pedestrian gets a chance, not immunity.
+or two -- the ones already under the bumper when the car pulls away, who never
+had a warning to get. Running people down is still perfectly possible, which is
+the point: a pedestrian gets a chance, not immunity.
+
+Three conditions narrow it to people who are genuinely about to be hit. It is
+the squad's own car only -- traffic yields to anyone in front of it, so an NPC
+car is never actually about to hit anybody, and having the pavement scatter
+whenever a taxi went past was the first version's real fault. They have to be
+standing in the carriageway: someone on the kerb is not about to be hit however
+close the car passes. And the corridor is 0.85 tiles either side of the car's
+line rather than 1.5 -- barely wider than the 0.6 it actually runs people down
+in. Ten of ten bystanders on the pavement used to jump for a car going past;
+none now does so while off the road.
+
+Telling a dodge from an ordinary panic, in a test or in the code, is `dodgeT`:
+the dodge sets it, `startFlee` leaves it at zero. Worth knowing, because a
+death in the street sets everyone within ten tiles running, and one of those
+can quite properly end up in the road and dodge for real.
 
 ## Drawing a hole in the ground
 
