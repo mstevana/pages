@@ -124,13 +124,14 @@ export function showArmory(save: SaveData, onDone: () => void): void {
       const cells = [];
       for (let i = 0; i < 8; i++) {
         const it = a.inv[i];
-        if (!it) { cells.push(`<div class="arm-slot empty"><img src="${icons.gun}" style="visibility:hidden"><span class="arm-bar"></span></div>`); continue; }
+        if (!it) { cells.push(`<div class="arm-slot empty"><img src="${icons.gun}" style="visibility:hidden"><span class="arm-name">&nbsp;</span><span class="arm-bar"></span></div>`); continue; }
         const def = ITEMS[it.type];
         const frac = Math.max(0, Math.min(1, it.charge / def.charge));
         const on = pick && pick.where === "inv" && pick.idx === i ? "on" : "";
         cells.push(
           `<div class="arm-slot pickinv ${on}" data-i="${i}" title="${def.name}">
              <img src="${icons[it.type]}" alt="${def.name}">
+             <span class="arm-name">${def.short}</span>
              <span class="arm-bar"><i style="width:${(frac * 100).toFixed(0)}%;background:${frac > 0.25 ? def.color : "#e04040"}"></i></span>
            </div>`
         );
@@ -178,10 +179,16 @@ export function showArmory(save: SaveData, onDone: () => void): void {
         <button id="done">Back</button>
       </div>
       <div class="arm-tabs">${tabs}</div>
-      <div class="arm-sec">LOADOUT &middot; ${a.name}</div>
-      ${slots}
-      <div class="arm-sec">MARKET</div>
-      <div class="arm-market">${market}</div>
+      <div class="arm-cols">
+        <div class="arm-col">
+          <div class="arm-sec">LOADOUT &middot; ${a.name}</div>
+          ${slots}
+        </div>
+        <div class="arm-col">
+          <div class="arm-sec">MARKET</div>
+          <div class="arm-market">${market}</div>
+        </div>
+      </div>
       <div class="arm-actbar">${bar}</div>
     `);
     s.classList.add("armory");

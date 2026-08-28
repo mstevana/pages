@@ -586,6 +586,23 @@ shapes are laid out from `RUN` rather than written out.
 Not built yet: the two concourses do not connect to each other where they
 cross. Changing lines means going up to the street and back down.
 
+## The armory, in two columns
+
+The loadout and the market used to be stacked as two rows across the top of
+the screen, which left the bottom two thirds empty and squeezed nine market
+cards into one strip. They sit side by side now, each column filling the
+height between the agent tabs and the action bar: eight loadout slots two
+across, nine market cards three across. Every cell roughly doubled -- 45x31 to
+133x65 for a slot, 90x40 to 123x87 for a card -- which is what buys room for
+the item's name under the icon in the loadout, where before there was only an
+icon and a charge bar.
+
+The action bar stays pinned to the bottom by `margin-top:auto` and is still
+where every purchase, reload and sale happens; the columns are the thing that
+grows, so the buttons never move as the grid changes. Both columns keep a
+`min-height` on their cells so the three test sizes -- 667x375, 850x390 and
+1024x460 -- all still fit without scrolling.
+
 ## Signage
 
 Four pools, each four times the size it was: 32 video wall designs across

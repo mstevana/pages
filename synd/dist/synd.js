@@ -21,8 +21,9 @@
       <button id="launch">Begin Mission</button>
     </div>
   `);ot(r,"#launch",s),ot(r,"#armory",o)}function Ji(h,e){ct();let t=h.agents.findIndex(a=>a.alive);t<0&&(t=0);let n=null,s=["gun","uzi","shotgun","minigun","laser","gauss","shield","medkit","persuadertron"],o=1200,i=ci(),c=()=>{ct();let a=h.agents[t];n&&n.where==="inv"&&(!a.alive||n.idx>=a.inv.length)&&(n=null);let r=h.agents.map((u,x)=>`<button class="agent-tab ${x===t?"":"ghost"}" data-i="${x}">${u.name}${u.alive?"":" &dagger;"}</button>`).join(""),d="";if(!a.alive)d=`<div class="arm-sec">AGENT DECEASED</div>
-        <button id="hire" class="${h.credits>=o?"":"ghost"}">HIRE REPLACEMENT &middot; ${o}cr</button>`;else{let u=[];for(let x=0;x<8;x++){let m=a.inv[x];if(!m){u.push(`<div class="arm-slot empty"><img src="${i.gun}" style="visibility:hidden"><span class="arm-bar"></span></div>`);continue}let v=be[m.type],I=Math.max(0,Math.min(1,m.charge/v.charge)),y=n&&n.where==="inv"&&n.idx===x?"on":"";u.push(`<div class="arm-slot pickinv ${y}" data-i="${x}" title="${v.name}">
+        <button id="hire" class="${h.credits>=o?"":"ghost"}">HIRE REPLACEMENT &middot; ${o}cr</button>`;else{let u=[];for(let x=0;x<8;x++){let m=a.inv[x];if(!m){u.push(`<div class="arm-slot empty"><img src="${i.gun}" style="visibility:hidden"><span class="arm-name">&nbsp;</span><span class="arm-bar"></span></div>`);continue}let v=be[m.type],I=Math.max(0,Math.min(1,m.charge/v.charge)),y=n&&n.where==="inv"&&n.idx===x?"on":"";u.push(`<div class="arm-slot pickinv ${y}" data-i="${x}" title="${v.name}">
              <img src="${i[m.type]}" alt="${v.name}">
+             <span class="arm-name">${v.short}</span>
              <span class="arm-bar"><i style="width:${(I*100).toFixed(0)}%;background:${I>.25?v.color:"#e04040"}"></i></span>
            </div>`)}d=`<div class="arm-slots">${u.join("")}</div>`}let b=s.map((u,x)=>{let m=n&&n.where==="shop"&&n.idx===x?"on":"",v=h.credits>=be[u].price;return`<div class="arm-card pickshop ${m} ${v?"afford":"poor"}" data-i="${x}" data-t="${u}" title="${be[u].name}">
                 <img src="${i[u]}" alt="${be[u].name}">
@@ -39,10 +40,16 @@
         <button id="done">Back</button>
       </div>
       <div class="arm-tabs">${r}</div>
-      <div class="arm-sec">LOADOUT &middot; ${a.name}</div>
-      ${d}
-      <div class="arm-sec">MARKET</div>
-      <div class="arm-market">${b}</div>
+      <div class="arm-cols">
+        <div class="arm-col">
+          <div class="arm-sec">LOADOUT &middot; ${a.name}</div>
+          ${d}
+        </div>
+        <div class="arm-col">
+          <div class="arm-sec">MARKET</div>
+          <div class="arm-market">${b}</div>
+        </div>
+      </div>
       <div class="arm-actbar">${f}</div>
     `);S.classList.add("armory"),S.querySelectorAll(".agent-tab").forEach(u=>u.addEventListener("click",()=>{t=Number(u.dataset.i),n=null,c()})),S.querySelectorAll(".arm-slot.pickinv").forEach(u=>u.addEventListener("click",()=>{n={where:"inv",idx:Number(u.dataset.i)},c()})),S.querySelectorAll(".arm-card.pickshop").forEach(u=>u.addEventListener("click",()=>{let x=u;n={where:"shop",idx:Number(x.dataset.i),type:x.dataset.t},c()})),ot(S,"#act-sell",()=>{let u=h.agents[t];if(!n||n.where!=="inv"||!u.alive||n.idx>=u.inv.length)return;let[x]=u.inv.splice(n.idx,1);h.credits+=qn(x),n=null,c()}),ot(S,"#act-rld",()=>{let u=h.agents[t];if(!n||n.where!=="inv"||!u.alive||n.idx>=u.inv.length)return;let x=u.inv[n.idx],m=Zn(x);m<=0||h.credits<m||(h.credits-=m,x.charge=be[x.type].charge,c())}),ot(S,"#act-buy",()=>{let u=h.agents[t];if(!n||n.where!=="shop"||!u.alive)return;let x=s[n.idx];u.inv.length>=8||h.credits<be[x].price||(h.credits-=be[x].price,u.inv.push(Rt(x)),c())}),ot(S,"#hire",()=>{if(h.credits<o)return;h.credits-=o;let u=h.agents[t];u.alive=!0,u.hp=100,u.inv=[Rt("gun")],u.name=Jn(h.agents.map(x=>x.name)),c()}),ot(S,"#done",e)};c()}function zi(h,e,t){ct();let n=Kt(`
     <h2 style="color:${e.success?"#4fdc6a":"#e04040"}">
