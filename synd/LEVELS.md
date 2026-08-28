@@ -469,8 +469,23 @@ out in a line had one agent cutting down the other three: measured at full
 health each, the three behind the muzzle went to nought. They take nothing now,
 and the target at the far end still dies.
 
+The other path is through cars, and it was every weapon rather than one. A
+round is stopped by the first thing it touches, and the ped loop skips anyone
+riding, so a shot aimed past the car the rest of the squad was in hit the car
+instead - and wrecking it killed all three inside. Firing a pistol past the
+squad car used to leave the car on 24 and everyone in it on 22; an uzi, a
+shotgun, a minigun, a laser or a gauss round wrecked it outright and killed
+them all. A shot now skips a car with one of the shooter's own side aboard.
+
+The rule is *aboard*, not *owned*: an empty car is fair game whoever it belongs
+to - blowing them up is half the point of them, and the chain that runs down a
+row of parked cars depends on it - and so is a car with a rival crew in it. All
+three still go up.
+
 Gauss is not the same case and is left alone: it is a blast, and a blast that
-spared your own side would be a different weapon.
+spared your own side would be a different weapon. It is why a gauss round fired
+past the squad car still leaves the riders hurt - the slug passes the car and
+detonates beyond it, and the blast reaches back.
 
 ## Who runs and who does not
 

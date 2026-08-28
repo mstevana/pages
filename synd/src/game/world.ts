@@ -968,6 +968,7 @@ export class World {
         }
       }
       for (const c of this.cars) {
+        if (this.ownSideAboard(c, shooter.team)) continue;
         if (this.pointSegDist(c.x, c.y, shooter.x, shooter.y, ex, ey) < 0.9) this.damageCar(c, def.damage, shooter);
       }
       return;
@@ -1238,6 +1239,20 @@ export class World {
         this.fx(p.x, p.y, Math.cos(a) * s, Math.sin(a) * s, 0.5, "#a01020", 1, "blood");
       }
     }
+  }
+
+  // A shot never damages a car with one of the shooter's own side aboard.
+  // Rounds are stopped by the first thing they touch, and the ped loop skips
+  // anyone riding, so without this an agent on foot firing at something past
+  // the squad car wrecked it and killed everyone in it. An empty car is fair
+  // game whoever owns it - blowing one up is half the point of them.
+  private ownSideAboard(c: Car, team: Team | null): boolean {
+    if (team === null || c.occupants.length === 0) return false;
+    for (const oid of c.occupants) {
+      const rider = this.peds.find((q) => q.id === oid);
+      if (rider && rider.team === team) return true;
+    }
+    return false;
   }
 
   damageCar(c: Car, dmg: number, from: Ped | null): void {
@@ -2105,6 +2120,7 @@ export class World {
         // hit cars
         for (const car of this.cars) {
           if (car.state === "wreck") continue;
+          if (this.ownSideAboard(car, pr.team)) continue;
           if (dist2(car.x, car.y, pr.x, pr.y) < 0.8 && Math.abs(pr.z) < 0.8) {
             if (pr.type === "gauss") this.explode(pr.x, pr.y, this.pedByTeamNear(pr.team, pr.x, pr.y));
             this.damageCar(car, pr.dmg, null);
