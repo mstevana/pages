@@ -794,10 +794,20 @@ A van's cargo box is now lofted on the body's own plan rather than extruded as
 a rectangular prism - but only where `fast` is set, which is what keeps the
 working half of the fleet looking welded.
 
-Seventeen of the twenty-four get the treatment. The other seven - the hauler,
-the transit block, the patrol wagon, the armoured SUV, the truck, the supron
-and the enforcer - are left blunt on purpose. A city where every last van is a
-teardrop has nothing for the sleek ones to be sleek against.
+The fleet is three families, not one. Thirteen concept cars take the treatment
+above. Seven working machines - the hauler, the transit block, the patrol
+wagon, the armoured SUV, the truck, the supron and the enforcer - are left
+blunt on purpose: a city where every last van is a teardrop has nothing for the
+sleek ones to be sleek against.
+
+The other four are the original Bullfrog shape, and they needed a sixth
+parameter. **`shell`** makes the dome *bodywork* rather than glazing: the same
+lofted canopy, but drawn in the body colour with a glazing line scribed round
+it at half height and a harder specular on the crown. That is the whole trick -
+the classic car is not a hull with a cabin on it, it is one moulded piece from
+sill to crown, and drawing the dome in glass is what stopped it reading that
+way. Squat, wide in plan, near-black, no wedge and no blade. Four of
+twenty-four, because the original game's streets were full of them.
 
 The wedge has to be counted in the headroom check. It raises the tail, so
 anything sitting back there sits that much higher, and a spoiler through a

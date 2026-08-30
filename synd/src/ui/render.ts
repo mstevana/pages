@@ -2222,8 +2222,28 @@ export class Renderer {
       const u = (df - cB) / Math.max(0.001, cF - cB);   // 1 at the windscreen, 0 at the back
       return w - m.fast * (cabTop - hullH) * up * (1 - u) ** 1.6;
     };
+    // On a shell the dome is bodywork rather than glazing: one moulded piece
+    // from sill to crown, which is what makes the classic Bullfrog car read as
+    // a beetle instead of a hull with a cabin on it.
     loft(Renderer.CAB_RINGS, Renderer.CAB_SEGS, cabPlan, lift + hullH, cabTop - hullH,
-         glass, night ? "#243038" : shade(m.glassTint, 0.82), cabRamp);
+         m.shell ? shade(m.body, 1.04) : glass,
+         m.shell ? shade(m.body, 1.2) : (night ? "#243038" : shade(m.glassTint, 0.82)), cabRamp);
+    if (m.shell) {
+      // a glazing line scribed round the shell where the screen would be
+      const band = cabPlan(Renderer.CAB_SEGS, 0.99)
+        .map(([df, dr]) => px(df, dr, lift + hullH + (cabTop - hullH) * 0.5 + cabRamp(df, 0.5)));
+      g.strokeStyle = night ? "rgba(120,170,200,0.5)" : shade(m.glassTint, 0.62);
+      g.lineWidth = Math.max(1, 1.1 * z);
+      g.beginPath();
+      let pen = false;
+      for (let k = 0; k <= Renderer.CAB_SEGS; k++) {
+        const q = band[k % Renderer.CAB_SEGS];
+        if (q[1] > sy - hullH * 0.2) {
+          if (pen) g.lineTo(q[0], q[1]); else { g.moveTo(q[0], q[1]); pen = true; }
+        } else pen = false;
+      }
+      g.stroke();
+    }
     // glasshouse: glazing carried down the flanks rather than a dome perched on
     // the deck, so there is a side window and a pillar to read
     if (m.glassDrop > 0) {
@@ -2240,7 +2260,9 @@ export class Renderer {
     const gl = px(cMid + cHalf * 0.3, cw * 0.2, lift + cabTop * 0.94);
     const glr = Math.max(1.2, cHalf * TILE_W * 0.26 * z);
     const spec = g.createRadialGradient(gl[0], gl[1], 0, gl[0], gl[1], glr);
-    spec.addColorStop(0, night ? "rgba(190,225,255,0.22)" : "rgba(255,255,255,0.34)");
+    spec.addColorStop(0, m.shell
+      ? (night ? "rgba(210,235,255,0.4)" : "rgba(255,255,255,0.62)")
+      : (night ? "rgba(190,225,255,0.22)" : "rgba(255,255,255,0.34)"));
     spec.addColorStop(1, "rgba(255,255,255,0)");
     g.fillStyle = spec;
     g.beginPath();
