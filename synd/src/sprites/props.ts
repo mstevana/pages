@@ -9,6 +9,20 @@ export const BENCH_W = 26, BENCH_H = 20;
 export const STALL_W = 34, STALL_H = 40;
 export const N_TREES = 12;
 
+// Props are bitmaps that get scaled up by the camera zoom (to 3.4x) at draw
+// time. Baked at their nominal pixel size they turn to blocks the moment you
+// zoom in, so they are drawn at PROP_SS times that size and handed to the
+// renderer to scale back down - which keeps the leaves smooth at every zoom.
+// The whole part is drawn in logical coordinates onto a context pre-scaled by
+// SS, so nothing inside the drawing routines has to know about it.
+export const PROP_SS = 4;
+function makeProp(w: number, h: number): { c: HTMLCanvasElement; g: CanvasRenderingContext2D } {
+  const c = makeCanvas(w * PROP_SS, h * PROP_SS);
+  const g = ctx2d(c);
+  g.scale(PROP_SS, PROP_SS);
+  return { c, g };
+}
+
 function tint(hex: string, mult: number, blue: number): string {
   const n = parseInt(hex.slice(1), 16);
   const r = Math.min(255, ((n >> 16) & 255) * mult);
@@ -161,8 +175,7 @@ function drawTree(g: CanvasRenderingContext2D, v: number, r: Rng, ambient: numbe
 export function buildTreeArt(seed: number, ambient: number, blue: number, night: boolean): HTMLCanvasElement[] {
   const out: HTMLCanvasElement[] = [];
   for (let v = 0; v < N_TREES; v++) {
-    const c = makeCanvas(TREE_W, TREE_H);
-    const g = ctx2d(c);
+    const { c, g } = makeProp(TREE_W, TREE_H);
     // soft ground shadow
     g.fillStyle = "rgba(0,0,0,0.28)";
     g.beginPath();
@@ -177,8 +190,7 @@ export function buildTreeArt(seed: number, ambient: number, blue: number, night:
 export function buildBenchArt(ambient: number, blue: number): HTMLCanvasElement[] {
   const out: HTMLCanvasElement[] = [];
   for (let o = 0; o < 2; o++) {
-    const c = makeCanvas(BENCH_W, BENCH_H);
-    const g = ctx2d(c);
+    const { c, g } = makeProp(BENCH_W, BENCH_H);
     const wood = tint("#6b4e2e", ambient, blue);
     const woodD = tint("#4a3520", ambient, blue);
     const metal = tint("#3a3f47", ambient, blue);
@@ -212,8 +224,7 @@ export function buildStallArt(ambient: number, blue: number, night: boolean): HT
     { awn: "#2f7a4a", sign: "#7dff3f", txt: "SOY" },
   ];
   for (const s of schemes) {
-    const c = makeCanvas(STALL_W, STALL_H);
-    const g = ctx2d(c);
+    const { c, g } = makeProp(STALL_W, STALL_H);
     const cx = STALL_W / 2, base = STALL_H - 2;
     g.fillStyle = "rgba(0,0,0,0.32)";
     g.beginPath(); g.ellipse(cx, base, 13, 4, 0, 0, Math.PI * 2); g.fill();

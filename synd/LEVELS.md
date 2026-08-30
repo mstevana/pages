@@ -888,3 +888,19 @@ lifted it to a luminance of 54 against a road sitting around 12.
 It is now a radial falloff squashed onto the body axis: bright under the
 car, nothing at the rim. The step across the same ground drops to 6 and the
 brightest spill to 26, so the road under a car is the road beside it, lit.
+
+## Prop resolution
+
+Trees, benches and stalls are bitmaps baked once at their nominal pixel size
+and then scaled up by the camera zoom -- to 3.4x on a hard pinch -- with the
+main context's smoothing off for the pixel-art tiles. That turned every leaf
+into a 3-4px block the moment you zoomed in.
+
+They are now drawn at PROP_SS (4x) their size onto a context pre-scaled by
+that factor, so every existing drawing routine is untouched, and handed to
+the renderer to scale back down with smoothing on for that one blit. Within
+the zoom range the sprite is only ever downscaled, never magnified, so the
+canopy stays a smooth curve at every zoom while the tiles behind it keep
+their blocks. Measured on a single canopy at full zoom, horizontal
+identical-colour runs of 3px or more -- the fingerprint of block upscaling --
+fall by about 60%, and frame time is unchanged.

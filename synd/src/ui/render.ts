@@ -1192,6 +1192,10 @@ export class Renderer {
     if (e.kind === "prop" && e.prop) {
       const sx = SX(e.x, e.y), sy = SY(e.x, e.y);
       const p = e.prop;
+      // Props are supersampled bitmaps, so drawing them means downscaling the
+      // source: turn smoothing on for that, or the downscale is as blocky as
+      // the upscale used to be. The pixel-art tiles need it off, so put it back.
+      g.imageSmoothingEnabled = true;
       if (p.kind === "tree") {
         const img = art.trees[p.variant % art.trees.length];
         g.drawImage(img, sx - (TREE_W / 2) * z, sy - (TREE_H - 2) * z, TREE_W * z, TREE_H * z);
@@ -1203,6 +1207,7 @@ export class Renderer {
         g.drawImage(img, sx - (STALL_W / 2) * z, sy - (STALL_H - 2) * z, STALL_W * z, STALL_H * z);
         if (art.night) this.glow(sx, sy - 30 * z, 14 * z, "#ff9b2f", 0.3);
       }
+      g.imageSmoothingEnabled = false;
       return;
     }
     if (e.kind === "fence" && e.fence) {
