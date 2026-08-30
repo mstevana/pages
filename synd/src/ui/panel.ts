@@ -320,6 +320,19 @@ export class Panel {
       else if (p.team === "enemy") dot(p.x, p.y, "#ff3048", 2.5);
     }
     for (const a of world.agents) if (a.hp > 0) dot(a.x, a.y, "#ffe32f", 3);
+    // the mission target, wherever he is: a ring in the vip's own colour, kept
+    // up for the whole mission rather than only while he is the thing you are
+    // walking towards
+    const tgt = world.targetPoint();
+    if (tgt) {
+      const tx2 = clamp(mx(tgt.x), r.x + 4, r.x + r.w - 4);
+      const ty2 = clamp(my(tgt.y), r.y + 4, r.y + r.h - 4);
+      g.strokeStyle = "#ff9b2f";
+      g.lineWidth = 1.5;
+      g.beginPath(); g.arc(tx2, ty2, 4.5, 0, Math.PI * 2); g.stroke();
+      g.fillStyle = "#ff9b2f";
+      g.beginPath(); g.arc(tx2, ty2, 2, 0, Math.PI * 2); g.fill();
+    }
     // objective: white dot with radar pings, clamped to the minimap edge
     const obj = world.objectivePoint();
     if (obj) {

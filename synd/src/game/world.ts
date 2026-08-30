@@ -33,6 +33,7 @@ export interface Ped {
   deadT: number;          // time since death
   thinkT: number;         // AI repath/decide timer
   fleeFrom: { x: number; y: number } | null;
+  blindT: number;         // how long a follower has been out of sight of his leader
   dodgeT: number;         // cooldown after jumping clear of a car
   dodgeSpeed: number;     // the pace to go back to afterwards, 0 when not dodging
   homeX: number;          // the patch this one patrols, -1 for none
@@ -130,6 +131,25 @@ const SQUAD_SPREAD = 2.5;   // tiles they are set down within
 const SQUAD_ROAM = 4;       // ...and how far they drift from the team's patch
 
 // The newer mission types.
+// A rescue is quiet on the way in and loud on the way out, and the way out is
+// a fight that ends: an endless stream is not difficulty, it is a treadmill
+// with no way to play it well. This many rivals are sent, and then no more.
+const RESCUE_POOL = 14;
+// The escortee used to take his chances against opposition spread over the
+// whole mission. Now that all of it lands on the way home he has to survive a
+// running fight, and at his old sixty he died in half of them - which is a
+// mission you lose rather than one you find hard. Rivals aim at agents and
+// hold fire when he is in the line; what kills him is volume of stray fire.
+const RESCUE_HP = 120;
+const RESCUE_WAVE = 9;         // seconds between them once the alarm is up
+// How long the escortee will keep walking after losing sight of the agent he
+// is following. He stops and waits rather than groping round corners.
+const FOLLOW_BLIND = 0.4;
+// ...but a man close enough to touch has not lost you, whatever the wall
+// between you says. Without this he stops dead every time you round a corner
+// two tiles ahead of him, which reads as the fault rather than the rule.
+const FOLLOW_NEAR = 4.5;
+
 const COURIER_WALK = 2.8;      // quicker than a bystander, slower than an agent
 const COURIER_GUARDS = 3;      // a fire team on the case
 const ALERT_SIGHT = 17;        // tiles at which a quarry notices the squad
@@ -183,6 +203,8 @@ export interface Mission {
   escaped: number;                     // ...and how many drove off
   held: number;                        // hold: seconds the uplink has been ours
   window: number;                      // ...seconds of transmission left
+  pool: number;                        // rivals left to send once the alarm is up
+  alarm: boolean;                      // ...and whether it has gone up yet
 }
 
 // A train on an elevated line. It runs between stations, stands for a while at
@@ -421,6 +443,7 @@ export class World {
       enemiesLeft: 0, waveT: 10, phase: 0, done: false, failed: false, failReason: "",
       score: 1, outcome: "", exit: null, alerted: false,
       marks: [], wrecked: 0, escaped: 0, held: 0, window: 0,
+      pool: 0, alarm: false,
     };
     switch (kind) {
       case "assassinate": {
@@ -435,20 +458,22 @@ export class World {
       case "persuade": {
         const p = this.farPoint(start, GRID * 0.62);
         const vip = this.spawnCiv(p.x, p.y, true);
-        vip.vip = true; vip.maxHp = vip.hp = 60;
+        vip.vip = true; vip.maxHp = vip.hp = RESCUE_HP;
         m.targetId = vip.id;
         m.zone = { x: start.x, y: start.y, r: 5 };
-        m.text = "PERSUADE the target with the Persuadertron, then escort them to the extraction zone. Rival agents will intervene.";
+        m.pool = RESCUE_POOL;
+        m.text = "PERSUADE the target with the Persuadertron, then escort them to the extraction zone. Turning them raises the alarm - expect rivals on the way back, not on the way in.";
         break;
       }
       case "escort": {
         const p = this.farPoint(start, GRID * 0.62);
         const vip = this.spawnCiv(p.x, p.y, true);
-        vip.vip = true; vip.maxHp = vip.hp = 60;
+        vip.vip = true; vip.maxHp = vip.hp = RESCUE_HP;
         m.targetId = vip.id;
         m.zone = { x: start.x, y: start.y, r: 5 };
         m.phase = 0;
-        m.text = "REACH the VIP across the city, then ESCORT them back to the insertion point. Expect heavy resistance.";
+        m.pool = RESCUE_POOL;
+        m.text = "REACH the VIP across the city, then ESCORT them back to the insertion point. Nobody knows we are coming until we have him; after that they will come for us.";
         break;
       }
       case "killall": {
@@ -563,7 +588,7 @@ export class World {
       id: nextId++, team, model: 0, x, y, z: 0, dir: 0,
       hp: 30, maxHp: 30, state: "idle", path: null, pathIdx: 0,
       speed: 2.2, animT: 0, deadT: 0, thinkT: this.rng.float(0, 2),
-      fleeFrom: null, dodgeT: 0, dodgeSpeed: 0, homeX: -1, homeY: -1, fireCd: 0, aimT: 0, aimTargetId: null, weapon: null,
+      fleeFrom: null, blindT: 0, dodgeT: 0, dodgeSpeed: 0, homeX: -1, homeY: -1, fireCd: 0, aimT: 0, aimTargetId: null, weapon: null,
       agentIdx: -1, inv: [], sel: -1, shieldOn: false, shield: 0,
       fireAt: null, dropOrder: null, pickOrder: null, giveOrder: null, carId: null, boardOrder: null,
       trainId: null, vip: false, persuaded: false, followId: null, hostileCop: false,
@@ -1591,12 +1616,24 @@ export class World {
     const vip = this.peds.find((p) => p.id === m.targetId) ?? null;
 
     if (m.kind === "persuade" || m.kind === "escort") {
-      // enemy pressure waves spawning just outside the viewport
-      m.waveT -= dt;
-      const escortActive = vip !== null && (m.kind === "escort" ? true : vip.persuaded);
-      if (m.waveT <= 0) {
-        m.waveT = Math.max(8, 20 - this.missionNo) + this.rng.float(0, 6);
-        const n = escortActive ? this.rng.int(2, 3) : 1;
+      // Nothing is sent while we are on our way in: the approach is meant to be
+      // a quiet one, and the mission is two halves rather than one long
+      // firefight. Taking the target raises the alarm, and from then a finite
+      // pool of rivals comes for us until it is spent.
+      const contact = m.kind === "escort" ? m.phase === 1 : (vip !== null && vip.persuaded);
+      if (contact && !m.alarm) {
+        m.alarm = true;
+        m.waveT = 4;
+        this.notify("ALARM RAISED - THEY ARE COMING FOR US");
+      }
+      if (m.alarm && m.pool > 0) {
+        m.waveT -= dt;
+      }
+      if (m.alarm && m.pool > 0 && m.waveT <= 0) {
+        m.waveT = Math.max(5, RESCUE_WAVE - this.missionNo * 0.4) + this.rng.float(0, 4);
+        const n = Math.min(m.pool, this.rng.int(2, 3));
+        m.pool -= n;
+        if (m.pool <= 0) this.notify("THAT IS THE LAST OF THEM");
         for (let i = 0; i < n; i++) {
           const a = this.rng.float(0, Math.PI * 2);
           const r = viewRadius + this.rng.float(2, 6);
@@ -1984,11 +2021,36 @@ export class World {
       const leader = this.peds.find((q) => q.id === p.followId && q.state !== "dead") ?? this.agents.find((a) => a.hp > 0);
       if (leader && leader.hp > 0) {
         p.followId = leader.id;
+        // He follows what he can see. Lose him round a corner and he stops
+        // where he is and waits to be come back for, rather than groping his
+        // way through the city after a man he cannot see - which is both what
+        // a frightened civilian would do and what stops him wandering into
+        // the next firefight on his own.
+        const seen = dist2(p.x, p.y, leader.x, leader.y) < FOLLOW_NEAR * FOLLOW_NEAR
+          || this.pf.losShot(p.x, p.y, leader.x, leader.y);
+        p.blindT = seen ? 0 : p.blindT + dt;
+        if (p.blindT > FOLLOW_BLIND) {
+          const wasWalking = p.path !== null;
+          p.path = null;
+          p.state = "idle";
+          if (wasWalking) this.notify("VIP HAS LOST SIGHT OF YOU - HE IS WAITING");
+          return;
+        }
         if (p.thinkT <= 0) {
           p.thinkT = 0.5;
           if (dist2(p.x, p.y, leader.x, leader.y) > 2.2 * 2.2) {
             const path = this.pf.walkPath(p.x, p.y, leader.x, leader.y);
             if (path) { p.path = path; p.pathIdx = 0; p.state = "follow"; }
+            else {
+              // in sight but the search would not reach him - walk at him
+              // directly rather than standing still, which is the old bug
+              const dx = leader.x - p.x, dy = leader.y - p.y;
+              const d = Math.max(0.001, Math.sqrt(dx * dx + dy * dy));
+              const tx = p.x + (dx / d) * 3, ty = p.y + (dy / d) * 3;
+              if (isWalkable(this.city, tx | 0, ty | 0)) {
+                p.path = [{ x: tx, y: ty }]; p.pathIdx = 0; p.state = "follow";
+              }
+            }
           }
         }
       }
@@ -2472,6 +2534,17 @@ export class World {
       };
       this.audio.objective();
     }
+  }
+
+  // Where the mission's target is standing, for as long as he is alive. This
+  // is separate from the objective marker, which points at wherever you are
+  // supposed to be going next - on the way home from a rescue those are two
+  // different places, and you want to be able to see both.
+  targetPoint(): { x: number; y: number } | null {
+    const m = this.mission;
+    if (m.done || m.failed || m.targetId === 0) return null;
+    const t = this.peds.find((p) => p.id === m.targetId);
+    return t && t.state !== "dead" ? { x: t.x, y: t.y } : null;
   }
 
   // Objective marker for the minimap / hud. Null if nothing to point at.

@@ -2343,7 +2343,12 @@ export class Renderer {
     // inside the carriage and has no business being drawn on its roof.
     if (p.trainId !== null) return;
     if (p.vip && p.state !== "dead") {
-      g.fillStyle = `rgba(255,255,255,${0.5 + 0.5 * Math.sin(time * 5)})`;
+      // amber and steady while he is stood waiting for you to come back into
+      // view: a marker that never changes makes waiting look like being stuck
+      const waiting = p.persuaded && p.blindT > 0.4;
+      g.fillStyle = waiting
+        ? "rgba(255,155,47,0.95)"
+        : `rgba(255,255,255,${0.5 + 0.5 * Math.sin(time * 5)})`;
       g.beginPath();
       g.moveTo(sx, sy - FH * s - 6 * z);
       g.lineTo(sx - 3 * z, sy - FH * s - 11 * z);

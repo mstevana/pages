@@ -507,6 +507,45 @@ crowd on the pad is capped as well: two dozen rivals standing on it is not
 difficult, it is finished. Capped at six nearby it is a sustained fight, and
 measured peaks sit at five to seven.
 
+## The rescue, in two halves
+
+ESCORT and PERSUADE are the two rescues, and they are built to be quiet on the
+way in and loud on the way out. Nothing is sent while you are crossing the
+sector: the approach is an approach. Taking the target raises the alarm, and
+from that moment a pool of fourteen rivals comes for you in twos and threes
+until it is spent, and then no more. An endless stream is not difficulty, it is
+a treadmill - there is no way to play it well, no reason to fight rather than
+run, and no moment where you have won. A finite pool has all three, and the
+player is told when the last of it has been sent.
+
+The escortee follows what he can see. Lose him round a corner and he stops
+where he stands and waits to be come back for, rather than groping through the
+city after a man he cannot see. Two things make that read as a rule instead of
+a fault: anyone within four and a half tiles has not lost you whatever the wall
+between says - otherwise he stops dead every time you round a near corner - and
+his marker turns amber and stops pulsing while he waits, so a stationary
+escortee looks like a waiting one.
+
+A follower who could not path to his leader used to stand still for good; that
+was the fault this replaced. In sight but unreachable by the search, he now
+walks straight at the leader instead.
+
+Concentrating the opposition into the second half made the escortee too
+fragile: at sixty health he died in half of the runs, which is a mission you
+lose rather than one you find hard. He carries `RESCUE_HP` now. Rivals aim at
+agents and hold their fire when he is in the line, so what kills him is the
+volume of stray fire - which means the spacing you keep is the skill the
+mission asks for. Parked on top of him through the whole fight he survives four
+runs in six; kept a few tiles ahead of him, six in six.
+
+## Two markers, not one
+
+The minimap carries the objective ping - wherever you are supposed to be going
+next - and, separately, an amber ring on the mission's target for as long as he
+is alive. On the way in those are the same place; on the way home they are not,
+and you want to see both: the zone you are making for, and the man you are
+supposed to be bringing to it.
+
 ## Botching rather than losing
 
 A mission is no longer all or nothing. `Mission.score` runs 0 to 1 and scales
