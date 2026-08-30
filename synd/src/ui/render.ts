@@ -2437,19 +2437,39 @@ export class Renderer {
                                 - 0.20 * Math.max(0, u) ** 1.5);
         return W * sa ** e * hip * (1 - m.taper * Math.max(0, u));
       };
+      // A lamp that is lit and a lamp that is off are not the same object. At
+      // night the lens is the light source and carries the reflector pip and
+      // the bloom. By day it is dark glass sunk in a panel, catching the sky
+      // across its top and a rim of housing under it: a pale disc with a white
+      // highlight in the middle of it is what reads as an eye, not a lamp.
       const lamp = (df: number, dr: number, up: number, ref: number, r: number,
-                    lens: string, bloom: string, str: number) => {
+                    onCol: string, offCol: string, bloom: string, str: number) => {
         const p = px(df, dr, up);
         if (p[1] < ref - 0.4) return;                // this end, or this flank, faces away
-        g.fillStyle = shade(m.body, 0.4);            // the recess it sits in
-        g.beginPath(); g.ellipse(p[0], p[1], r * 1.4, r * 1.1, 0, 0, Math.PI * 2); g.fill();
-        g.fillStyle = lens;
-        g.beginPath(); g.ellipse(p[0], p[1], r, r * 0.78, 0, 0, Math.PI * 2); g.fill();
-        g.fillStyle = "rgba(255,255,255,0.72)";      // reflector pip
+        const rx = r * 1.1, ry = r * 0.66;           // a lamp unit is wider than it is tall
+        g.fillStyle = shade(m.body, night ? 0.4 : 0.68);   // the recess it sits in
+        g.beginPath(); g.ellipse(p[0], p[1], rx * 1.26, ry * 1.42, 0, 0, Math.PI * 2); g.fill();
+        if (night) {
+          g.fillStyle = onCol;
+          g.beginPath(); g.ellipse(p[0], p[1], rx, ry, 0, 0, Math.PI * 2); g.fill();
+          g.fillStyle = "rgba(255,255,255,0.72)";    // reflector pip
+          g.beginPath();
+          g.ellipse(p[0] - rx * 0.27, p[1] - ry * 0.3, rx * 0.29, ry * 0.34, 0, 0, Math.PI * 2);
+          g.fill();
+          this.glow(p[0], p[1], r * 4.5, bloom, str);
+          return;
+        }
+        const gr = g.createLinearGradient(p[0], p[1] - ry, p[0], p[1] + ry);
+        gr.addColorStop(0, shade(offCol, 1.7));      // the sky, across the top of the glass
+        gr.addColorStop(0.5, shade(offCol, 0.85));
+        gr.addColorStop(1, shade(offCol, 0.5));
+        g.fillStyle = gr;
+        g.beginPath(); g.ellipse(p[0], p[1], rx, ry, 0, 0, Math.PI * 2); g.fill();
+        g.strokeStyle = shade(m.body, 1.45);         // the housing rim under it
+        g.lineWidth = Math.max(0.7, 0.35 * z);
         g.beginPath();
-        g.ellipse(p[0] - r * 0.3, p[1] - r * 0.26, r * 0.32, r * 0.26, 0, 0, Math.PI * 2);
-        g.fill();
-        this.glow(p[0], p[1], r * 4.5, bloom, str);
+        g.ellipse(p[0], p[1], rx, ry, 0, 0.12 * Math.PI, 0.88 * Math.PI);
+        g.stroke();
       };
       const nf = L * 0.88, tf = -L * 0.9;
       const nw = halfAt(nf), tw2 = halfAt(tf);
@@ -2457,17 +2477,17 @@ export class Renderer {
       const tz = lift + hullH * 0.6 + wedgeAt(tf, 0.6);
       const nRef = px(0, 0, nz)[1], tRef = px(0, 0, tz)[1];
       const r0 = Math.max(0.9, W * TILE_W * 0.16 * z);
-      const lens = night ? "#fff6d2" : "#e8ecd4";
-      const rear = night ? "#ff4a56" : "#b8303c";
+      const lensOn = "#fff6d2", lensOff = "#2b333c";     // lit filament / dark glass
+      const rearOn = "#ff4a56", rearOff = "#4a1a20";
       for (const s of [1, -1]) {
         if (m.lamps >= 2) {
-          lamp(nf, nw * s * 0.42, nz, nRef, r0 * 0.66, lens, "#fff4be", night ? 0.34 : 0.07);
-          lamp(nf, nw * s * 0.8, nz, nRef, r0 * 0.66, lens, "#fff4be", night ? 0.34 : 0.07);
-          lamp(tf, tw2 * s * 0.46, tz, tRef, r0 * 0.55, rear, "#ff3048", night ? 0.26 : 0.09);
-          lamp(tf, tw2 * s * 0.84, tz, tRef, r0 * 0.55, rear, "#ff3048", night ? 0.26 : 0.09);
+          lamp(nf, nw * s * 0.42, nz, nRef, r0 * 0.66, lensOn, lensOff, "#fff4be", 0.34);
+          lamp(nf, nw * s * 0.8, nz, nRef, r0 * 0.66, lensOn, lensOff, "#fff4be", 0.34);
+          lamp(tf, tw2 * s * 0.46, tz, tRef, r0 * 0.55, rearOn, rearOff, "#ff3048", 0.26);
+          lamp(tf, tw2 * s * 0.84, tz, tRef, r0 * 0.55, rearOn, rearOff, "#ff3048", 0.26);
         } else {
-          lamp(nf, nw * s * 0.64, nz, nRef, r0, lens, "#fff4be", night ? 0.46 : 0.1);
-          lamp(tf, tw2 * s * 0.66, tz, tRef, r0 * 0.8, rear, "#ff3048", night ? 0.34 : 0.12);
+          lamp(nf, nw * s * 0.64, nz, nRef, r0, lensOn, lensOff, "#fff4be", 0.46);
+          lamp(tf, tw2 * s * 0.66, tz, tRef, r0 * 0.8, rearOn, rearOff, "#ff3048", 0.34);
         }
       }
     }

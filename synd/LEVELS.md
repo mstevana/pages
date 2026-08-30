@@ -845,6 +845,15 @@ plan's own half-width at that point, so a lamp is always in bodywork that is
 actually there. A lamp on the end or the flank turned away from the camera is
 not drawn.
 
+A lit lamp and an unlit one are not the same object, and drawing them the
+same way is what made the daytime cars look like they had eyes: a pale disc
+with a white highlight in the middle of it is a cartoon eye, whatever it is
+meant to be. At night the lens is the light source and keeps the reflector
+pip and the bloom. By day it is dark glass -- a gradient catching the sky
+across the top, falling to near black at the bottom, with a rim of housing
+under it and no bloom at all. Measured over the two lenses of a shell, the
+daylight mean falls from 134 to 56 while the night frame is unchanged.
+
 ## Bullfrog shell detail
 
 The shell is one moulded piece, so everything that makes it read as a vehicle
