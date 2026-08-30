@@ -928,3 +928,28 @@ to travel, and the slab overhead is its roof rather than a wall in its path.
 The same fix covers subway platforms, not just garages. Measured: an agent
 firing four pistol rounds at an enemy four tiles away on the garage floor now
 lands 78 damage with the rounds holding z -1 the whole way; before, zero.
+
+## Boarding a car underground
+
+Boarding a car parked in a garage failed for three reasons, in the same
+spirit as the shooting bug:
+
+1. The tap missed it. The car hit-test compared the tap against the street
+   plane, but a garage car draws a storey up the screen, so the ground
+   projection lands ~2.6 tiles from the car - well outside the tap radius.
+   The tap is now projected to each car's own height, and a car is considered
+   only where the section is actually drawing it, by the renderer's own `shown`
+   rule, so a street car by a building is never mistaken for hidden.
+2. It could not be reached. `cmdBoardCar` routed with the flat road search,
+   which has no way down a ramp. It now uses the level-aware `climbPath` -
+   over surfaces, through the ramp - whenever the car or the agent is off the
+   street, exactly as `cmdMove` already did.
+3. It launched into a wall. On boarding, a parked car glides out to the
+   nearest street lane; for a garage car that meant sliding through the
+   bay wall. A car underground now simply becomes player-controlled where it
+   stands, so the player drives it up the ramp.
+
+Measured: an agent on the street tapping a garage car walks down the ramp and
+boards (path found, aboard in ~1.2s), the car takes the wheel in place, and
+driving it back out climbs z -1 to 0 up the ramp. Kerbside boarding is
+unchanged - all four agents still board a street car on a tap.

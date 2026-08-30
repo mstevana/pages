@@ -421,8 +421,21 @@ function pointerEnd(ev: PointerEvent): void {
     followCam = true;
     return;
   }
+  // Hit-test each car at its own height. A car in a garage draws a storey up
+  // the screen, so testing the tap against the ground plane (t) lands a couple
+  // of tiles off it and the tap never catches - the same z blind spot that
+  // stopped shots reaching the garage. Project the tap to each car's level, and
+  // only consider a car the section is actually drawing, by the renderer's own
+  // visibility rule - so a street car near a building is never mistaken for
+  // hidden, and a garage car is tappable only once the slider reveals its floor.
+  const sectioned = renderer ? sectionLevel < renderer.maxStories : false;
+  const carShown = (ez: number): boolean => ez < -0.01
+    ? sectioned && ez <= sectionLevel + 0.01 && sectionLevel < ez + 1
+    : !sectioned || ez <= sectionLevel + 0.01;
   for (const c of w.cars) {
-    const dd = (c.x - t.x) ** 2 + (c.y - t.y) ** 2;
+    if (!carShown(c.z)) continue;
+    const q = pointAtHeight(p.x, p.y, c.z);
+    const dd = (c.x - q.x) ** 2 + (c.y - q.y) ** 2;
     if (dd < 1.6 * 1.6 && (c.state === "parked" || (c.state === "player" && lead && lead.carId === null))) {
       w.cmdBoardCar(w.uiSelected, c.id);
       followCam = true;

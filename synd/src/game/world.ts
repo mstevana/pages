@@ -861,11 +861,21 @@ export class World {
       this.flashVehicle(car, false);
       return;
     }
+    // A car in a garage sits a storey down, reached by the ramp; the flat road
+    // search cannot get to it, so route to it the same way cmdMove routes an
+    // agent to a lower level - over surfaces, through the ramp - whenever the
+    // car or the agent is off the street.
+    const carSurf = surfaceNear(this.city, car.x | 0, car.y | 0, car.z, 0.01);
     let ordered = false;
     for (const a of this.selectedAgents(sel)) {
       if (a.carId !== null) continue;
       a.boardOrder = carId; a.dropOrder = null; a.pickOrder = null; a.giveOrder = null;
-      const p = this.pf.walkPath(a.x, a.y, car.x, car.y);
+      const here = this.surfaceOf(a);
+      const offStreet = car.z < -0.01 || a.z !== 0
+        || (carSurf >= 0 && this.city.levels.z[carSurf] !== 0);
+      const p = offStreet && carSurf >= 0
+        ? this.pf.climbPath(a.x, a.y, here, car.x, car.y, carSurf)
+        : this.pf.walkPath(a.x, a.y, car.x, car.y);
       if (p) { a.path = p; a.pathIdx = 0; a.state = "walk"; ordered = true; }
     }
     this.flashVehicle(car, ordered);
@@ -1911,7 +1921,12 @@ export class World {
         p.carId = car.id;
         p.path = null;
         this.audio.carStart();
-        if (car.state === "parked" || car.state === "docking") {
+        if (car.z < -0.01 && (car.state === "parked" || car.state === "docking")) {
+          // A car in a garage drives out up the ramp under the player's hand;
+          // gliding it straight to a street lane would send it through the
+          // wall. Just take the wheel where it stands.
+          car.state = "player";
+        } else if (car.state === "parked" || car.state === "docking") {
           // pull out of the bay and settle into the nearest lane
           const lane = this.pf.nearestRoad(car.x | 0, car.y | 0, 6);
           if (lane) {
