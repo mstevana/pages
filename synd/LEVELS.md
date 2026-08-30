@@ -828,6 +828,20 @@ kinds, so the count you can observe is bounded by that, not by the pool.
 Shopfronts are the exception -- there are eighteen hundred of them, and all
 96 designs show up.
 
+## Fleet size
+
+The fleet is 28 chassis, not 24. It grew rather than rotated: adding the
+four Bullfrog shells originally cost four concept cars -- Thorton Hatch,
+Alvarado, Mizutani and Chevalier -- to hold the count at 24, and those four
+are back. A model costs nothing but a line of numbers, so a new family is a
+reason to make the line-up longer, never to retire something that already
+reads well on the street.
+
+The spawner picks over `CAR_MODELS.length` rather than a hardcoded 23. That
+constant is the reason growing the fleet used to be a two-file change: with
+28 models and the old range, the last four would have been drawn by the
+gallery and never once by the city.
+
 ## Night underglow
 
 Every car casts a pool of its own accent light at night. That pool used to be

@@ -5,6 +5,7 @@ import { City, DBIT, DX, DY, GARAGE_LEVEL, idx, inGrid, isRoad, isWalkable, Kerb
 import { AudioEngine } from "../engine/audio";
 import { Rng } from "../engine/rng";
 import { GRID, Weather, clamp, dist, dist2 } from "../engine/util";
+import { CAR_MODELS } from "../sprites/cars";
 import { ITEMS, ItemStack, ItemType, copDrop, enemyDrop, newItem, weaponDps } from "./items";
 import { Pathfinder } from "./pathfind";
 import { SaveData } from "./save";
@@ -634,7 +635,7 @@ export class World {
   spawnCar(x: number, y: number, dir: number): Car {
     const car: Car = {
       id: nextId++, x, y, z: 0, angle: Math.atan2(DY[dir], DX[dir]), dir, speed: 0,
-      model: this.rng.int(0, 23), glide: null,
+      model: this.rng.int(0, CAR_MODELS.length - 1), glide: null,
       hp: CAR_HP, state: "drive", path: null, pathIdx: 0, pilotOut: false, occupants: [], waitT: 0,
     };
     this.cars.push(car);
