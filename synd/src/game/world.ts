@@ -48,6 +48,8 @@ export interface Ped {
   agentIdx: number;        // 0..3, -1 otherwise
   fireMult: number;        // × weapon cooldown (arm implants bring it under 1)
   aimMult: number;         // × reaction delay before auto-fire (eye implants)
+  stunT: number;           // knocked out this long (gas); no moving, no shooting
+  cloakOn: boolean;        // cloak field active: hostiles cannot acquire this one
   inv: ItemStack[];
   sel: number;             // selected inventory index, -1 none
   shieldOn: boolean;
@@ -289,6 +291,8 @@ export class World {
   particles: Particle[] = [];
   flashes: Flash[] = [];
   pings: Ping[] = [];   // feedback markers for tapped destinations
+  bombs: { x: number; y: number; fuse: number; owner: Ped | null }[] = [];
+  gasClouds: { x: number; y: number; r: number; t: number; maxT: number }[] = [];
   mission: Mission;
   agents: Ped[] = [];              // the (up to) 4 player agents, index-stable
   time = 0;
@@ -606,7 +610,7 @@ export class World {
       hp: 30, maxHp: 30, state: "idle", path: null, pathIdx: 0,
       speed: 2.2, animT: 0, deadT: 0, thinkT: this.rng.float(0, 2),
       fleeFrom: null, blindT: 0, dodgeT: 0, dodgeSpeed: 0, homeX: -1, homeY: -1, fireCd: 0, aimT: 0, aimTargetId: null, weapon: null,
-      fireMult: 1, aimMult: 1,
+      fireMult: 1, aimMult: 1, stunT: 0, cloakOn: false,
       agentIdx: -1, inv: [], sel: -1, shieldOn: false, shield: 0,
       fireAt: null, dropOrder: null, pickOrder: null, giveOrder: null, carId: null, boardOrder: null,
       trainId: null, vip: false, persuaded: false, followId: null, hostileCop: false,
@@ -1103,6 +1107,11 @@ export class World {
       this.audio.click();
       return;
     }
+    if (it.type === "cloak") {
+      agent.cloakOn = !agent.cloakOn && it.charge > 0;
+      this.audio.click();
+      return;
+    }
     agent.sel = invIdx;
   }
 
@@ -1116,15 +1125,26 @@ export class World {
     if (item && item.charge <= 0) return;
     if (item) item.charge--;
     shooter.fireCd = def.cooldown * shooter.fireMult;
+    shooter.cloakOn = false;                   // opening fire tears the veil
     const dx = tx - shooter.x, dy = ty - shooter.y, dz = tz - shooter.z;
     const flat = Math.max(0.001, Math.sqrt(dx * dx + dy * dy));
     const len = Math.max(0.001, Math.sqrt(dx * dx + dy * dy + dz * dz));
     const baseA = Math.atan2(dy, dx);
     const pitch = dz / len;                    // storeys gained per tile of travel
+    // a device is lobbed to the spot and left there; nothing flies downrange
+    if (def.device) {
+      const reach = Math.min(flat, def.range);
+      const bx = shooter.x + (dx / flat) * reach, by = shooter.y + (dy / flat) * reach;
+      if (def.device === "bomb") this.bombs.push({ x: bx, y: by, fuse: 4, owner: shooter });
+      else this.gasClouds.push({ x: bx, y: by, r: 3, t: 8, maxT: 8 });
+      this.audio.drop();
+      return;
+    }
     this.audio.shoot(wType);
     this.flashes.push({ x: shooter.x, y: shooter.y, life: 0.06, maxLife: 0.06, r: 10, ring: false });
-    this.alertArea(shooter.x, shooter.y, 14, shooter);
-    if (wType === "laser") {
+    // a silenced weapon is the one gun the street does not hear
+    if (!def.silent) this.alertArea(shooter.x, shooter.y, 14, shooter);
+    if (def.speed === 0) {
       // hitscan beam, pierces peds, stops at walls
       const maxR = def.range * rangeMult;
       let ex = shooter.x + (dx / len) * maxR, ey = shooter.y + (dy / len) * maxR;
@@ -1138,7 +1158,9 @@ export class World {
         if (!this.pf.losShot3(shooter.x, shooter.y, shooter.z, px, py, pz)) { ex = px; ey = py; ez = pz; break; }
       }
       this.beams.push({ x0: shooter.x, y0: shooter.y, z0: shooter.z, x1: ex, y1: ey, z1: ez,
-                        life: 0.12, maxLife: 0.12, color: def.color, w: 2 });
+                        life: 0.12, maxLife: 0.12, color: def.color, w: def.wide ? 3.5 : 2 });
+      const width = def.wide ?? 0.5;
+      const struck: Ped[] = [];
       for (const p of this.peds) {
         if (p === shooter || p.state === "dead" || p.carId !== null) continue;
         // The beam passes through its own side. Every other weapon fires a
@@ -1148,14 +1170,38 @@ export class World {
         if (p.team === shooter.team) continue;
         if (shooter.team === "cop" && p.team === "civ") continue;
         if (shooter.team === "enemy" && p.team === "cop") continue;
-        if (this.pointSegDist(p.x, p.y, shooter.x, shooter.y, ex, ey) < 0.5
+        if (this.pointSegDist(p.x, p.y, shooter.x, shooter.y, ex, ey) < width
             && Math.abs(p.z - this.zAlong(shooter, p.x, p.y, ex, ey, ez)) < 0.8) {
+          struck.push(p);
           this.damagePed(p, def.damage, shooter);
+        }
+      }
+      // lightning forks: from the first victim the bolt jumps to the nearest
+      // hostiles it has not yet touched, weakening with every arc
+      if (def.chain && struck.length > 0) {
+        let from = struck[0];
+        const hit = new Set(struck);
+        let dmg = def.damage * 0.7;
+        for (let j = 0; j < def.chain; j++) {
+          let next: Ped | null = null; let bd = 3 * 3;
+          for (const p of this.peds) {
+            if (hit.has(p) || p === shooter || p.state === "dead" || p.carId !== null) continue;
+            if (p.team === shooter.team || Math.abs(p.z - from.z) > 0.8) continue;
+            if (shooter.team === "player" && p.team === "civ") continue;   // the arc has manners
+            const d2 = dist2(p.x, p.y, from.x, from.y);
+            if (d2 < bd) { bd = d2; next = p; }
+          }
+          if (!next) break;
+          this.beams.push({ x0: from.x, y0: from.y, z0: from.z, x1: next.x, y1: next.y, z1: next.z,
+                            life: 0.14, maxLife: 0.14, color: def.color, w: 1.5 });
+          this.damagePed(next, dmg, shooter);
+          hit.add(next);
+          from = next; dmg *= 0.7;
         }
       }
       for (const c of this.cars) {
         if (this.ownSideAboard(c, shooter.team)) continue;
-        if (this.pointSegDist(c.x, c.y, shooter.x, shooter.y, ex, ey) < 0.9) this.damageCar(c, def.damage, shooter);
+        if (this.pointSegDist(c.x, c.y, shooter.x, shooter.y, ex, ey) < width + 0.4) this.damageCar(c, def.damage, shooter);
       }
       return;
     }
@@ -1614,6 +1660,21 @@ export class World {
       if (c.fuse <= 0) { c.fuse = 0; this.destroyCar(c, c.chainFrom ?? null); }
     }
     for (const t of this.trains) if (t.flash) t.flash = Math.max(0, t.flash - dt);
+    // planted charges count down and go off; gas hangs, and everyone standing
+    // in it goes down for as long as the cloud lasts plus a moment to come round
+    for (const b of this.bombs) {
+      b.fuse -= dt;
+      if (b.fuse <= 0) this.explode(b.x, b.y, b.owner && b.owner.state !== "dead" ? b.owner : null);
+    }
+    this.bombs = this.bombs.filter((b) => b.fuse > 0);
+    for (const gc of this.gasClouds) {
+      gc.t -= dt;
+      for (const p of this.peds) {
+        if (p.state === "dead" || p.carId !== null || p.z !== 0) continue;
+        if (dist2(p.x, p.y, gc.x, gc.y) < gc.r * gc.r) p.stunT = Math.max(p.stunT, Math.min(gc.t, 1.5) + 0.5);
+      }
+    }
+    this.gasClouds = this.gasClouds.filter((gc) => gc.t > 0);
     for (const pg of this.pings) {
       pg.age += dt;
       // still on the way if anyone ordered there has a path left to walk, or
@@ -1836,6 +1897,8 @@ export class World {
   private updatePed(p: Ped, dt: number): void {
     if (p.state === "dead") { p.deadT += dt; p.animT += dt; return; }
     if (p.carId !== null) return; // riding
+    // knocked out: the body stands where the gas caught it and does nothing
+    if (p.stunT > 0) { p.stunT -= dt; p.fireCd = Math.max(0, p.fireCd - dt); return; }
     p.animT += dt;
     p.fireCd = Math.max(0, p.fireCd - dt);
     p.aimT = Math.max(0, p.aimT - dt);
@@ -1971,6 +2034,12 @@ export class World {
         p.shield = belt.charge;
       }
     }
+    // the cloak burns charge the same way, and dies with it
+    if (p.cloakOn) {
+      const veil = p.inv.find((s) => s.type === "cloak");
+      if (!veil || veil.charge <= 0) p.cloakOn = false;
+      else veil.charge = Math.max(0, veil.charge - dt * 4);
+    }
     // a weapon that has run dry is swapped for the next best one in the pack
     if (p.sel >= 0 && p.sel < p.inv.length) {
       const cur = p.inv[p.sel];
@@ -2031,7 +2100,7 @@ export class World {
     }
 
     // auto-engage hostiles in range (never civilians)
-    if (!p.fireAt && weapon && wdef && wdef.weapon && weapon.charge > 0 && p.fireCd <= 0) {
+    if (!p.fireAt && weapon && wdef && wdef.weapon && wdef.auto !== false && weapon.charge > 0 && p.fireCd <= 0) {
       let best: Ped | null = null; let bd = wdef.range * wdef.range;
       for (const t of this.peds) {
         if (t.state === "dead") continue;
@@ -2143,7 +2212,7 @@ export class World {
       let best: Ped | null = null; let bd = 1e9;
       const reach = ITEMS.gun.range * NPC_RANGE_MULT;
       for (const a of this.agents) {
-        if (a.hp <= 0 || a.carId !== null) continue;
+        if (a.hp <= 0 || a.carId !== null || a.cloakOn) continue;
         const d3 = this.dist3(p.x, p.y, p.z, a.x, a.y, a.z);
         const d2 = d3 * d3;
         if (d2 >= bd) continue;
@@ -2199,7 +2268,7 @@ export class World {
     const reach = wdef.range * NPC_RANGE_MULT;
     let blocked: Ped | null = null; let bbd = 1e9;
     for (const a of this.agents) {
-      if (a.hp <= 0 || a.carId !== null) continue;
+      if (a.hp <= 0 || a.carId !== null || a.cloakOn) continue;
       const d3 = this.dist3(p.x, p.y, p.z, a.x, a.y, a.z);
       const d2 = d3 * d3;
       if (this.wardInLine(p, a.x, a.y)) {

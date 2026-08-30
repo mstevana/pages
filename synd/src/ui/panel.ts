@@ -232,10 +232,11 @@ export class Panel {
       const item = inv && i < inv.inv.length ? inv.inv[i] : null;
       const isSel = inv !== null && i === inv.sel && item !== null;
       const isShieldOn = item?.type === "shield" && inv?.shieldOn;
+      const isCloakOn = item?.type === "cloak" && inv?.cloakOn;
       g.fillStyle = isSel ? "#4a2c10" : "#101218";
       g.fillRect(r.x, r.y, r.w, r.h);
-      g.strokeStyle = isSel ? ORANGE : isShieldOn ? "#7affc8" : "#2c2f3e";
-      g.lineWidth = isSel || isShieldOn ? 2 : 1;
+      g.strokeStyle = isSel ? ORANGE : isShieldOn ? "#7affc8" : isCloakOn ? "#c8b4ff" : "#2c2f3e";
+      g.lineWidth = isSel || isShieldOn || isCloakOn ? 2 : 1;
       g.strokeRect(r.x + 0.5, r.y + 0.5, r.w - 1, r.h - 1);
       if (item) {
         const def = ITEMS[item.type];

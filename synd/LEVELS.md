@@ -1026,3 +1026,35 @@ with MK.III actuators; a manual order fires on frame 0 either way.
 
 Old saves migrate: a campaign from before the lab loads with an empty tree
 and bare agents, and every purchase writes the save immediately.
+
+## The second arsenal
+
+Each research area grew a second chain of three. Guns: SILENCED PISTOL (the
+one gun the street does not hear - firing it raises no alarm; only the body
+dropping does), LONG RIFLE (18-tile reach, kill before contact), FLAMER (a
+short cone of fire, two pellets a tick). Tech, built on the laser: PULSE
+LASER (an automatic beam, four times the laser's rate), ARC THROWER
+(lightning that forks from the victim to up to two more hostiles within
+three tiles, weakening 30% an arc - and it has manners: a player's arc never
+jumps to a civilian), PLASMA LANCE (a beam a full tile wide that catches the
+men a laser's line misses). Defense: TIME BOMB (lobbed up to five tiles,
+four-second fuse, the standard blast), GAS GRENADE (a three-tile cloud that
+knocks everyone in it out cold for its eight seconds, harming nobody and
+raising no heat), CLOAK FIELD (drains like the shield; hostiles cannot
+acquire a cloaked agent, and the veil tears the moment he fires).
+
+Mechanics grown for them, all declared on the item: `silent` skips the shot
+alert, `beam` generalises the laser path (with `wide` for the lance and
+`chain` for the arc), `device` lobs a charge to the spot instead of firing,
+and `auto: false` keeps the bombs out of an agent's own hands - devices are
+thrown on an explicit order only, and never auto-swapped to when a gun runs
+dry. Stunned bodies stand down for the cloud plus half a second; a cloaked
+agent renders as a shimmer and his slot glows violet like the shield's green.
+
+Measured, one pass over all nine: a pistol shot sends 7 of 8 bystanders
+fleeing, the silenced shot none; the rifle auto-engages at 14 tiles; the
+flamer burns three at once; pulse fires 20 beams to the laser's 5 in 3s; one
+arc bolt hurts three men; the lance catches both of a pair the laser line
+clips one of; the bomb goes off at 4.0s; the gassed dummy is stunned, unhurt,
+and back up when the cloud fades; a gunman three tiles from a cloaked agent
+lands nothing for 3s and the cloak drops on the agent's first shot.

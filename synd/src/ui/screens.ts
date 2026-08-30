@@ -112,7 +112,11 @@ export function showArmory(save: SaveData, onDone: () => void): void {
   // selects it, and the action bar carries thumb-sized buttons
   let pick: { where: "inv" | "shop"; idx: number; type?: ItemType } | null = null;
 
-  const BUY: ItemType[] = ["gun", "uzi", "shotgun", "minigun", "laser", "gauss", "shield", "medkit", "persuadertron"];
+  const BUY: ItemType[] = [
+    "gun", "silenced", "uzi", "shotgun", "rifle", "flamer", "minigun",
+    "laser", "pulse", "arc", "gauss", "lance",
+    "medkit", "shield", "bomb", "gas", "persuadertron", "cloak",
+  ];
   const HIRE_COST = 1200;
   const icons = itemIconUrls();
 
@@ -330,9 +334,9 @@ export function showResearch(save: SaveData, onDone: () => void): void {
         <button id="done">Back</button>
       </div>
       <div class="res-cols">
-        ${branch("GUNS", chain(["uzi", "shotgun", "minigun"]))}
-        ${branch("TECH WEAPONS", chain(["laser", "gauss"]))}
-        ${branch("DEFENSE", chain(["medkit", "shield", "psdr"]))}
+        ${branch("GUNS", chain(["uzi", "shotgun", "minigun"]) + `<span class="res-gap"></span>` + chain(["silenced", "rifle", "flamer"]))}
+        ${branch("TECH WEAPONS", chain(["laser", "gauss"]) + `<span class="res-gap"></span>` + chain(["pulse", "arc", "lance"]))}
+        ${branch("DEFENSE", chain(["medkit", "shield", "psdr"]) + `<span class="res-gap"></span>` + chain(["bomb", "gas", "cloakf"]))}
         ${branch("BODY IMPLANTS", impRows)}
       </div>
       <div class="arm-actbar">${bar}</div>

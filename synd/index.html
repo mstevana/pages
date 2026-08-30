@@ -116,8 +116,8 @@
   #ui .screen.armory .arm-actbar button.sell { background:#4fdc6a; border-color:#a8f0ba; }
   #ui .screen.armory .arm-actbar button.buy { background:#25e0ff; border-color:#a8eeff; }
   .arm-market {
-    display:grid; grid-template-columns: repeat(3, 1fr); grid-auto-rows: minmax(0, 1fr);
-    gap:0.8vmin; width:100%; flex:1 1 auto; min-height:0;
+    display:grid; grid-template-columns: repeat(4, 1fr); grid-auto-rows: minmax(34px, auto);
+    gap:0.8vmin; width:100%; flex:1 1 auto; min-height:0; overflow-y:auto;
   }
   .arm-card {
     border:1px solid #2c2f3e; background:#101218; border-radius:2px; min-height: 34px;
@@ -154,6 +154,7 @@
   .res-node.open:hover { border-color:#ff9b2f; }
   .res-node.on { border-color:#ff9b2f; background:#3a2410; }
   .res-link { color:#2f4b5c; font-size: clamp(7px, 1.6vmin, 12px); line-height:1.4; }
+  .res-gap { height:1.6vmin; }
   .res-imp-row { display:flex; align-items:center; gap:0.8vmin; width:100%; margin-bottom:0.8vmin; }
   .res-imp-name { flex:1; text-align:left; font-size: clamp(7px, 1.7vmin, 12px); color:#9fb2c0; letter-spacing:0.06em; }
   .res-node.mini { width:auto; padding:0.7vmin 1vmin; gap:0.7vmin; }

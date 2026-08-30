@@ -846,6 +846,40 @@ export class Renderer {
       g.fill();
     }
 
+    // ---- planted devices ----
+    for (const b of world.bombs) {
+      if (b.x < x0 || b.x > x1 || b.y < y0 || b.y > y1) continue;
+      const sx = SX(b.x, b.y), sy = SY(b.x, b.y);
+      g.fillStyle = "#2a2a30";
+      g.fillRect(sx - 3 * z, sy - 3.5 * z, 6 * z, 4 * z);
+      // the light blinks faster as the fuse runs down
+      const blink = Math.floor(time * (b.fuse < 1.5 ? 12 : 4)) % 2 === 0;
+      g.fillStyle = blink ? "#ff3030" : "#5a1010";
+      g.fillRect(sx - 1 * z, sy - 3 * z, 2 * z, 1.6 * z);
+      if (blink) this.glow(sx, sy - 2 * z, 6 * z, "#ff3030", 0.4);
+    }
+    for (const gc of world.gasClouds) {
+      if (gc.x < x0 - 4 || gc.x > x1 + 4 || gc.y < y0 - 4 || gc.y > y1 + 4) continue;
+      const sx = SX(gc.x, gc.y), sy = SY(gc.x, gc.y);
+      const fade = Math.min(1, gc.t / (gc.maxT * 0.35));   // thins out as it dies
+      const rr = gc.r * TILE_W * 0.9 * z;
+      const cloud = g.createRadialGradient(sx, sy - 4 * z, 0, sx, sy - 4 * z, rr);
+      cloud.addColorStop(0, `rgba(143,220,90,${0.34 * fade})`);
+      cloud.addColorStop(0.7, `rgba(110,190,70,${0.18 * fade})`);
+      cloud.addColorStop(1, "rgba(110,190,70,0)");
+      g.fillStyle = cloud;
+      g.beginPath();
+      g.ellipse(sx, sy - 4 * z, rr, rr * 0.55, 0, 0, Math.PI * 2);
+      g.fill();
+      // a few drifting wisps sell the volume
+      for (let k = 0; k < 5; k++) {
+        const a = time * 0.7 + k * 1.26;
+        const wx = sx + Math.cos(a) * rr * 0.5, wy = sy - 4 * z + Math.sin(a * 1.3) * rr * 0.28;
+        g.fillStyle = `rgba(160,230,110,${0.10 * fade})`;
+        g.beginPath(); g.ellipse(wx, wy, rr * 0.3, rr * 0.17, 0, 0, Math.PI * 2); g.fill();
+      }
+    }
+
     // ---- effects ----
     for (const pr of world.projectiles) {
       const sx = SX(pr.x, pr.y), sy = SY(pr.x, pr.y) - (6 + pr.z * STORY_H) * z;
@@ -2574,8 +2608,11 @@ export class Renderer {
     } else if (p.path && (p.state === "walk" || p.state === "follow")) {
       col = 1 + (Math.floor(p.animT * (2.4 * p.speed)) % 4);
     }
+    // gassed: drawn with the falling frame, flat out until they come round
+    if (p.stunT > 0 && p.state !== "dead") col = 10;
     const sx = SX(p.x, p.y), sy = SY(p.x, p.y) - p.z * STORY_H * z;
     const s = PED_SCALE * z;
+    if (p.cloakOn) g.globalAlpha = 0.4 + 0.1 * Math.sin(time * 6);
     if (p.state !== "dead" && p.trainId === null) {
       g.fillStyle = "rgba(0,0,0,0.4)";
       g.beginPath(); g.ellipse(sx, sy, 5 * z, 2.2 * z, 0, 0, Math.PI * 2); g.fill();
@@ -2623,5 +2660,6 @@ export class Renderer {
       g.fillStyle = p.team === "player" ? "#6f6" : "#fff";
       g.fillRect(sx - w / 2, sy - FH * s - 3 * z, w * Math.max(0, p.hp / p.maxHp), 2 * z);
     }
+    g.globalAlpha = 1;   // the cloak's shimmer must not bleed into the next body
   }
 }

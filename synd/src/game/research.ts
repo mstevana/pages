@@ -43,6 +43,18 @@ export const RESEARCH: ResearchNode[] = [
   { id: "medkit",   branch: "defense", name: "MEDKIT",        desc: "Field trauma pack, two uses.",            cost: 200,  req: null,     item: "medkit" },
   { id: "shield",   branch: "defense", name: "SHIELD BELT",   desc: "Personal energy screen. Drains as it takes hits.", cost: 900, req: "medkit", item: "shield" },
   { id: "psdr",     branch: "defense", name: "PERSUADERTRON", desc: "Neural override. Civilians follow you home.", cost: 1100, req: "shield", item: "persuadertron" },
+  // ---- guns, second line: quiet, far, and close-in fire ----
+  { id: "silenced", branch: "guns", name: "SILENCED PISTOL", desc: "The one gun the street does not hear. No alarm.", cost: 350,  req: null,       item: "silenced" },
+  { id: "rifle",    branch: "guns", name: "LONG RIFLE",      desc: "18-tile reach. Kill before contact.",           cost: 900,  req: "silenced", item: "rifle" },
+  { id: "flamer",   branch: "guns", name: "FLAMER",          desc: "A cone of fire. The street empties screaming.", cost: 1300, req: "rifle",    item: "flamer" },
+  // ---- tech, second line: the beam family, built on the laser ----
+  { id: "pulse",    branch: "tech", name: "PULSE LASER",     desc: "An automatic laser. Volume over voltage.",      cost: 1600, req: "laser",    item: "pulse" },
+  { id: "arc",      branch: "tech", name: "ARC THROWER",     desc: "Lightning that forks to two more victims.",     cost: 2600, req: "pulse",    item: "arc" },
+  { id: "lance",    branch: "tech", name: "PLASMA LANCE",    desc: "A wide heavy beam through cars and men alike.", cost: 5000, req: "arc",      item: "lance" },
+  // ---- defense, second line: devices and a veil ----
+  { id: "bomb",     branch: "defense", name: "TIME BOMB",    desc: "Four-second fuse. Reshapes an ambush.",         cost: 700,  req: "medkit",   item: "bomb" },
+  { id: "gas",      branch: "defense", name: "GAS GRENADE",  desc: "Knockout cloud. Non-lethal, no heat.",          cost: 1400, req: "bomb",     item: "gas" },
+  { id: "cloakf",   branch: "defense", name: "CLOAK FIELD",  desc: "Hostiles cannot see you until you fire.",       cost: 2500, req: "gas",      item: "cloak" },
 ];
 
 // ---- implants: one chain of three marks per body part ----
