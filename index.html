@@ -2,14 +2,201 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>pages</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#05060a">
+<title>SYND</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
 <style>
-  body { background:#05060a; color:#9fe8ff; font-family:"Courier New",monospace;
-         display:flex; align-items:center; justify-content:center; height:100vh; margin:0; }
-  a { color:#ff9b2f; text-decoration:none; font-size:1.4em; letter-spacing:0.2em; }
-  a:hover { text-shadow:0 0 12px #ff5e00; }
+  html, body {
+    margin: 0; padding: 0; width: 100%; height: 100%;
+    background: #05060a; overflow: hidden;
+    touch-action: none; -webkit-user-select: none; user-select: none;
+    font-family: "Courier New", monospace;
+  }
+  #game {
+    position: fixed; inset: 0; width: 100%; height: 100%;
+    display: block; image-rendering: pixelated;
+  }
+  #ui { position: fixed; inset: 0; pointer-events: none; }
+  #ui .screen {
+    position: absolute; inset: 0; pointer-events: auto;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    background: rgba(3, 4, 8, 0.92); color: #9fe8ff; text-align: center;
+    padding: 4vmin; box-sizing: border-box; overflow-y: auto;
+  }
+  #ui h1 {
+    font-size: clamp(40px, 12vmin, 110px); letter-spacing: 0.35em; margin: 0 0 2vmin 0;
+    color: #ff9b2f; text-shadow: 0 0 18px #ff5e00, 0 0 45px #ff2fa0;
+  }
+  #ui h2 { color: #ff9b2f; letter-spacing: 0.2em; margin: 1vmin 0; text-shadow: 0 0 12px #ff5e00; }
+  #ui p  { max-width: 60ch; line-height: 1.5; margin: 0.8vmin 0; }
+  #ui .dim { color: #5f7d8c; font-size: 0.85em; }
+  #ui button {
+    pointer-events: auto; cursor: pointer;
+    font-family: inherit; font-size: clamp(14px, 2.6vmin, 22px); letter-spacing: 0.15em;
+    color: #0a0c10; background: #ff9b2f; border: 2px solid #ffd9a0;
+    padding: 1.4vmin 4vmin; margin: 1vmin; border-radius: 3px;
+    text-transform: uppercase;
+  }
+  #ui button.ghost { background: transparent; color: #9fe8ff; border-color: #2f6f86; }
+  #ui button:disabled { opacity: 0.35; cursor: default; }
+  #ui table { border-collapse: collapse; margin: 1vmin auto; color: #cfeeff; font-size: clamp(11px, 2vmin, 16px); }
+  #ui td, #ui th { border: 1px solid #1d3d4d; padding: 0.6vmin 1.4vmin; text-align: left; }
+  #rotate {
+    position: fixed; inset: 0; z-index: 50; display: none;
+    background: #05060a; color: #ff9b2f; text-align: center;
+    flex-direction: column; align-items: center; justify-content: center;
+    font-size: 5vmin; letter-spacing: 0.2em;
+  }
+  @media (orientation: portrait) { #rotate { display: flex; } }
+  .hidden { display: none !important; }
+
+  /* ---- armory: compact, fits a landscape phone without scrolling ---- */
+  #ui .screen.armory { justify-content: flex-start; padding: 1.2vmin 2vmin 0; }
+  .arm-top { display:flex; align-items:center; gap:2vmin; width:100%; max-width:1100px; }
+  .arm-top h2 { margin:0; font-size: clamp(13px, 3.2vmin, 22px); }
+  .arm-funds { color:#ff9b2f; font-weight:bold; font-size: clamp(11px, 2.6vmin, 18px); }
+  .arm-spacer { flex:1; }
+  #ui .screen.armory button { margin:0; padding: 0.7vmin 1.8vmin; font-size: clamp(9px, 2vmin, 15px); }
+  .arm-tabs { display:flex; gap:1vmin; margin:1vmin 0 0.4vmin; flex-wrap:wrap; }
+  .arm-sec { color:#5f7d8c; font-size: clamp(8px, 1.8vmin, 13px); letter-spacing:0.12em; margin:1vmin 0 0.4vmin; }
+  /* The loadout and the market sit side by side, not stacked. Two rows across
+     the top left the bottom two thirds of the screen empty and squeezed nine
+     market cards into one strip; two columns fills the height and gives every
+     cell room to be a thumb target. */
+  .arm-cols {
+    display:grid; grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
+    gap: 2vmin; width:100%; max-width:1100px; flex:1 1 auto; min-height:0;
+  }
+  .arm-col { display:flex; flex-direction:column; min-width:0; min-height:0; }
+  .arm-col .arm-sec { margin-top:0; text-align:left; }
+  .arm-slots {
+    display:grid; grid-template-columns: repeat(2, 1fr); grid-auto-rows: minmax(0, 1fr);
+    gap:0.8vmin; flex:1 1 auto; min-height:0;
+  }
+  .arm-slot {
+    padding:0.7vmin 0; border:1px solid #2c2f3e; min-height: 34px;
+    background:#101218; border-radius:2px; text-align:center; cursor:pointer;
+    display:flex; flex-direction:column; align-items:center; justify-content:center;
+  }
+  .arm-slot.empty { border-style:dashed; opacity:0.4; cursor:default; }
+  .arm-slot:not(.empty):hover { border-color:#ff9b2f; }
+  .arm-slot img, .arm-card img { width: clamp(20px, 5.4vmin, 42px); height: clamp(20px, 5.4vmin, 42px); image-rendering: pixelated; display:block; margin:0 auto; }
+  .arm-bar { display:block; height:3px; width:76%; margin:0.4vmin auto 0; background:#0a0b10; overflow:hidden; }
+  .brief-kit { display:flex; gap:0.6vmin; flex-wrap:wrap; }
+  .kit-slot { border:1px solid #2a3550; background:#10131c; padding:0.3vmin 0.4vmin; }
+  .kit-slot img { width: clamp(17px, 3.6vmin, 28px); height: clamp(17px, 3.6vmin, 28px); image-rendering: pixelated; display:block; }
+  .kit-bar { display:block; height:2px; margin-top:2px; background:#0a0b10; overflow:hidden; }
+  .kit-bar i { display:block; height:2px; }
+  .arm-bar i { display:block; height:3px; }
+  .arm-price { display:block; font-size: clamp(7px, 1.6vmin, 12px); color:#4fdc6a; }
+  .arm-slot.on, .arm-card.on { border-color:#ff9b2f; background:#3a2410; }
+  .arm-slot.on img, .arm-card.on img { filter: drop-shadow(0 0 3px #ff9b2f); }
+  /* action bar: the only place a purchase actually happens, with targets
+     big enough for a thumb */
+  .arm-actbar {
+    /* pinned to the bottom of the screen: this is where every purchase,
+       reload and sale happens, so it never moves as the grid changes */
+    display:flex; align-items:center; gap:1.5vmin; margin-top:auto; margin-bottom:1.4vmin;
+    width:100%; max-width:1100px; min-height: 40px;
+    border:1px solid #2c2f3e; background:#0e1015; border-radius:3px; padding:0.6vmin 1.4vmin;
+    box-sizing:border-box;
+  }
+  .arm-info { flex:1; text-align:left; color:#c3ccd6; font-size: clamp(9px, 2vmin, 15px); }
+  .arm-info.dim { color:#5f7d8c; letter-spacing:0.12em; }
+  #ui .screen.armory .arm-actbar button {
+    min-height: 34px; padding: 0.8vmin 3.4vmin; font-size: clamp(11px, 2.2vmin, 17px);
+  }
+  #ui .screen.armory .arm-actbar button.rld { background:#ff9b2f; }
+  #ui .screen.armory .arm-actbar button.sell { background:#4fdc6a; border-color:#a8f0ba; }
+  #ui .screen.armory .arm-actbar button.buy { background:#25e0ff; border-color:#a8eeff; }
+  .arm-market {
+    display:grid; grid-template-columns: repeat(4, 1fr); grid-auto-rows: minmax(34px, auto);
+    gap:0.8vmin; width:100%; flex:1 1 auto; min-height:0; overflow-y:auto;
+  }
+  .arm-card {
+    border:1px solid #2c2f3e; background:#101218; border-radius:2px; min-height: 34px;
+    padding:0.5vmin 0.2vmin; text-align:center; cursor:pointer;
+    display:flex; flex-direction:column; align-items:center; justify-content:center;
+  }
+  .arm-card.afford:hover { border-color:#ff9b2f; }
+  .arm-card.poor { opacity:0.38; cursor:default; }
+  .arm-name { display:block; font-size: clamp(7px, 1.5vmin, 11px); color:#c3ccd6; letter-spacing:0.05em; }
+  .arm-cost { display:block; font-size: clamp(7px, 1.6vmin, 12px); color:#ff9b2f; }
+  .arm-card.locked { opacity:0.32; cursor:default; border-style:dashed; }
+  .arm-card.locked img { filter: grayscale(1) brightness(0.7); }
+  .arm-card.done { border-color:#2f8648; cursor:default; }
+  .arm-card.done .arm-cost { color:#4fdc6a; }
+  .arm-card.mini { display:inline-flex; align-items:baseline; gap:0.8vmin; padding:0.6vmin 1.2vmin; margin:0 0.4vmin; }
+
+  /* ---- research tree ---- */
+  .res-cols {
+    display:grid; grid-template-columns: 1fr 1fr 1fr 1.6fr; gap:2vmin;
+    width:100%; max-width:1100px; margin-top:1vmin; align-items:start;
+    flex:1; min-height:0; overflow-y:auto;
+  }
+  .res-branch { display:flex; flex-direction:column; align-items:center; }
+  .res-branch .arm-sec { margin-top:0; }
+  .res-node {
+    width:100%; box-sizing:border-box; display:flex; justify-content:space-between; align-items:center;
+    gap:1vmin; padding:1vmin 1.4vmin; border:1px solid #2f4b5c; background:#141a22; cursor:pointer;
+  }
+  .res-node .res-name { font-size: clamp(8px, 1.9vmin, 14px); color:#c3ccd6; letter-spacing:0.05em; text-align:left; }
+  .res-node .res-cost { font-size: clamp(8px, 1.8vmin, 13px); color:#ff9b2f; }
+  .res-node.done { border-color:#2f8648; }
+  .res-node.done .res-cost { color:#4fdc6a; }
+  .res-node.locked { opacity:0.38; }
+  .res-node.open:hover { border-color:#ff9b2f; }
+  .res-node.on { border-color:#ff9b2f; background:#3a2410; }
+  .res-link { color:#2f4b5c; font-size: clamp(7px, 1.6vmin, 12px); line-height:1.4; }
+  .res-gap { height:1.6vmin; }
+  .res-imp-row { display:flex; align-items:center; gap:0.8vmin; width:100%; margin-bottom:0.8vmin; }
+  .res-imp-name { flex:1; text-align:left; font-size: clamp(7px, 1.7vmin, 12px); color:#9fb2c0; letter-spacing:0.06em; }
+  .res-node.mini { width:auto; padding:0.7vmin 1vmin; gap:0.7vmin; }
+
+  /* ---- implant clinic ---- */
+  .imp-cols {
+    display:grid; grid-template-columns: minmax(0,4fr) minmax(0,8fr); gap:2.4vmin;
+    width:100%; max-width:1100px; margin-top:0.6vmin; flex:1; min-height:0; overflow-y:auto; align-items:start;
+  }
+  .doll { display:flex; flex-direction:column; align-items:center; gap:0.6vmin; margin-top:0.6vmin; }
+  .doll-head { width:6vmin; height:5vmin; background:#2a3340; border:1px solid #3d4c5e; border-radius:1vmin 1vmin 0 0; }
+  .doll-part {
+    border:1px solid #2f4b5c; background:#141a22; cursor:pointer; text-align:center;
+    display:flex; flex-direction:column; justify-content:center; gap:0.2vmin; padding:0.6vmin;
+  }
+  .doll-part:hover, .imp-line:hover { border-color:#ff9b2f; }
+  .doll-part.on, .imp-line.on { border-color:#ff9b2f; background:#3a2410; }
+  .doll-part.chromed { border-color:#25e0ff; }
+  .doll-part.chromed .doll-mk { color:#25e0ff; }
+  .doll-eyes { width:10vmin; height:4.4vmin; }
+  .doll-armrow { display:flex; gap:0.6vmin; }
+  .doll-arms { width:7vmin; height:11vmin; }
+  .doll-torso { width:10vmin; height:11vmin; }
+  .doll-legs { width:10vmin; height:9vmin; }
+  .doll-label { font-size: clamp(6px, 1.4vmin, 10px); color:#5f7d8c; letter-spacing:0.1em; }
+  .doll-mk { font-size: clamp(8px, 1.9vmin, 14px); color:#c3ccd6; }
+  .imp-line {
+    display:flex; align-items:center; gap:0.6vmin; border:1px solid #2f4b5c; background:#141a22;
+    padding:0.8vmin 1.2vmin; margin-bottom:0.9vmin; cursor:pointer;
+  }
+  .imp-name { flex:1; text-align:left; font-size: clamp(8px, 1.9vmin, 14px); color:#c3ccd6; letter-spacing:0.05em; }
 </style>
 </head>
-<body><a href="synd/">&#9654; SYND</a></body>
+<body>
+<canvas id="game"></canvas>
+<div id="ui"></div>
+<div id="rotate">&#8635;<br>ROTATE DEVICE<br><span style="font-size:2.4vmin;color:#5f7d8c">SYND REQUIRES LANDSCAPE</span></div>
+<script src="dist/synd.js"></script>
+<script>
+if ("serviceWorker" in navigator && location.protocol === "https:") {
+  addEventListener("load", () => navigator.serviceWorker.register("sw.js").catch(() => {}));
+}
+</script>
+</body>
 </html>
