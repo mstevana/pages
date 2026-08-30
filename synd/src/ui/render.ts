@@ -2082,15 +2082,27 @@ export class Renderer {
     if (night && moving) {
       quad([px(L, -W * 0.7, 0), px(L, W * 0.7, 0), px(L + 2.6, W * 1.8, 0), px(L + 2.6, -W * 1.8, 0)], "rgba(255,245,200,0.09)");
     }
-    // hover underglow in the car's accent color
+    // hover underglow: a pool of accent light that falls off to nothing, so
+    // the road under the car reads as lit road rather than a tile of another
+    // colour. A hard-edged quad here showed up as a mismatched paving slab.
     if (night) {
-      g.globalCompositeOperation = "lighter";
       const n = parseInt(accent.slice(1), 16);
-      quad(
-        [px(L * 1.02, W * 1.2, 0.8 * z), px(L * 1.02, -W * 1.2, 0.8 * z), px(-L * 1.02, -W * 1.2, 0.8 * z), px(-L * 1.02, W * 1.2, 0.8 * z)],
-        `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},0.14)`
-      );
-      g.globalCompositeOperation = "source-over";
+      const cr = (n >> 16) & 255, cg = (n >> 8) & 255, cb = n & 255;
+      const rad = bodyLen * 0.62;
+      g.save();
+      g.globalCompositeOperation = "lighter";
+      g.translate(sx, sy);
+      g.rotate(bodyAngle);
+      g.scale(1, 0.34);
+      const pool = g.createRadialGradient(0, 0, 0, 0, 0, rad);
+      pool.addColorStop(0, `rgba(${cr},${cg},${cb},0.15)`);
+      pool.addColorStop(0.45, `rgba(${cr},${cg},${cb},0.07)`);
+      pool.addColorStop(1, `rgba(${cr},${cg},${cb},0)`);
+      g.fillStyle = pool;
+      g.beginPath();
+      g.arc(0, 0, rad, 0, Math.PI * 2);
+      g.fill();
+      g.restore();
     }
 
     // hull plan: a superellipse whose squareness is the model's own, narrowed

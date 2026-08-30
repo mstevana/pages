@@ -827,3 +827,15 @@ screen: a sector only ever places forty to sixty of each of the upper-storey
 kinds, so the count you can observe is bounded by that, not by the pool.
 Shopfronts are the exception -- there are eighteen hundred of them, and all
 96 designs show up.
+
+## Night underglow
+
+Every car casts a pool of its own accent light at night. That pool used to be
+a flat additive quad the size of the car's footprint, and because it had a
+hard rim it read as a paving slab in the wrong colour rather than as light --
+on open road it stepped the ground by 17-23 levels along a straight edge and
+lifted it to a luminance of 54 against a road sitting around 12.
+
+It is now a radial falloff squashed onto the body axis: bright under the
+car, nothing at the rim. The step across the same ground drops to 6 and the
+brightest spill to 26, so the road under a car is the road beside it, lit.
