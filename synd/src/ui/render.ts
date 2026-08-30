@@ -1016,15 +1016,28 @@ export class Renderer {
       g.globalCompositeOperation = "source-over";
     }
 
-    // extraction zone marker
+    // extraction zone marker - and the uplink pad, which is the same ring but
+    // filled, because it is a place to stand rather than a place to arrive at
     const m = world.mission;
     if (m.zone && !m.done && !m.failed) {
       const sx = SX(m.zone.x, m.zone.y), sy = SY(m.zone.x, m.zone.y);
-      g.strokeStyle = "rgba(120,255,190,0.7)";
+      const rx = m.zone.r * TILE_W * 0.5 * z, ry = m.zone.r * TILE_H * 0.5 * z;
+      const pad = m.kind === "hold";
+      const held = pad && world.agents.some((a) => a.hp > 0 && a.carId === null
+        && (a.x - m.zone!.x) ** 2 + (a.y - m.zone!.y) ** 2 < m.zone!.r ** 2);
+      if (pad) {
+        g.fillStyle = held ? "rgba(120,255,190,0.14)" : "rgba(255,155,47,0.12)";
+        g.beginPath();
+        g.ellipse(sx, sy, rx, ry, 0, 0, Math.PI * 2);
+        g.fill();
+      }
+      g.strokeStyle = pad
+        ? (held ? "rgba(120,255,190,0.9)" : "rgba(255,155,47,0.85)")
+        : "rgba(120,255,190,0.7)";
       g.lineWidth = 2;
-      const pulse = 1 + 0.15 * Math.sin(time * 4);
+      const pulse = 1 + 0.15 * Math.sin(time * (pad && !held ? 7 : 4));
       g.beginPath();
-      g.ellipse(sx, sy, m.zone.r * TILE_W * 0.5 * z * pulse, m.zone.r * TILE_H * 0.5 * z * pulse, 0, 0, Math.PI * 2);
+      g.ellipse(sx, sy, rx * pulse, ry * pulse, 0, 0, Math.PI * 2);
       g.stroke();
     }
 
@@ -1125,6 +1138,18 @@ export class Renderer {
     if (e.kind === "metro" && e.ramp) {
       this.drawMetroEntrance(g, e.ramp, SX, SY, z, art, time);
       return;
+    }
+    if (e.kind === "car" && e.car && e.car.marked && e.car.state !== "wreck") {
+      // a chevron over a marked vehicle: a motor pool is only findable if the
+      // cars in it look different from the hundred others on the kerb
+      const sx = SX(e.car.x, e.car.y), sy = SY(e.car.x, e.car.y) - e.car.z * STORY_H * z;
+      const bob = Math.sin(time * 4) * 1.5 * z;
+      g.fillStyle = `rgba(255,80,80,${0.65 + 0.35 * Math.sin(time * 5)})`;
+      g.beginPath();
+      g.moveTo(sx, sy - 17 * z + bob);
+      g.lineTo(sx - 4 * z, sy - 24 * z + bob);
+      g.lineTo(sx + 4 * z, sy - 24 * z + bob);
+      g.closePath(); g.fill();
     }
     if (e.kind === "gramp" && e.gramp) {
       this.drawGarageRamp(g, e.gramp, SX, SY, z, art);

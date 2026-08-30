@@ -11,7 +11,9 @@ import { SaveData } from "./save";
 
 export type Team = "player" | "civ" | "cop" | "enemy";
 export type PedState = "idle" | "walk" | "flee" | "follow" | "dead";
-export type ObjectiveKind = "assassinate" | "persuade" | "escort" | "killall";
+export type ObjectiveKind =
+  | "assassinate" | "persuade" | "escort" | "killall"
+  | "steal" | "sabotage" | "hold" | "intercept";
 
 let nextId = 1;
 
@@ -68,6 +70,7 @@ export interface Car {
   speed: number;
   hp: number;
   state: "drive" | "stopping" | "parked" | "player" | "wreck" | "launching" | "docking";
+  marked?: boolean;      // a sabotage target: drawn with a mark and worth pay
   model: number;          // which of the 24 chassis designs
   glide: { x: number; y: number; a: number } | null; // kerb <-> lane manoeuvre
   path: { x: number; y: number; z?: number }[] | null;
@@ -126,6 +129,23 @@ const SQUAD_MAX = 4;
 const SQUAD_SPREAD = 2.5;   // tiles they are set down within
 const SQUAD_ROAM = 4;       // ...and how far they drift from the team's patch
 
+// The newer mission types.
+const COURIER_WALK = 2.8;      // quicker than a bystander, slower than an agent
+const COURIER_GUARDS = 3;      // a fire team on the case
+const ALERT_SIGHT = 17;        // tiles at which a quarry notices the squad
+const ESCAPE_PAY = 0.3;        // the share still paid when the quarry gets out
+const SABOTAGE_TARGETS = 6;
+const SABOTAGE_UNDER = 2;      // ...of which this many sit in basement garages
+const HOLD_RADIUS = 5;
+// The transmission runs longer than the holding it asks for, so being pushed
+// off the pad costs the seconds it costs and no more. A window equal to the
+// requirement would mean any interruption at all put full pay out of reach,
+// which is a mission you can only lose slowly.
+const HOLD_WINDOW = 210;       // seconds the transmission runs for
+const HOLD_NEEDED = 150;       // ...of which this many must be ours for full pay
+const HOLD_WAVE = 10;          // seconds between pairs of rivals sent at the pad
+const HOLD_CROWD = 6;          // ...and the most that will be standing at once
+
 // Getting out of the way of traffic.
 const DODGE_MIN_SPEED = 2.2;   // slower than this and it is not a threat
 const DODGE_LOOK = 0.85;       // seconds of the car's travel they look ahead
@@ -147,6 +167,22 @@ export interface Mission {
   done: boolean;
   failed: boolean;
   failReason: string;
+  // How much of the objective was actually met, 0..1. A mission is not lost
+  // for botching it - the payout is scaled by this instead, so a run that
+  // burned four of six targets is worth four sixths and the campaign carries
+  // on. A wipe is still a wipe.
+  score: number;
+  outcome: string;                     // what to say about a partial result
+  // Where whatever is running for it is running to: a courier making for the
+  // edge of the sector, a defector heading out. Reaching it ends the mission
+  // on a poor score rather than failing it.
+  exit: { x: number; y: number } | null;
+  alerted: boolean;                    // the quarry has seen us and is moving
+  marks: number[];                     // sabotage: the car ids to destroy
+  wrecked: number;                     // ...how many are down
+  escaped: number;                     // ...and how many drove off
+  held: number;                        // hold: seconds the uplink has been ours
+  window: number;                      // ...seconds of transmission left
 }
 
 // A train on an elevated line. It runs between stations, stands for a while at
@@ -350,6 +386,23 @@ export class World {
     return n ? { x: n.x + 0.5, y: n.y + 0.5 } : { x: 20.5, y: 20.5 };
   }
 
+  // The way out of the sector. It is the *far* edge on purpose: a bolt for
+  // the nearest boundary is over in ten seconds and nothing on foot can catch
+  // it, which is not a chase, it is a coin toss. A long run gives the squad
+  // time to close, to cut the corner, or to go and find a car.
+  private edgePoint(from: { x: number; y: number }): { x: number; y: number } {
+    const opts = [
+      { x: 6, y: from.y }, { x: GRID - 7, y: from.y },
+      { x: from.x, y: 6 }, { x: from.x, y: GRID - 7 },
+    ];
+    opts.sort((a, b) => dist2(b.x, b.y, from.x, from.y) - dist2(a.x, a.y, from.x, from.y));
+    for (const o of opts) {
+      const n = this.pf.nearestWalkable(o.x | 0, o.y | 0, 12);
+      if (n) return { x: n.x + 0.5, y: n.y + 0.5 };
+    }
+    return { x: 6.5, y: from.y };
+  }
+
   private farPoint(from: { x: number; y: number }, minDist: number): { x: number; y: number } {
     for (let tries = 0; tries < 300; tries++) {
       const x = this.rng.int(12, GRID - 12), y = this.rng.int(12, GRID - 12);
@@ -366,6 +419,8 @@ export class World {
     const m: Mission = {
       kind, text: "", targetId: 0, zone: null, startPos: { ...start },
       enemiesLeft: 0, waveT: 10, phase: 0, done: false, failed: false, failReason: "",
+      score: 1, outcome: "", exit: null, alerted: false,
+      marks: [], wrecked: 0, escaped: 0, held: 0, window: 0,
     };
     switch (kind) {
       case "assassinate": {
@@ -422,6 +477,79 @@ export class World {
           }
         }
         m.text = "ELIMINATE all 30 rival syndicate agents operating in this sector. They are hunting you too.";
+        break;
+      }
+
+      // A courier walking a case across the sector, with a fire team on him.
+      // Put him down or turn him, take the case off the pavement and walk it
+      // home. He bolts for the edge of the sector the moment he sees us, so
+      // the approach is the whole game: get close before he knows you are
+      // there, or spend the rest of the mission chasing him.
+      case "steal": {
+        const p = this.farPoint(start, GRID * 0.55);
+        const vip = this.spawnCiv(p.x, p.y, true);
+        vip.vip = true; vip.maxHp = vip.hp = 55; vip.speed = COURIER_WALK;
+        m.targetId = vip.id;
+        m.zone = { x: start.x, y: start.y, r: 5 };
+        m.exit = this.edgePoint(p);
+        for (let i = 0; i < COURIER_GUARDS; i++) {
+          const g = this.pf.nearestWalkable((p.x + this.rng.float(-3, 3)) | 0, (p.y + this.rng.float(-3, 3)) | 0, 5);
+          if (g) this.spawnEnemy(g.x + 0.5, g.y + 0.5);
+        }
+        m.text = "SEIZE the data case. The courier is under guard and will run for the sector boundary the moment he is spotted. Bring the case to the extraction zone.";
+        break;
+      }
+
+      // A rival motor pool: cars scattered over the sector, some of them down
+      // in the basements. Blowing the first one tips the rest off, and every
+      // one out on the street is driven away - so the order you take them in
+      // decides how many you get.
+      case "sabotage": {
+        const pool = this.cars.filter((c) => c.state === "parked");
+        const picks: Car[] = [];
+        const under = pool.filter((c) => c.z < -0.5);
+        const street = pool.filter((c) => c.z >= -0.5);
+        // a couple in the garages, the rest kerbside, spread across the sector
+        const take = (from: Car[], n: number) => {
+          for (let i = 0; i < n && from.length > 0; i++) {
+            let best = -1, bd = -1;
+            for (let k = 0; k < from.length; k++) {
+              const c = from[k];
+              let d = dist2(c.x, c.y, start.x, start.y);
+              for (const q of picks) d = Math.min(d, dist2(c.x, c.y, q.x, q.y));
+              if (d > bd) { bd = d; best = k; }
+            }
+            if (best < 0) break;
+            picks.push(from[best]); from.splice(best, 1);
+          }
+        };
+        take(under, SABOTAGE_UNDER);
+        take(street, SABOTAGE_TARGETS - picks.length);
+        for (const c of picks) { c.marked = true; m.marks.push(c.id); }
+        m.text = `DESTROY the rival motor pool: ${picks.length} marked vehicles, some of them parked below street level. The first one you take out warns the rest, and the ones on the street will be driven out of the sector.`;
+        break;
+      }
+
+      // A transmitter that has to be stood on. The upload runs for a fixed
+      // stretch whether we hold the ground or not, so being pushed off costs
+      // the seconds it costs and nothing more: what is banked is banked.
+      case "hold": {
+        const p = this.farPoint(start, GRID * 0.5);
+        m.zone = { x: p.x, y: p.y, r: HOLD_RADIUS };
+        m.window = HOLD_WINDOW;
+        m.text = `SEIZE the uplink and HOLD it. The transmission runs for ${HOLD_WINDOW | 0} seconds once you first set foot on the pad; we need ${HOLD_NEEDED | 0} of those seconds and are paid for the share we get. Rivals will come for it.`;
+        break;
+      }
+
+      // A defector on his way out of the sector. Kill him or turn him; let him
+      // reach the boundary and he is somebody else's asset.
+      case "intercept": {
+        const p = this.farPoint(start, GRID * 0.55);
+        const vip = this.spawnCiv(p.x, p.y, true);
+        vip.vip = true; vip.maxHp = vip.hp = 65; vip.speed = COURIER_WALK;
+        m.targetId = vip.id;
+        m.exit = this.edgePoint(p);
+        m.text = "INTERCEPT the defector before he leaves the sector. He does not know we are coming yet. Terminate or turn him - either will do.";
         break;
       }
     }
@@ -524,6 +652,11 @@ export class World {
       if (p.team === "cop" && p.state !== "dead" && !p.hostileCop && dist2(p.x, p.y, cx, cy) > 70 * 70) p.deadT = 1e9;
     }
     this.peds = this.peds.filter((p) => !(p.deadT >= 1e9));
+    for (const c of this.cars) {
+      if (!c.marked || c.state !== "drive") continue;
+      if (dist2(c.x, c.y, cx, cy) <= 80 * 80) continue;
+      this.mission.escaped++;                 // it got clear and we lost it
+    }
     this.cars = this.cars.filter((c) => !(c.state === "drive" && dist2(c.x, c.y, cx, cy) > 80 * 80));
   }
 
@@ -1061,6 +1194,8 @@ export class World {
     const m = this.mission;
     if (p.id === m.targetId) {
       if (m.kind === "assassinate") { m.done = true; }
+      else if (m.kind === "intercept") { m.done = true; m.score = 1; }
+      else if (m.kind === "steal") { this.dropTheCase(m, p); }
       else if (m.kind === "persuade" || m.kind === "escort") { m.failed = true; m.failReason = "The target was killed."; }
     }
   }
@@ -1269,6 +1404,15 @@ export class World {
 
   // too much damage: the car goes up in a fireball
   private destroyCar(c: Car, from: Ped | null): void {
+    const m = this.mission;
+    if (c.marked && c.state !== "wreck" && m.kind === "sabotage") {
+      m.wrecked++;
+      if (!m.alerted) {
+        m.alerted = true;
+        this.notify("MOTOR POOL ALERTED - THEY ARE MOVING THE REST");
+      }
+      this.notify(`${m.wrecked}/${m.marks.length} VEHICLES DESTROYED`);
+    }
     c.state = "wreck";
     c.speed = 0;
     c.path = null;
@@ -1483,6 +1627,144 @@ export class World {
       }
     }
     if (m.kind === "killall" && m.enemiesLeft <= 0) m.done = true;
+
+    if (m.kind === "steal" || m.kind === "intercept") this.updateQuarry(m, vip, dt);
+    if (m.kind === "sabotage") this.updateSabotage(m);
+    if (m.kind === "hold") this.updateHold(m, dt);
+  }
+
+  // Whether anything of ours is close enough, and in the open enough, for the
+  // quarry to have noticed. Sight is what starts him running, so a squad that
+  // comes at him through the back streets gets a lot closer than one that
+  // walks up the avenue.
+  private squadSeen(x: number, y: number, r: number): boolean {
+    for (const a of this.agents) {
+      if (a.hp <= 0) continue;
+      if (dist2(a.x, a.y, x, y) > r * r) continue;
+      if (this.pf.losShot(a.x, a.y, x, y)) return true;
+    }
+    return false;
+  }
+
+  // The courier with the case, and the defector on his way out: the same
+  // animal. He mills about until he sees us, then runs for the boundary, and
+  // reaching it ends the mission on the poor score rather than losing it.
+  private updateQuarry(m: Mission, vip: Ped | null, dt: number): void {
+    if (m.kind === "steal" && m.phase === 1) {
+      // the case is loose: done when somebody carrying it stands in the zone
+      for (const a of this.agents) {
+        if (a.hp <= 0 || !a.inv.some((it) => it.type === "case")) continue;
+        if (m.zone && dist2(a.x, a.y, m.zone.x, m.zone.y) < m.zone.r * m.zone.r) {
+          m.done = true; m.score = 1;
+        }
+      }
+      return;
+    }
+    if (!vip || vip.state === "dead") return;
+    if (vip.persuaded) {
+      // turned rather than killed: for the defector that is the job done, and
+      // for the courier he hands the case over where he stands
+      if (m.kind === "intercept") { m.done = true; m.score = 1; return; }
+      if (m.kind === "steal" && m.phase === 0) this.dropTheCase(m, vip);
+      return;
+    }
+    if (!m.alerted && this.squadSeen(vip.x, vip.y, ALERT_SIGHT)) {
+      m.alerted = true;
+      vip.speed = COURIER_WALK;
+      this.audio.objective();
+      this.notify(m.kind === "steal" ? "COURIER SPOOKED - HE IS RUNNING" : "DEFECTOR IS RUNNING FOR THE BOUNDARY");
+    }
+    if (!m.alerted || !m.exit) return;
+    vip.thinkT = 1;
+    if (!vip.path || vip.pathIdx >= vip.path.length) {
+      const p = this.pf.walkPath(vip.x, vip.y, m.exit.x, m.exit.y);
+      if (p) { vip.path = p; vip.pathIdx = 0; vip.state = "walk"; }
+    }
+    if (dist2(vip.x, vip.y, m.exit.x, m.exit.y) < 9) {
+      m.done = true;
+      m.score = ESCAPE_PAY;
+      m.outcome = m.kind === "steal" ? "The courier left the sector with the case."
+                                     : "The defector reached the boundary.";
+      this.notify(m.kind === "steal" ? "THE CASE IS GONE" : "THE DEFECTOR IS GONE");
+    }
+  }
+
+  // The courier gives up the case where he stands, killed or turned.
+  dropTheCase(m: Mission, vip: Ped): void {
+    if (m.phase !== 0) return;
+    m.phase = 1;
+    this.addDrop(vip.x, vip.y, newItem("case"));
+    this.audio.objective();
+    this.notify("CASE DROPPED - PICK IT UP AND RUN IT HOME");
+  }
+
+  // The motor pool. Wrecking one warns the rest, and every marked car out on
+  // the street gets a driver and leaves; the ones in the basements have no way
+  // out that a driverless car takes, so they sit and wait for you.
+  private updateSabotage(m: Mission): void {
+    let live = 0;
+    for (const id of m.marks) {
+      const c = this.cars.find((q) => q.id === id);
+      if (!c) continue;                       // culled: counted when it went
+      if (c.state === "wreck") continue;
+      live++;
+      if (m.alerted && c.state === "parked" && c.z >= -0.5) {
+        // it pulls out and drives off like any other traffic
+        const bits = this.city.laneDir[idx(c.x | 0, c.y | 0)];
+        for (let d = 0; d < 4; d++) if (bits & DBIT[d]) { c.dir = d; c.angle = Math.atan2(DY[d], DX[d]); break; }
+        c.state = "drive";
+      }
+    }
+    if (m.wrecked + m.escaped >= m.marks.length || live === 0) {
+      m.done = true;
+      m.score = m.marks.length > 0 ? m.wrecked / m.marks.length : 1;
+      if (m.score < 1) m.outcome = `${m.escaped} of ${m.marks.length} vehicles were driven out of the sector.`;
+    }
+  }
+
+  // The uplink. The transmission runs for its window whether we are standing
+  // on the pad or not; the share of it we hold is the share we are paid.
+  private updateHold(m: Mission, dt: number): void {
+    if (!m.zone) return;
+    const onPad = this.agents.some((a) => a.hp > 0 && a.carId === null
+      && dist2(a.x, a.y, m.zone!.x, m.zone!.y) < m.zone!.r * m.zone!.r);
+    if (m.phase === 0) {
+      if (!onPad) return;
+      m.phase = 1;
+      m.waveT = 2;
+      this.audio.objective();
+      this.notify("UPLINK RUNNING - HOLD THIS GROUND");
+    }
+    const before = m.held;
+    if (onPad) m.held += dt;
+    m.window -= dt;
+    // a word at each quarter, so the bar is readable without watching a number
+    for (const mark of [0.25, 0.5, 0.75]) {
+      const at = HOLD_NEEDED * mark;
+      if (before < at && m.held >= at) this.notify(`UPLINK ${(mark * 100) | 0}%`);
+    }
+    // rivals converge on the pad rather than on the camera
+    m.waveT -= dt;
+    // Hold the pressure steady rather than letting it pile up: a pad with two
+    // dozen rivals standing on it is not hard, it is over.
+    const zone = m.zone;
+    const nearby = this.peds.filter((q) => q.team === "enemy" && q.state !== "dead"
+      && dist2(q.x, q.y, zone.x, zone.y) < 40 * 40).length;
+    if (m.waveT <= 0 && nearby >= HOLD_CROWD) m.waveT = HOLD_WAVE * 0.5;
+    else if (m.waveT <= 0) {
+      m.waveT = HOLD_WAVE + this.rng.float(0, 3);
+      for (let i = 0; i < 2; i++) {
+        const a = this.rng.float(0, Math.PI * 2);
+        const r = 22 + this.rng.float(0, 10);
+        const nw = this.pf.nearestWalkable((m.zone.x + Math.cos(a) * r) | 0, (m.zone.y + Math.sin(a) * r) | 0, 8);
+        if (nw) this.spawnEnemy(nw.x + 0.5, nw.y + 0.5);
+      }
+    }
+    if (m.held >= HOLD_NEEDED || m.window <= 0) {
+      m.done = true;
+      m.score = Math.max(0, Math.min(1, m.held / HOLD_NEEDED));
+      if (m.score < 1) m.outcome = `The uplink was ours for ${(m.score * 100) | 0}% of the transmission.`;
+    }
   }
 
   private updatePed(p: Ped, dt: number): void {
@@ -1650,6 +1932,15 @@ export class World {
           }
         }
       }
+    }
+
+    // Orders are settled on arrival, and an order given while the agent is
+    // already standing on the spot never produces a path to arrive at the end
+    // of - so it is settled here instead. Without this, telling an agent to
+    // pick up the thing at his feet leaves him standing over it for good.
+    if (!p.path && (p.pickOrder !== null || p.dropOrder !== null
+                    || p.giveOrder !== null || p.boardOrder !== null)) {
+      this.onArrive(p);
     }
 
     // Manual fire order. An order is an order: it is carried out wherever it
@@ -2168,9 +2459,17 @@ export class World {
       return;
     }
     if (m.done) {
-      const bonus = 800 + this.missionNo * 300;
+      // A botched objective is not a lost mission: the bonus is scaled by how
+      // much of it was actually met, and the debrief says what was missed.
+      const bonus = Math.round((800 + this.missionNo * 300) * clamp(m.score, 0, 1));
       this.creditsEarned += bonus;
-      this.result = { success: true, reason: "Objective complete.", kills: this.kills, creditsEarned: Math.max(0, this.creditsEarned) };
+      const clean = m.score >= 0.999;
+      this.result = {
+        success: true,
+        reason: clean ? "Objective complete."
+                      : `Objective partly met - ${(m.score * 100) | 0}% paid. ${m.outcome}`.trim(),
+        kills: this.kills, creditsEarned: Math.max(0, this.creditsEarned),
+      };
       this.audio.objective();
     }
   }
@@ -2187,6 +2486,24 @@ export class World {
         if (d < bd) { bd = d; best = p; }
       }
       return best ? { x: best.x, y: best.y } : null;
+    }
+    if (m.kind === "hold" && m.zone) return { x: m.zone.x, y: m.zone.y };
+    if (m.kind === "sabotage") {
+      let best: Car | null = null; let bd = 1e9;
+      for (const id of m.marks) {
+        const c = this.cars.find((q) => q.id === id);
+        if (!c || c.state === "wreck") continue;
+        const d = dist2(c.x, c.y, this.camX, this.camY);
+        if (d < bd) { bd = d; best = c; }
+      }
+      return best ? { x: best.x, y: best.y } : null;
+    }
+    if (m.kind === "steal" && m.phase === 1) {
+      // point at the case, wherever it is: on the ground, or on whoever has it
+      const carrier = this.agents.find((a) => a.hp > 0 && a.inv.some((it) => it.type === "case"));
+      if (carrier) return m.zone ? { x: m.zone.x, y: m.zone.y } : null;
+      const d = this.drops.find((q) => q.item.type === "case");
+      return d ? { x: d.x, y: d.y } : null;
     }
     const vip = this.peds.find((p) => p.id === m.targetId);
     if (!vip || vip.state === "dead") return null;

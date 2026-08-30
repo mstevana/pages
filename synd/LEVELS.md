@@ -459,6 +459,74 @@ took the slab over its head away: -2 for the first line, -3 for the second.
 Clamp it to the slider's own range and the tap can never put the plane
 somewhere the slider cannot get back from.
 
+## Mission shapes
+
+Four more, chosen because each uses something the engine has and the older
+missions ignore, and because each asks a different verb of the player. All four
+run the length of a sector like the originals: the trek is the setup, the
+objective is the payoff.
+
+- **SEIZE THE CASE.** A courier walks a data case across the sector under a
+  three-man guard. Kill him or turn him and the case falls where he stood; any
+  agent picks it up and walks it to the extraction zone. It is the only mission
+  carrying something you can lose - an agent who dies drops it, and it can be
+  picked up again by anyone, including off the pavement where he fell.
+- **BURN THE MOTOR POOL.** Six marked vehicles, two of them parked in basement
+  garages. Wrecking the first one warns the rest, and every marked car still on
+  the street is driven out of the sector - so the order you take them in is the
+  whole tactical question. The two underground ones have no driver and will
+  wait for you, which makes them the safe money and the street ones the ones
+  under the clock.
+- **HOLD THE UPLINK.** A pad to stand on while a transmission runs. Waves come
+  at the pad rather than at the camera.
+- **INTERCEPT.** A defector crossing the sector on his way out. Kill him or
+  turn him before he reaches the boundary.
+
+Three things learned building them.
+
+**Diegetic pressure needs room to run.** The quarry in both SEIZE and INTERCEPT
+bolts for a map edge when he sees the squad, and the first version sent him to
+the *nearest* one. That is a thirty-tile sprint - ten seconds, uncatchable on
+foot, and decided before the player can react. It is a coin toss, not a chase.
+The exit is now the far edge, a hundred and fifty tiles or more, which is a
+minute of running: long enough to close on him, cut a corner, or go and find a
+car. He moves at 2.8 against an agent's 3.1, so a foot chase gains slowly and a
+car settles it.
+
+**What starts the clock should be the player's own mistake.** He does not run
+on a timer; he runs when he sees you, and seeing needs line of sight. Coming at
+him through the back streets gets you close enough to shoot, or even close
+enough for the Persuadertron's three tiles. Walking up the avenue does not.
+
+**A window has to be longer than what it asks for.** The uplink first ran for
+exactly the hold it required, which meant a single second spent off the pad put
+full pay permanently out of reach - a mission you can only lose, slowly, from
+the first shove. The transmission now runs 210 seconds and asks for 150 of
+them, so being pushed off costs the seconds it costs and nothing more. The
+crowd on the pad is capped as well: two dozen rivals standing on it is not
+difficult, it is finished. Capped at six nearby it is a sustained fight, and
+measured peaks sit at five to seven.
+
+## Botching rather than losing
+
+A mission is no longer all or nothing. `Mission.score` runs 0 to 1 and scales
+the completion bonus, and the debrief says what was missed: four of six
+vehicles burned pays two thirds, an uplink held 45% of its window pays 45%, a
+defector who reaches the boundary still pays the `ESCAPE_PAY` share for the
+fight. A wipe is still a wipe. The point is that the campaign carries on: the
+older missions could only be won or lost, and a lost one costs 1200cr an agent
+to rebuild from, which turns one bad run into three bad ones.
+
+## An order given where you already stand
+
+Orders are settled in `onArrive`, which fires at the end of a path - so an
+order given while the agent is already on the spot produced no path, never
+arrived, and was never settled. Telling an agent to pick up the thing at his
+feet left him standing over it for good. Any pending order with no path is now
+settled where he stands: in range it completes, out of range it is dropped
+rather than held forever. It was always broken; carrying a case to a zone is
+just the first mission that made it obvious.
+
 ## Friendly fire
 
 Every weapon but one fires a projectile, and projectiles have always skipped

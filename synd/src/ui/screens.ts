@@ -30,6 +30,7 @@ export const WEATHER_LABEL: Record<Weather, string> = {
 };
 export const OBJECTIVE_LABEL: Record<ObjectiveKind, string> = {
   assassinate: "ASSASSINATE", persuade: "PERSUADE & EXTRACT", escort: "ESCORT", killall: "PURGE SECTOR",
+  steal: "SEIZE THE CASE", sabotage: "BURN THE MOTOR POOL", hold: "HOLD THE UPLINK", intercept: "INTERCEPT",
 };
 
 export function showMenu(hasSave: boolean, onStart: (cont: boolean) => void): void {

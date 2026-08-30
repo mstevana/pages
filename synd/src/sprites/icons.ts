@@ -172,6 +172,24 @@ const ART: Record<ItemType, string[]> = {
     "................",
     "................",
   ],
+  case: [
+    "................",
+    "................",
+    "......KKKK......",
+    "......KLLK......",
+    "...KKKKKKKKKK...",
+    "...KAAAAAAAAK...",
+    "...KABBBBBBAK...",
+    "...KABMMMMBAK...",
+    "...KABMWWMBAK...",
+    "...KABMMMMBAK...",
+    "...KABBBBBBAK...",
+    "...KAAAAAAAAK...",
+    "...KKKKKKKKKK...",
+    "................",
+    "................",
+    "................",
+  ],
 };
 
 function lighten(hex: string, f: number): string {

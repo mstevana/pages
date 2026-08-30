@@ -2,7 +2,8 @@
 
 export type ItemType =
   | "gun" | "uzi" | "minigun" | "shotgun" | "laser" | "gauss"
-  | "shield" | "medkit" | "persuadertron";
+  | "shield" | "medkit" | "persuadertron"
+  | "case";                  // mission cargo: carried, never bought or sold
 
 export interface ItemDef {
   type: ItemType;
@@ -30,6 +31,10 @@ export const ITEMS: Record<ItemType, ItemDef> = {
   shield:        { type: "shield",        name: "SHIELD BELT",   short: "SHLD", weapon: false, charge: 100, damage: 0,  range: 0,  cooldown: 0,    pellets: 0, spread: 0,    speed: 0,  price: 1200, color: "#7affc8" },
   medkit:        { type: "medkit",        name: "MEDKIT",        short: "MED",  weapon: false, charge: 2,   damage: 0,  range: 0,  cooldown: 0,    pellets: 0, spread: 0,    speed: 0,  price: 300,  color: "#8cff7a" },
   persuadertron: { type: "persuadertron", name: "PERSUADERTRON", short: "PSDR", weapon: false, charge: 100, damage: 0,  range: 3.2, cooldown: 0,   pellets: 0, spread: 0,    speed: 0,  price: 900,  color: "#d98cff" },
+  // Not a piece of kit: the thing a mission is about. Price 0 keeps it out of
+  // the market and worth nothing to sell, so the only way to cash it is to
+  // carry it to the extraction zone.
+  case:          { type: "case",          name: "DATA CASE",     short: "CASE", weapon: false, charge: 1,   damage: 0,  range: 0,   cooldown: 0,   pellets: 0, spread: 0,    speed: 0,  price: 0,    color: "#ffcc44" },
 };
 
 export interface ItemStack {

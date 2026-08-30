@@ -125,9 +125,17 @@ function trainUnder(sx: number, sy: number): Train | null {
 }
 
 function rollMission(): void {
-  const kinds: ObjectiveKind[] = ["assassinate", "persuade", "escort", "killall"];
+  // The harder shapes are held back a few missions: the first jobs a new
+  // syndicate takes should be ones a squad with pistols can finish.
+  const EARLY: ObjectiveKind[] = ["assassinate", "persuade", "escort", "killall", "steal", "intercept"];
+  const LATER: ObjectiveKind[] = ["sabotage", "hold"];
+  const kinds: ObjectiveKind[] = save.mission >= 3 ? [...EARLY, ...LATER] : EARLY;
   const q = new URLSearchParams(location.search);
-  const kind = (kinds.includes(q.get("kind") as ObjectiveKind) ? q.get("kind") : kinds[Math.floor(Math.random() * kinds.length)]) as ObjectiveKind;
+  // an explicit kind in the query string overrides the gate: it is how the
+  // tests reach a shape the campaign would not offer yet
+  const asked = q.get("kind") as ObjectiveKind | null;
+  const kind = (asked && [...EARLY, ...LATER].includes(asked)
+    ? asked : kinds[Math.floor(Math.random() * kinds.length)]) as ObjectiveKind;
   const weather = (WEATHERS.includes(q.get("weather") as Weather) ? q.get("weather") : WEATHERS[Math.floor(Math.random() * WEATHERS.length)]) as Weather;
   const seed = q.get("seed") ? Number(q.get("seed")) >>> 0 : (Math.random() * 0x7fffffff) | 0;
   const text = {
@@ -135,6 +143,10 @@ function rollMission(): void {
     persuade: "A key asset must join the syndicate. Get close with the Persuadertron, then walk them to the extraction zone alive.",
     escort: "A defector is waiting deep in the sector. Reach them and escort them back to the insertion point. Rivals will try to stop you.",
     killall: "A rival syndicate is contesting this sector with 30 field agents. Purge them all.",
+    steal: "A courier is walking a data case across this sector under guard. Take it off him and bring it to the extraction zone. He runs the moment he sees you.",
+    sabotage: "A rival motor pool is dispersed through this sector. Burn it. The first one you hit warns the rest, and anything on the street will be driven out.",
+    hold: "We need an uplink pad held while a transmission runs. Take the pad and keep it. We are paid for the share of the window you hold.",
+    intercept: "A defector is crossing this sector on his way out. Reach him before the boundary does. Kill him or turn him - either ends it.",
   }[kind];
   pending = { seed, kind, weather, text };
 }
@@ -483,6 +495,18 @@ function handlePanelTap(hit: ReturnType<Panel["hit"]>): void {
       if (m.kind === "killall") status = `${m.enemiesLeft} HOSTILE AGENTS REMAIN`;
       else if (m.kind === "persuade") status = w.peds.find((q) => q.id === m.targetId)?.persuaded ? "TARGET PERSUADED - REACH EXTRACTION" : "TARGET NOT YET PERSUADED";
       else if (m.kind === "escort") status = m.phase === 1 ? "VIP SECURED - RETURN TO INSERTION POINT" : "VIP NOT YET REACHED";
+      else if (m.kind === "steal") {
+        status = m.phase === 0 ? (m.alerted ? "COURIER RUNNING FOR THE BOUNDARY" : "COURIER HAS NOT SEEN YOU")
+          : w.agents.some((a) => a.hp > 0 && a.inv.some((it) => it.type === "case"))
+            ? "CASE IN HAND - REACH EXTRACTION" : "CASE ON THE GROUND - PICK IT UP";
+      } else if (m.kind === "sabotage") {
+        status = `${m.wrecked}/${m.marks.length} DESTROYED` + (m.escaped > 0 ? ` - ${m.escaped} DRIVEN OUT` : "");
+      } else if (m.kind === "hold") {
+        status = m.phase === 0 ? "REACH THE UPLINK PAD"
+          : `UPLINK ${Math.min(100, (m.held / 150) * 100) | 0}% - ${Math.max(0, m.window) | 0}s OF WINDOW LEFT`;
+      } else if (m.kind === "intercept") {
+        status = m.alerted ? "DEFECTOR RUNNING FOR THE BOUNDARY" : "DEFECTOR HAS NOT SEEN YOU";
+      }
       else status = "TARGET AT LARGE";
       status += `<br>POLICE IN SECTOR: ${Math.max(0, w.policeTotal - w.policeLost)} / ${w.policeTotal}`;
       screens.showObjectives(save.mission, m.kind, m.text, status, () => {
