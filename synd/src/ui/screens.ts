@@ -3,7 +3,9 @@
 import { GRID, Weather } from "../engine/util";
 import { ITEMS, ItemType, newItem, reloadCost, sellValue } from "../game/items";
 import { itemIconUrls } from "../sprites/icons";
-import { SaveData, newAgentName } from "../game/save";
+import { SaveData, newAgentName, writeSave } from "../game/save";
+import { IMPLANTS, IMPLANT_PARTS, ImplantPart, RESEARCH, RESEARCH_ALL, ResearchNode,
+         canResearch, implantNodeId, isResearched, itemResearched, noImplants } from "../game/research";
 import { MissionResult, ObjectiveKind } from "../game/world";
 
 const ui = () => document.getElementById("ui") as HTMLDivElement;
@@ -59,7 +61,9 @@ export function showBriefing(
   weather: Weather,
   text: string,
   onLaunch: () => void,
-  onArmory: () => void
+  onArmory: () => void,
+  onResearch: () => void,
+  onImplants: () => void
 ): void {
   clearScreens();
   const icons = itemIconUrls();
@@ -88,12 +92,16 @@ export function showBriefing(
       ${roster}
     </table>
     <div>
+      <button id="research" class="ghost">Research</button>
+      <button id="implants" class="ghost">Implants</button>
       <button id="armory" class="ghost">Armory</button>
       <button id="launch">Begin Mission</button>
     </div>
   `);
   on(s, "#launch", onLaunch);
   on(s, "#armory", onArmory);
+  on(s, "#research", onResearch);
+  on(s, "#implants", onImplants);
 }
 
 export function showArmory(save: SaveData, onDone: () => void): void {
@@ -141,6 +149,15 @@ export function showArmory(save: SaveData, onDone: () => void): void {
     }
 
     const market = BUY.map((t, i) => {
+      // the lab decides the catalogue: an unresearched item shows as a locked
+      // silhouette, so the market doubles as a map of what research can open
+      if (!itemResearched(save.research, t)) {
+        return `<div class="arm-card locked" title="${ITEMS[t].name} - RESEARCH REQUIRED">
+                  <img src="${icons[t]}" alt="${ITEMS[t].name}">
+                  <span class="arm-name">${ITEMS[t].short}</span>
+                  <span class="arm-cost">LAB</span>
+                </div>`;
+      }
       const on = pick && pick.where === "shop" && pick.idx === i ? "on" : "";
       const afford = save.credits >= ITEMS[t].price;
       return `<div class="arm-card pickshop ${on} ${afford ? "afford" : "poor"}" data-i="${i}" data-t="${t}" title="${ITEMS[t].name}">
@@ -213,6 +230,7 @@ export function showArmory(save: SaveData, onDone: () => void): void {
       const [it] = ag.inv.splice(pick.idx, 1);
       save.credits += sellValue(it);
       pick = null;
+      writeSave(save);
       render();
     });
     on(s, "#act-rld", () => {
@@ -223,15 +241,18 @@ export function showArmory(save: SaveData, onDone: () => void): void {
       if (cost <= 0 || save.credits < cost) return;
       save.credits -= cost;
       it.charge = ITEMS[it.type].charge;
+      writeSave(save);
       render();
     });
     on(s, "#act-buy", () => {
       const ag = save.agents[agentIdx];
       if (!pick || pick.where !== "shop" || !ag.alive) return;
       const t = BUY[pick.idx];
+      if (!itemResearched(save.research, t)) return;
       if (ag.inv.length >= 8 || save.credits < ITEMS[t].price) return;
       save.credits -= ITEMS[t].price;
       ag.inv.push(newItem(t));
+      writeSave(save);
       render();
     });
     on(s, "#hire", () => {
@@ -239,7 +260,217 @@ export function showArmory(save: SaveData, onDone: () => void): void {
       save.credits -= HIRE_COST;
       const ag = save.agents[agentIdx];
       ag.alive = true; ag.hp = 100; ag.inv = [newItem("gun")];
+      ag.implants = noImplants();   // the chrome went into the ground with the last one
       ag.name = newAgentName(save.agents.map((x) => x.name));
+      writeSave(save);
+      render();
+    });
+    on(s, "#done", onDone);
+  };
+  render();
+}
+
+// ---- the lab: a tree of things money turns into capability ----
+export function showResearch(save: SaveData, onDone: () => void): void {
+  clearScreens();
+  let pick: string | null = null;   // selected node id
+
+  const render = () => {
+    clearScreens();
+    const state = (id: string): "done" | "open" | "locked" =>
+      isResearched(save.research, id) ? "done" : canResearch(save.research, id) ? "open" : "locked";
+
+    const node = (n: ResearchNode): string => {
+      const st = state(n.id);
+      const on = pick === n.id ? "on" : "";
+      const cost = st === "done" ? "&#10003;" : `${n.cost}`;
+      return `<div class="res-node ${st} ${on}" data-id="${n.id}" title="${n.name}">
+                <span class="res-name">${n.name}</span>
+                <span class="res-cost">${st === "locked" ? "&#128274;" : cost}</span>
+              </div>`;
+    };
+    const chain = (ids: string[]): string =>
+      ids.map((id) => node(RESEARCH_ALL.get(id)!)).join(`<span class="res-link">&#9660;</span>`);
+
+    const branch = (title: string, body: string): string =>
+      `<div class="res-branch"><div class="arm-sec">${title}</div>${body}</div>`;
+
+    // implants read as four short chains, MK I to III left to right
+    const impRows = IMPLANT_PARTS.map((part) => {
+      const line = IMPLANTS[part];
+      const marks = [1, 2, 3].map((mk) => {
+        const id = implantNodeId(part, mk);
+        const st = state(id);
+        const on = pick === id ? "on" : "";
+        return `<div class="res-node mini ${st} ${on}" data-id="${id}" title="${line.name} MK.${"I".repeat(mk)}">
+                  <span class="res-name">MK.${"I".repeat(mk)}</span>
+                  <span class="res-cost">${st === "done" ? "&#10003;" : st === "locked" ? "&#128274;" : line.marks[mk - 1].researchCost}</span>
+                </div>`;
+      }).join("");
+      return `<div class="res-imp-row"><span class="res-imp-name">${line.name}</span>${marks}</div>`;
+    }).join("");
+
+    // ---- action bar ----
+    let bar = `<span class="arm-info dim">SELECT A PROJECT TO FUND</span>`;
+    if (pick) {
+      const n = RESEARCH_ALL.get(pick)!;
+      const st = state(n.id);
+      const why = st === "done" ? "RESEARCHED"
+        : st === "locked" ? `REQUIRES ${RESEARCH_ALL.get(n.req!)!.name}`
+        : save.credits < n.cost ? "NOT ENOUGH CREDITS" : "";
+      bar = `<span class="arm-info">${n.name} &middot; ${n.desc}${why ? ` &middot; <b style="color:${st === "done" ? "#4fdc6a" : "#e04040"}">${why}</b>` : ""}</span>
+             ${st === "open" ? `<button id="act-res" class="${save.credits >= n.cost ? "buy" : "ghost"}">RESEARCH &minus;${n.cost}</button>` : ""}`;
+    }
+
+    const s = screen(`
+      <div class="arm-top">
+        <h2>RESEARCH</h2>
+        <span class="arm-funds">${save.credits}cr</span>
+        <span class="arm-spacer"></span>
+        <button id="done">Back</button>
+      </div>
+      <div class="res-cols">
+        ${branch("GUNS", chain(["uzi", "shotgun", "minigun"]))}
+        ${branch("TECH WEAPONS", chain(["laser", "gauss"]))}
+        ${branch("DEFENSE", chain(["medkit", "shield", "psdr"]))}
+        ${branch("BODY IMPLANTS", impRows)}
+      </div>
+      <div class="arm-actbar">${bar}</div>
+    `);
+    s.classList.add("armory");
+
+    s.querySelectorAll(".res-node").forEach((el) =>
+      el.addEventListener("click", () => { pick = (el as HTMLElement).dataset.id ?? null; render(); })
+    );
+    on(s, "#act-res", () => {
+      if (!pick || !canResearch(save.research, pick)) return;
+      const n = RESEARCH_ALL.get(pick)!;
+      if (save.credits < n.cost) return;
+      save.credits -= n.cost;
+      save.research.push(n.id);
+      writeSave(save);
+      render();
+    });
+    on(s, "#done", onDone);
+  };
+  render();
+}
+
+// ---- the clinic: buy researched implant marks and bolt them into an agent ----
+export function showImplants(save: SaveData, onDone: () => void): void {
+  clearScreens();
+  let agentIdx = save.agents.findIndex((a) => a.alive);
+  if (agentIdx < 0) agentIdx = 0;
+  let pick: ImplantPart | null = null;
+
+  const render = () => {
+    clearScreens();
+    const a = save.agents[agentIdx];
+    if (!a.implants) a.implants = noImplants();
+
+    const tabs = save.agents.map((ag, i) =>
+      `<button class="agent-tab ${i === agentIdx ? "" : "ghost"}" data-i="${i}">${ag.name}${ag.alive ? "" : " &dagger;"}</button>`
+    ).join("");
+
+    // the doll: a blocky agent with one tappable region per body part
+    const region = (part: ImplantPart, cls: string, label: string): string => {
+      const mk = a.implants[part];
+      const on = pick === part ? "on" : "";
+      return `<div class="doll-part ${cls} ${on} ${mk > 0 ? "chromed" : ""}" data-part="${part}">
+                <span class="doll-label">${label}</span>
+                <span class="doll-mk">${mk > 0 ? "MK." + "I".repeat(mk) : "&mdash;"}</span>
+              </div>`;
+    };
+    const doll = a.alive ? `
+      <div class="doll">
+        <div class="doll-head"></div>
+        ${region("eyes", "doll-eyes", "EYES")}
+        <div class="doll-armrow">
+          ${region("arms", "doll-arms", "ARMS")}
+          ${region("torso", "doll-torso", "TORSO")}
+        </div>
+        ${region("legs", "doll-legs", "LEGS")}
+      </div>` : `<div class="arm-sec">AGENT DECEASED &middot; HIRE AT THE ARMORY</div>`;
+
+    // catalogue: the four lines with each researched mark as a card
+    const lines = IMPLANT_PARTS.map((part) => {
+      const line = IMPLANTS[part];
+      const cur = a.implants[part];
+      const marks = [1, 2, 3].map((mk) => {
+        const m = line.marks[mk - 1];
+        const researched = isResearched(save.research, implantNodeId(part, mk));
+        const fitted = cur >= mk;
+        const on = pick === part && !fitted && researched ? "" : "";
+        if (!researched) return `<div class="arm-card locked mini" title="${line.name} MK.${"I".repeat(mk)} - RESEARCH REQUIRED">
+            <span class="arm-name">MK.${"I".repeat(mk)}</span><span class="arm-cost">LAB</span></div>`;
+        if (fitted) return `<div class="arm-card done mini" title="INSTALLED">
+            <span class="arm-name">MK.${"I".repeat(mk)}</span><span class="arm-cost">&#10003;</span></div>`;
+        const afford = save.credits >= m.price;
+        return `<div class="arm-card mini ${afford ? "afford" : "poor"}" title="${m.label}">
+            <span class="arm-name">MK.${"I".repeat(mk)}</span><span class="arm-cost">${m.price}</span></div>`;
+      }).join("");
+      const on = pick === part ? "on" : "";
+      return `<div class="imp-line pickpart ${on}" data-part="${part}">
+                <span class="imp-name">${line.name}</span>${marks}
+              </div>`;
+    }).join("");
+
+    // ---- action bar: the next mark for the picked part ----
+    let bar = `<span class="arm-info dim">SELECT A BODY PART TO UPGRADE</span>`;
+    if (pick && a.alive) {
+      const line = IMPLANTS[pick];
+      const cur = a.implants[pick];
+      if (cur >= 3) {
+        bar = `<span class="arm-info">${line.name} &middot; MK.III FITTED &middot; <b style="color:#4fdc6a">FULLY UPGRADED</b></span>`;
+      } else {
+        const mk = cur + 1;
+        const m = line.marks[mk - 1];
+        const researched = isResearched(save.research, implantNodeId(pick, mk));
+        const why = !researched ? "RESEARCH REQUIRED" : save.credits < m.price ? "NOT ENOUGH CREDITS" : "";
+        bar = `<span class="arm-info">${line.name} MK.${"I".repeat(mk)} &middot; ${m.label}${why ? ` &middot; <b style="color:#e04040">${why}</b>` : ""}</span>
+               <button id="act-fit" class="${why ? "ghost" : "buy"}">INSTALL &minus;${m.price}</button>`;
+      }
+    }
+
+    const s = screen(`
+      <div class="arm-top">
+        <h2>IMPLANTS</h2>
+        <span class="arm-funds">${save.credits}cr</span>
+        <span class="arm-spacer"></span>
+        <button id="done">Back</button>
+      </div>
+      <div class="arm-tabs">${tabs}</div>
+      <div class="imp-cols">
+        <div class="arm-col">
+          <div class="arm-sec">SUBJECT &middot; ${a.name}</div>
+          ${doll}
+        </div>
+        <div class="arm-col">
+          <div class="arm-sec">CATALOGUE</div>
+          ${lines}
+        </div>
+      </div>
+      <div class="arm-actbar">${bar}</div>
+    `);
+    s.classList.add("armory");
+
+    s.querySelectorAll(".agent-tab").forEach((el) =>
+      el.addEventListener("click", () => { agentIdx = Number((el as HTMLElement).dataset.i); pick = null; render(); })
+    );
+    s.querySelectorAll(".doll-part, .imp-line").forEach((el) =>
+      el.addEventListener("click", () => { pick = (el as HTMLElement).dataset.part as ImplantPart; render(); })
+    );
+    on(s, "#act-fit", () => {
+      const ag = save.agents[agentIdx];
+      if (!pick || !ag.alive) return;
+      const cur = ag.implants[pick];
+      if (cur >= 3) return;
+      const mk = cur + 1;
+      const m = IMPLANTS[pick].marks[mk - 1];
+      if (!isResearched(save.research, implantNodeId(pick, mk)) || save.credits < m.price) return;
+      save.credits -= m.price;
+      ag.implants[pick] = mk;
+      writeSave(save);
       render();
     });
     on(s, "#done", onDone);

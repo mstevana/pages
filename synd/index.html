@@ -128,6 +128,63 @@
   .arm-card.poor { opacity:0.38; cursor:default; }
   .arm-name { display:block; font-size: clamp(7px, 1.5vmin, 11px); color:#c3ccd6; letter-spacing:0.05em; }
   .arm-cost { display:block; font-size: clamp(7px, 1.6vmin, 12px); color:#ff9b2f; }
+  .arm-card.locked { opacity:0.32; cursor:default; border-style:dashed; }
+  .arm-card.locked img { filter: grayscale(1) brightness(0.7); }
+  .arm-card.done { border-color:#2f8648; cursor:default; }
+  .arm-card.done .arm-cost { color:#4fdc6a; }
+  .arm-card.mini { display:inline-flex; align-items:baseline; gap:0.8vmin; padding:0.6vmin 1.2vmin; margin:0 0.4vmin; }
+
+  /* ---- research tree ---- */
+  .res-cols {
+    display:grid; grid-template-columns: 1fr 1fr 1fr 1.6fr; gap:2vmin;
+    width:100%; max-width:1100px; margin-top:1vmin; align-items:start;
+    flex:1; min-height:0; overflow-y:auto;
+  }
+  .res-branch { display:flex; flex-direction:column; align-items:center; }
+  .res-branch .arm-sec { margin-top:0; }
+  .res-node {
+    width:100%; box-sizing:border-box; display:flex; justify-content:space-between; align-items:center;
+    gap:1vmin; padding:1vmin 1.4vmin; border:1px solid #2f4b5c; background:#141a22; cursor:pointer;
+  }
+  .res-node .res-name { font-size: clamp(8px, 1.9vmin, 14px); color:#c3ccd6; letter-spacing:0.05em; text-align:left; }
+  .res-node .res-cost { font-size: clamp(8px, 1.8vmin, 13px); color:#ff9b2f; }
+  .res-node.done { border-color:#2f8648; }
+  .res-node.done .res-cost { color:#4fdc6a; }
+  .res-node.locked { opacity:0.38; }
+  .res-node.open:hover { border-color:#ff9b2f; }
+  .res-node.on { border-color:#ff9b2f; background:#3a2410; }
+  .res-link { color:#2f4b5c; font-size: clamp(7px, 1.6vmin, 12px); line-height:1.4; }
+  .res-imp-row { display:flex; align-items:center; gap:0.8vmin; width:100%; margin-bottom:0.8vmin; }
+  .res-imp-name { flex:1; text-align:left; font-size: clamp(7px, 1.7vmin, 12px); color:#9fb2c0; letter-spacing:0.06em; }
+  .res-node.mini { width:auto; padding:0.7vmin 1vmin; gap:0.7vmin; }
+
+  /* ---- implant clinic ---- */
+  .imp-cols {
+    display:grid; grid-template-columns: minmax(0,4fr) minmax(0,8fr); gap:2.4vmin;
+    width:100%; max-width:1100px; margin-top:0.6vmin; flex:1; min-height:0; overflow-y:auto; align-items:start;
+  }
+  .doll { display:flex; flex-direction:column; align-items:center; gap:0.6vmin; margin-top:0.6vmin; }
+  .doll-head { width:6vmin; height:5vmin; background:#2a3340; border:1px solid #3d4c5e; border-radius:1vmin 1vmin 0 0; }
+  .doll-part {
+    border:1px solid #2f4b5c; background:#141a22; cursor:pointer; text-align:center;
+    display:flex; flex-direction:column; justify-content:center; gap:0.2vmin; padding:0.6vmin;
+  }
+  .doll-part:hover, .imp-line:hover { border-color:#ff9b2f; }
+  .doll-part.on, .imp-line.on { border-color:#ff9b2f; background:#3a2410; }
+  .doll-part.chromed { border-color:#25e0ff; }
+  .doll-part.chromed .doll-mk { color:#25e0ff; }
+  .doll-eyes { width:10vmin; height:4.4vmin; }
+  .doll-armrow { display:flex; gap:0.6vmin; }
+  .doll-arms { width:7vmin; height:11vmin; }
+  .doll-torso { width:10vmin; height:11vmin; }
+  .doll-legs { width:10vmin; height:9vmin; }
+  .doll-label { font-size: clamp(6px, 1.4vmin, 10px); color:#5f7d8c; letter-spacing:0.1em; }
+  .doll-mk { font-size: clamp(8px, 1.9vmin, 14px); color:#c3ccd6; }
+  .imp-line {
+    display:flex; align-items:center; gap:0.6vmin; border:1px solid #2f4b5c; background:#141a22;
+    padding:0.8vmin 1.2vmin; margin-bottom:0.9vmin; cursor:pointer;
+  }
+  .imp-name { flex:1; text-align:left; font-size: clamp(8px, 1.9vmin, 14px); color:#c3ccd6; letter-spacing:0.05em; }
 </style>
 </head>
 <body>

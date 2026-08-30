@@ -13,7 +13,7 @@ import * as screens from "./ui/screens";
 import { PeopleAtlas, buildPeople } from "./sprites/people";
 import { TileArt, buildTileArt } from "./sprites/tiles";
 
-type State = "menu" | "briefing" | "armory" | "loading" | "mission" | "paused" | "objectives" | "debrief" | "gameover";
+type State = "menu" | "briefing" | "armory" | "research" | "implants" | "loading" | "mission" | "paused" | "objectives" | "debrief" | "gameover";
 
 const canvas = document.getElementById("game") as HTMLCanvasElement;
 const g = ctx2d(canvas);
@@ -155,12 +155,22 @@ function gotoBriefing(): void {
   if (!pending) rollMission();
   state = "briefing";
   writeSave(save);
-  screens.showBriefing(save, pending!.kind, pending!.weather, pending!.text, launchMission, gotoArmory);
+  screens.showBriefing(save, pending!.kind, pending!.weather, pending!.text, launchMission, gotoArmory, gotoResearch, gotoImplants);
 }
 
 function gotoArmory(): void {
   state = "armory";
   screens.showArmory(save, gotoBriefing);
+}
+
+function gotoResearch(): void {
+  state = "research";
+  screens.showResearch(save, gotoBriefing);
+}
+
+function gotoImplants(): void {
+  state = "implants";
+  screens.showImplants(save, gotoBriefing);
 }
 
 function launchMission(): void {

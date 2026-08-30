@@ -994,3 +994,35 @@ for a few tiles, fading to nothing, so the grid does not read as a hard
 rectangular cut and the turnaround sits on a road that looks like it carries
 on out of the sector. It is drawn only at street level and has no tile or lane
 behind it.
+
+## Research, implants, and the gated armory
+
+Between missions the franchise now runs a lab. Money is the only resource: a
+project is bought outright on the research screen, gated by the node before it
+in its branch. Four branches -- guns (UZI > SHOTGUN > MINIGUN), tech weapons
+(LASER > GAUSS), defense (MEDKIT > SHIELD BELT > PERSUADERTRON), and body
+implants, one chain of three marks per body part. The pistol is standard
+issue and needs no research; nothing else can be bought at the armory until
+the lab delivers it. Unresearched market cards show as locked silhouettes, so
+the armory doubles as a map of what research can open. Loot is exempt: a
+minigun taken off a corpse works no matter whose lab it came from.
+
+Implants are researched per part and per mark, then bought and installed on
+an agent at the clinic -- a doll with a tappable region per body part, MK
+badges on both the doll and the catalogue. They die with the agent: a hired
+replacement arrives bare. What the marks do in the field:
+
+  LEG SERVOS        +15/30/50% move speed
+  CHEST PLATING     +50/100/150 max HP (the panel bar already scales by maxHp)
+  ARM ACTUATORS     weapon cooldown x0.85/0.65/0.5
+  TARGETING OPTICS  reaction delay x0.6/0.35/0.1
+
+The optics needed a baseline to cut: an agent acquiring a fresh target now
+takes a 0.3-0.55s draw before auto-fire opens up (NPCs have always had
+0.55-0.95s). An explicit fire order never waits -- an order is aimed by the
+player, not the agent. Measured on the range: time to first shot 367ms bare
+against 50ms with MK.III optics; an UZI puts out 30 rounds in 3s bare and 60
+with MK.III actuators; a manual order fires on frame 0 either way.
+
+Old saves migrate: a campaign from before the lab loads with an empty tree
+and bare agents, and every purchase writes the save immediately.

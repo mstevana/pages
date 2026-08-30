@@ -6,6 +6,7 @@ import { AudioEngine } from "../engine/audio";
 import { Rng } from "../engine/rng";
 import { GRID, Weather, clamp, dist, dist2 } from "../engine/util";
 import { CAR_MODELS } from "../sprites/cars";
+import { armFireMult, eyeAimMult, legSpeedMult, torsoHpBonus } from "./research";
 import { ITEMS, ItemStack, ItemType, copDrop, enemyDrop, newItem, weaponDps } from "./items";
 import { Pathfinder } from "./pathfind";
 import { SaveData } from "./save";
@@ -45,6 +46,8 @@ export interface Ped {
   weapon: ItemType | null; // for cops/enemies
   // player agents only
   agentIdx: number;        // 0..3, -1 otherwise
+  fireMult: number;        // × weapon cooldown (arm implants bring it under 1)
+  aimMult: number;         // × reaction delay before auto-fire (eye implants)
   inv: ItemStack[];
   sel: number;             // selected inventory index, -1 none
   shieldOn: boolean;
@@ -273,6 +276,7 @@ const NPC_RANGE_MULT = 0.85;      // hostiles engage 15% closer than the weapon'
 const NPC_ACCURACY = 0.85;        // ...and are 15% less accurate (wider cone)
 const NPC_SPREAD_MULT = 1 / NPC_ACCURACY;
 const NPC_AIM_MIN = 0.55, NPC_AIM_MAX = 0.95; // reaction time before the first shot
+const AGENT_AIM_MIN = 0.3, AGENT_AIM_MAX = 0.55; // an agent's own draw, cut by eye implants
 
 export class World {
   rng: Rng;
@@ -323,11 +327,15 @@ export class World {
       if (!sa || !sa.alive) { this.agents.push(this.makeDeadPlaceholder(i)); continue; }
       const p = this.makePed("player", start.x + (i % 2) * 1.2 - 0.6, start.y + Math.floor(i / 2) * 1.2 - 0.6);
       p.agentIdx = i;
-      p.hp = AGENT_HP; // every agent deploys at full health
-      p.maxHp = AGENT_HP;
+      // chrome: whatever is bolted into this agent shapes the body deployed
+      const imp = sa.implants ?? { legs: 0, torso: 0, arms: 0, eyes: 0 };
+      p.maxHp = AGENT_HP + torsoHpBonus(imp.torso);
+      p.hp = p.maxHp; // every agent deploys at full health
       p.inv = sa.inv.map((s) => ({ ...s }));
       p.sel = p.inv.findIndex((s) => ITEMS[s.type].weapon && s.charge > 0);
-      p.speed = 3.1;
+      p.speed = 3.1 * legSpeedMult(imp.legs);
+      p.fireMult = armFireMult(imp.arms);
+      p.aimMult = eyeAimMult(imp.eyes);
       this.agents.push(p);
       this.peds.push(p);
     }
@@ -598,6 +606,7 @@ export class World {
       hp: 30, maxHp: 30, state: "idle", path: null, pathIdx: 0,
       speed: 2.2, animT: 0, deadT: 0, thinkT: this.rng.float(0, 2),
       fleeFrom: null, blindT: 0, dodgeT: 0, dodgeSpeed: 0, homeX: -1, homeY: -1, fireCd: 0, aimT: 0, aimTargetId: null, weapon: null,
+      fireMult: 1, aimMult: 1,
       agentIdx: -1, inv: [], sel: -1, shieldOn: false, shield: 0,
       fireAt: null, dropOrder: null, pickOrder: null, giveOrder: null, carId: null, boardOrder: null,
       trainId: null, vip: false, persuaded: false, followId: null, hostileCop: false,
@@ -1106,7 +1115,7 @@ export class World {
     const def = ITEMS[wType];
     if (item && item.charge <= 0) return;
     if (item) item.charge--;
-    shooter.fireCd = def.cooldown;
+    shooter.fireCd = def.cooldown * shooter.fireMult;
     const dx = tx - shooter.x, dy = ty - shooter.y, dz = tz - shooter.z;
     const flat = Math.max(0.001, Math.sqrt(dx * dx + dy * dy));
     const len = Math.max(0.001, Math.sqrt(dx * dx + dy * dy + dz * dz));
@@ -2037,9 +2046,20 @@ export class World {
         best = t; bd = d2;
       }
       if (best) {
-        this.fireWeapon(p, weapon, weapon.type, best.x + this.rng.float(-0.2, 0.2),
-                        best.y + this.rng.float(-0.2, 0.2), 1, 1, best.z);
-        if (!p.path) p.dir = this.dirOf(best.x - p.x, best.y - p.y);
+        // A new target takes a beat to acquire - the draw the eye implants
+        // shorten. An explicit fire order above never waits: an order is aimed
+        // by the player, not the agent.
+        if (p.aimTargetId !== best.id) {
+          p.aimTargetId = best.id;
+          p.aimT = this.rng.float(AGENT_AIM_MIN, AGENT_AIM_MAX) * p.aimMult;
+        }
+        if (p.aimT <= 0) {
+          this.fireWeapon(p, weapon, weapon.type, best.x + this.rng.float(-0.2, 0.2),
+                          best.y + this.rng.float(-0.2, 0.2), 1, 1, best.z);
+          if (!p.path) p.dir = this.dirOf(best.x - p.x, best.y - p.y);
+        }
+      } else {
+        p.aimTargetId = null;   // breaking contact forfeits the draw
       }
     }
   }
