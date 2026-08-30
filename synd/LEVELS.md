@@ -828,6 +828,32 @@ kinds, so the count you can observe is bounded by that, not by the pool.
 Shopfronts are the exception -- there are eighteen hundred of them, and all
 96 designs show up.
 
+## Lights
+
+Every car used to carry a flat bar of light across the nose, drawn at the very
+tip of the body and the full width of it. At the tip the hull plan has no
+width at all, so the bar was a plate of light hanging in the air ahead of the
+car -- on all 28 models, and by as much as a third of a tile clear of any
+bodywork on the worst of them. The blade models hung a second plate in front
+of that one.
+
+Both are gone. A car now carries spot lamps set into the panel: a bezel of
+shadowed bodywork, a lens, the pip where the reflector catches the sky, and
+the bloom through the shared emissive pass. `lamps` says one big round unit
+per side or two in a cluster; where each lamp sits is derived from the hull
+plan's own half-width at that point, so a lamp is always in bodywork that is
+actually there. A lamp on the end or the flank turned away from the camera is
+not drawn.
+
+## Bullfrog shell detail
+
+The shell is one moulded piece, so everything that makes it read as a vehicle
+has to be set into that piece. It carries a wrapped screen band with a frame
+top and bottom rather than a single scribed line, one shut line down each
+flank, a rubbing strip round the sill, louvres over the tail and classic
+round quad lamps. Each is drawn only over the half of the body turned toward
+the camera -- on a closed surface, the far side would otherwise show through.
+
 ## Fleet size
 
 The fleet is 28 chassis, not 24. It grew rather than rotated: adding the

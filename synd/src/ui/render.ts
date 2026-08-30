@@ -2124,7 +2124,6 @@ export class Renderer {
       }
       return out;
     };
-    const tw = W * (1 - m.taper);
     if (m.skirt) {                                   // ground-effect flare
       extrude([[L * 0.82, W * 1.16], [L * 0.82, -W * 1.16], [-L * 0.82, -W * 1.16], [-L * 0.82, W * 1.16]],
               lift - 1.4 * z, lift + 1.8 * z, shade(m.body, 0.5), null);
@@ -2241,20 +2240,91 @@ export class Renderer {
          m.shell ? shade(m.body, 1.04) : glass,
          m.shell ? shade(m.body, 1.2) : (night ? "#243038" : shade(m.glassTint, 0.82)), cabRamp);
     if (m.shell) {
-      // a glazing line scribed round the shell where the screen would be
-      const band = cabPlan(Renderer.CAB_SEGS, 0.99)
-        .map(([df, dr]) => px(df, dr, lift + hullH + (cabTop - hullH) * 0.5 + cabRamp(df, 0.5)));
-      g.strokeStyle = night ? "rgba(120,170,200,0.5)" : shade(m.glassTint, 0.62);
-      g.lineWidth = Math.max(1, 1.1 * z);
-      g.beginPath();
-      let pen = false;
-      for (let k = 0; k <= Renderer.CAB_SEGS; k++) {
-        const q = band[k % Renderer.CAB_SEGS];
-        if (q[1] > sy - hullH * 0.2) {
-          if (pen) g.lineTo(q[0], q[1]); else { g.moveTo(q[0], q[1]); pen = true; }
-        } else pen = false;
+      // A shell is one moulded piece, so everything that makes it read as a
+      // vehicle has to be set into that piece: a wrapped screen rather than a
+      // scribed line, a shut line down the flank, a rubbing strip round the
+      // sill and louvres over the tail. Each is drawn only on the half of the
+      // body turned toward the camera, which is what stops the far side of a
+      // closed surface showing through it.
+      const R = Renderer.CAB_RINGS;
+      const ringScale = (hh: number): number => {
+        for (let i = 0; i < R.length - 1; i++) {
+          if (hh <= R[i + 1].h) {
+            const t = (hh - R[i].h) / Math.max(1e-6, R[i + 1].h - R[i].h);
+            return R[i].s + (R[i + 1].s - R[i].s) * t;
+          }
+        }
+        return R[R.length - 1].s;
+      };
+      // a point on the dome's surface, by angle round the body and height up it
+      const dome = (th: number, hh: number): [number, number] => {
+        const sc = ringScale(hh);
+        const ca = Math.cos(th), sa = Math.sin(th);
+        const gx = Math.sign(ca) * Math.abs(ca) ** 0.8, gy = Math.sign(sa) * Math.abs(sa) ** 0.8;
+        const df = cMid + cHalf * gx * sc, dr = cw * gy * sc;
+        return px(df, dr, lift + hullH + (cabTop - hullH) * hh + cabRamp(df, hh));
+      };
+      const SEG = 28;
+      // wrapped glazing: a band of screen round the shell, segment by segment
+      const glassCol = night ? "#1b2731" : shade(m.glassTint, 0.72);
+      const bandRef = px(0, 0, lift + hullH + (cabTop - hullH) * 0.52)[1];
+      for (let k = 0; k < SEG; k++) {
+        const t0 = (k / SEG) * Math.PI * 2, t1 = ((k + 1) / SEG) * Math.PI * 2;
+        const a = dome(t0, 0.36), b = dome(t1, 0.36);
+        const cU = dome(t1, 0.68), dU = dome(t0, 0.68);
+        if ((a[1] + b[1]) / 2 < bandRef) continue;   // far side of the shell
+        quad([a, b, cU, dU], glassCol);
       }
-      g.stroke();
+      // the screen's own frame, top and bottom, so the band has an edge
+      for (const hh of [0.36, 0.68]) {
+        g.strokeStyle = shade(m.body, hh > 0.5 ? 1.25 : 0.55);
+        g.lineWidth = Math.max(1, 0.6 * z);
+        g.beginPath();
+        let pen = false;
+        const ref = px(0, 0, lift + hullH + (cabTop - hullH) * hh)[1];
+        for (let k = 0; k <= SEG; k++) {
+          const q = dome((k / SEG) * Math.PI * 2, hh);
+          if (q[1] > ref) { if (pen) g.lineTo(q[0], q[1]); else { g.moveTo(q[0], q[1]); pen = true; } }
+          else pen = false;
+        }
+        g.stroke();
+      }
+      // shut line: the one panel gap on a body that has no other
+      for (const sgn of [1, -1]) {
+        const seam: [number, number][] = [];
+        for (let k = 0; k <= 6; k++) seam.push(dome(sgn * Math.PI / 2, 0.04 + k * 0.15));
+        const ref = px(0, 0, lift + hullH + (cabTop - hullH) * 0.5)[1];
+        if (seam[3][1] < ref) continue;
+        g.strokeStyle = shade(m.body, 0.6);
+        g.lineWidth = Math.max(1, 0.5 * z);
+        g.beginPath();
+        g.moveTo(seam[0][0], seam[0][1]);
+        for (let k = 1; k < seam.length; k++) g.lineTo(seam[k][0], seam[k][1]);
+        g.stroke();
+      }
+      // rubbing strip round the sill, and louvres over the tail
+      {
+        const strip = plan(Renderer.HULL_SEGS, 1.0)
+          .map(([df, dr]) => px(df, dr, lift + hullH * 0.34));
+        g.strokeStyle = shade(m.body, 0.46);
+        g.lineWidth = Math.max(1, 1.2 * z);
+        g.beginPath();
+        let pen = false;
+        for (let k = 0; k <= Renderer.HULL_SEGS; k++) {
+          const q = strip[k % Renderer.HULL_SEGS];
+          if (q[1] > sy) { if (pen) g.lineTo(q[0], q[1]); else { g.moveTo(q[0], q[1]); pen = true; } }
+          else pen = false;
+        }
+        g.stroke();
+      }
+      if (px(-L, 0, lift + hullH * 0.6)[1] >= px(0, 0, lift + hullH * 0.6)[1]) {
+        for (let k = 0; k < 3; k++) {
+          const h0 = lift + hullH * (0.5 + k * 0.13);
+          quad([px(-L * 0.9, W * 0.3, h0), px(-L * 0.9, -W * 0.3, h0),
+                px(-L * 0.9, -W * 0.3, h0 + 0.7 * z), px(-L * 0.9, W * 0.3, h0 + 0.7 * z)],
+               shade(m.body, 0.42));
+        }
+      }
     }
     // glasshouse: glazing carried down the flanks rather than a dome perched on
     // the deck, so there is a side window and a pillar to read
@@ -2280,21 +2350,6 @@ export class Renderer {
     g.beginPath();
     g.ellipse(gl[0], gl[1], glr, glr * 0.5, 0, 0, Math.PI * 2);
     g.fill();
-
-    // light blade: one unbroken bar across the nose and another across the tail,
-    // which is the cue that says "designed this decade" more than any other
-    if (m.blade) {
-      const nz = lift + hullH * 0.62 + wedgeAt(L * 0.95, 0.62);
-      const tz = lift + hullH * 0.72 + wedgeAt(-L * 0.95, 0.72);
-      g.globalCompositeOperation = night ? "lighter" : "source-over";
-      quad([px(L * 0.99, W * 0.62, nz), px(L * 0.99, -W * 0.62, nz),
-            px(L * 0.93, -W * 0.66, nz + 1.5 * z), px(L * 0.93, W * 0.66, nz + 1.5 * z)],
-           night ? "rgba(220,240,255,0.85)" : "#dfe9f2");
-      quad([px(-L * 0.99, W * 0.66, tz), px(-L * 0.99, -W * 0.66, tz),
-            px(-L * 0.93, -W * 0.7, tz + 1.4 * z), px(-L * 0.93, W * 0.7, tz + 1.4 * z)],
-           night ? "rgba(255,90,90,0.85)" : "#c8383c");
-      g.globalCompositeOperation = "source-over";
-    }
 
     // full-width cargo box: vans, haulers and armoured wagons
     if (m.cargo > 0) {
@@ -2366,17 +2421,56 @@ export class Renderer {
       g.fillRect(f3[0] - z * 0.6, f3[1] - z * 0.6, 1.2 * z, 2.2 * z);
     }
 
-    // ---- light bar across the nose + taillight strip ----
-    const hl = night ? "#fff8c8" : "#e8e8d0";
-    quad([px(L, tw * 0.9, lift + hullH * 0.55), px(L, -tw * 0.9, lift + hullH * 0.55),
-          px(L * 0.98, -tw * 0.9, lift + hullH * 0.8), px(L * 0.98, tw * 0.9, lift + hullH * 0.8)], hl);
-    quad([px(-L, W * 0.5, lift + hullH * 0.45), px(-L, -W * 0.5, lift + hullH * 0.45),
-          px(-L, -W * 0.5, lift + hullH * 0.72), px(-L, W * 0.5, lift + hullH * 0.72)], night ? "#ff3048" : "#c02838");
-    // bloom via the shared emissive pass
-    const hp = px(L, 0, lift + hullH * 0.68);
-    this.glow(hp[0], hp[1], 8 * z, "#fff4be", night ? 0.5 : 0.1);
-    const tp = px(-L, 0, lift + hullH * 0.58);
-    this.glow(tp[0], tp[1], 6.5 * z, "#ff3048", night ? 0.4 : 0.14);
+    // ---- headlamps and tail lamps ----
+    // Spot lamps sunk into the panel, not a bar hung off the nose: a bezel of
+    // shadowed bodywork, a lens inside it, the pip where the reflector catches
+    // the sky, and the bloom carried by the shared emissive pass. A lamp on the
+    // side of the car turned away from the camera is not drawn at all.
+    {
+      // half-width of the hull plan at a point along the body, so a lamp is
+      // set into the panel that is actually there rather than into thin air
+      const halfAt = (df: number): number => {
+        const u = Math.max(-0.999, Math.min(0.999, df / L));
+        const ca = Math.sign(u) * Math.abs(u) ** (1 / e);
+        const sa = Math.sqrt(Math.max(0, 1 - ca * ca));
+        const hip = 1 + m.hips * (0.34 * Math.exp(-((u + 0.42) ** 2) / 0.10)
+                                - 0.20 * Math.max(0, u) ** 1.5);
+        return W * sa ** e * hip * (1 - m.taper * Math.max(0, u));
+      };
+      const lamp = (df: number, dr: number, up: number, ref: number, r: number,
+                    lens: string, bloom: string, str: number) => {
+        const p = px(df, dr, up);
+        if (p[1] < ref - 0.4) return;                // this end, or this flank, faces away
+        g.fillStyle = shade(m.body, 0.4);            // the recess it sits in
+        g.beginPath(); g.ellipse(p[0], p[1], r * 1.4, r * 1.1, 0, 0, Math.PI * 2); g.fill();
+        g.fillStyle = lens;
+        g.beginPath(); g.ellipse(p[0], p[1], r, r * 0.78, 0, 0, Math.PI * 2); g.fill();
+        g.fillStyle = "rgba(255,255,255,0.72)";      // reflector pip
+        g.beginPath();
+        g.ellipse(p[0] - r * 0.3, p[1] - r * 0.26, r * 0.32, r * 0.26, 0, 0, Math.PI * 2);
+        g.fill();
+        this.glow(p[0], p[1], r * 4.5, bloom, str);
+      };
+      const nf = L * 0.88, tf = -L * 0.9;
+      const nw = halfAt(nf), tw2 = halfAt(tf);
+      const nz = lift + hullH * 0.56 + wedgeAt(nf, 0.56);
+      const tz = lift + hullH * 0.6 + wedgeAt(tf, 0.6);
+      const nRef = px(0, 0, nz)[1], tRef = px(0, 0, tz)[1];
+      const r0 = Math.max(0.9, W * TILE_W * 0.16 * z);
+      const lens = night ? "#fff6d2" : "#e8ecd4";
+      const rear = night ? "#ff4a56" : "#b8303c";
+      for (const s of [1, -1]) {
+        if (m.lamps >= 2) {
+          lamp(nf, nw * s * 0.42, nz, nRef, r0 * 0.66, lens, "#fff4be", night ? 0.34 : 0.07);
+          lamp(nf, nw * s * 0.8, nz, nRef, r0 * 0.66, lens, "#fff4be", night ? 0.34 : 0.07);
+          lamp(tf, tw2 * s * 0.46, tz, tRef, r0 * 0.55, rear, "#ff3048", night ? 0.26 : 0.09);
+          lamp(tf, tw2 * s * 0.84, tz, tRef, r0 * 0.55, rear, "#ff3048", night ? 0.26 : 0.09);
+        } else {
+          lamp(nf, nw * s * 0.64, nz, nRef, r0, lens, "#fff4be", night ? 0.46 : 0.1);
+          lamp(tf, tw2 * s * 0.66, tz, tRef, r0 * 0.8, rear, "#ff3048", night ? 0.34 : 0.12);
+        }
+      }
+    }
 
     // ---- rear hover thrusters with exhaust when moving, one pair per bank ----
     const banks: [number, number][] = [];
