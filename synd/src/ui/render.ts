@@ -406,6 +406,31 @@ export class Renderer {
       }
     }
 
+    // ---- road apron: past the border each avenue fades off the map, so the
+    // grid does not read as a hard rectangular cut and the turnaround loops sit
+    // on a road that looks like it carries on out of the sector. Purely
+    // cosmetic - no tile, no lane - and only at street level.
+    if (!(sectioned && section < 0)) {
+      const APRON = 5;
+      const strip = (bx: number, by: number, dx: number, dy: number, img: HTMLCanvasElement) => {
+        for (let k = 1; k <= APRON; k++) {
+          const sx = SX(bx + dx * k, by + dy * k) - tw / 2, sy = SY(bx + dx * k, by + dy * k);
+          if (sx > vx + vw || sx + tw < vx || sy > vy + vh || sy + th < vy) continue;
+          g.globalAlpha = 0.75 * (1 - (k - 0.5) / APRON);
+          g.drawImage(img, sx, sy, tw, th);
+        }
+        g.globalAlpha = 1;
+      };
+      for (const rx of this.city.vRoads) {
+        strip(rx, 0, 0, -1, art.roadDashV);       strip(rx + 1, 0, 0, -1, art.road);        // over the top
+        strip(rx, GRID - 1, 0, 1, art.roadDashV); strip(rx + 1, GRID - 1, 0, 1, art.road);   // under the bottom
+      }
+      for (const ry of this.city.hRoads) {
+        strip(0, ry, -1, 0, art.roadDashH);        strip(0, ry + 1, -1, 0, art.road);        // past the left
+        strip(GRID - 1, ry, 1, 0, art.roadDashH);  strip(GRID - 1, ry + 1, 1, 0, art.road);  // past the right
+      }
+    }
+
     // ---- collect entities bucketed by depth ----
     const buckets = new Map<number, Entity[]>();
     const push = (e: Entity) => {

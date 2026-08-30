@@ -454,6 +454,32 @@ export function generateCity(seed: number): City {
     carveRing(rx0, ry0, false);
   }
 
+  // ---- 2b. Edge turnarounds. An avenue runs clear to the map border, where a
+  // car in the outgoing lane would drive off the edge and wreck. Cap each end
+  // with a mini-roundabout: a point island (no tile of its own) with road all
+  // around it, two by two, that folds the arriving lane back into the departing
+  // one so traffic returns toward the centre. The four tiles circulate the same
+  // way any roundabout does; the tile that meets the departing avenue lane also
+  // carries that lane's direction - the exit a car takes going straight out of
+  // the loop. All four tiles are already paved road, so this only rewires who
+  // may leave each one.
+  const edgeTurn = (x0: number, y0: number, exitX: number, exitY: number, exitDir: number): void => {
+    const cells: [number, number, number][] = [
+      [x0, y0, D_S], [x0 + 1, y0, D_W], [x0, y0 + 1, D_E], [x0 + 1, y0 + 1, D_N],
+    ];
+    for (const [cx, cy] of cells) if (!inGrid(cx, cy) || tiles[idx(cx, cy)] !== T_ROAD) return;
+    for (const [cx, cy, d] of cells) { laneDir[idx(cx, cy)] = d; ringTiles.add(idx(cx, cy)); }
+    laneDir[idx(exitX, exitY)] |= exitDir;
+  };
+  for (const x of vRoads) {
+    edgeTurn(x, 0, x, 1, D_S);                       // top: peel off down the southbound lane
+    edgeTurn(x, GRID - 2, x + 1, GRID - 2, D_N);     // bottom: peel off up the northbound lane
+  }
+  for (const y of hRoads) {
+    edgeTurn(0, y, 1, y + 1, D_E);                   // left: peel off east along the eastbound lane
+    edgeTurn(GRID - 2, y, GRID - 2, y, D_W);         // right: peel off west along the westbound lane
+  }
+
   const placeRoundabout = (rx0: number, ry0: number): void => {
     carveRing(rx0, ry0, true);
   };

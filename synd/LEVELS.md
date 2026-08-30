@@ -974,3 +974,23 @@ are least buried in, so a queue opens up nose to tail without shouldering the
 next lane. Measured: worst body overlap for two queued limos falls from 1.48
 tiles to 0, traffic still reaches every junction, and parked-bay clearance
 even improves.
+
+## Edge turnarounds
+
+An avenue runs clear to the map border. The outgoing lane used to arrive at
+the edge with nowhere to go, and the car drove off and wrecked - 36 to 38
+such dead-end tiles per sector. Each avenue end now wears a mini-roundabout:
+a point island (no tile of its own) with road on all four sides, two by two,
+that folds the arriving lane back into the departing one so traffic returns
+toward the centre. The four tiles circulate like any roundabout; the one that
+meets the departing lane also carries that lane's direction, which is the exit
+a car takes going straight out of the loop. All four were already paved road,
+so this only rewires which way a car may leave each. Measured: off-map exit
+tiles fall from ~37 to 0, and a car driven into an edge turns around and heads
+back instead of wrecking, on every seed.
+
+The border itself gets a cosmetic apron: past the edge each avenue is redrawn
+for a few tiles, fading to nothing, so the grid does not read as a hard
+rectangular cut and the turnaround sits on a road that looks like it carries
+on out of the sector. It is drawn only at street level and has no tile or lane
+behind it.
