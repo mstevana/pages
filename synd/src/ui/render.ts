@@ -2014,9 +2014,14 @@ export class Renderer {
     const loft = (
       rings: { h: number; s: number }[], segs: number,
       plan: (segs: number, sc: number) => [number, number][],
-      base: number, height: number, col: string, topCol: string | null
+      base: number, height: number, col: string, topCol: string | null,
+      // Height added per point from where it sits along the body. This is what
+      // turns a slab into a wedge - a flat deck from nose to tail is the single
+      // thing that made every one of these read as a boat with a cabin on it.
+      ramp?: (df: number, up: number) => number
     ) => {
-      const pts = rings.map((r) => plan(segs, r.s).map(([df, dr]) => px(df, dr, base + r.h * height)));
+      const pts = rings.map((r) => plan(segs, r.s).map(([df, dr]) =>
+        px(df, dr, base + r.h * height + (ramp ? ramp(df, r.h) : 0))));
       const foot = pts[0];
       let minY = 1e9, maxY = -1e9;
       for (const p of foot) { minY = Math.min(minY, p[1]); maxY = Math.max(maxY, p[1]); }
@@ -2098,7 +2103,12 @@ export class Renderer {
         const ca = Math.cos(th), sa = Math.sin(th);
         const hx = L * Math.sign(ca) * Math.abs(ca) ** e;
         const hy = W * Math.sign(sa) * Math.abs(sa) ** e;
-        out.push([hx * sc, hy * sc * (1 - m.taper * Math.max(0, hx / L))]);
+        // haunches: push the widest part of the plan back over the rear axle,
+        // so the body has shoulders instead of being a lozenge
+        const u = hx / L;
+        const hip = 1 + m.hips * (0.34 * Math.exp(-((u + 0.42) ** 2) / 0.10)
+                                - 0.20 * Math.max(0, u) ** 1.5);
+        out.push([hx * sc, hy * sc * hip * (1 - m.taper * Math.max(0, u))]);
       }
       return out;
     };
@@ -2109,7 +2119,9 @@ export class Renderer {
     }
     // bodywork: rings stacked into a solid that tucks under at the sill and
     // crowns at the deck, so the flanks curve instead of standing flat
-    loft(Renderer.HULL_RINGS, Renderer.HULL_SEGS, plan, lift, hullH, m.body, shade(m.body, 1.14));
+    const wedgeAt = (df: number, up: number) =>
+      m.wedge === 0 ? 0 : m.wedge * z * up * (0.5 - 0.5 * (df / L));
+    loft(Renderer.HULL_RINGS, Renderer.HULL_SEGS, plan, lift, hullH, m.body, shade(m.body, 1.14), wedgeAt);
     // character line: a shadowed crease following the widest ring around the
     // camera-facing flank, drawn only where the panel actually turns
     {
@@ -2201,8 +2213,29 @@ export class Renderer {
       }
       return out;
     };
+    // The canopy sits on the deck the wedge left it on, and on a fastback it
+    // runs out to the tail instead of stopping in a wall: the glazing and the
+    // rear deck become one line, which is the whole look of a modern coupe.
+    const cabRamp = (df: number, up: number) => {
+      const w = wedgeAt(df, 1);
+      if (m.fast === 0) return w;
+      const u = (df - cB) / Math.max(0.001, cF - cB);   // 1 at the windscreen, 0 at the back
+      return w - m.fast * (cabTop - hullH) * up * (1 - u) ** 1.6;
+    };
     loft(Renderer.CAB_RINGS, Renderer.CAB_SEGS, cabPlan, lift + hullH, cabTop - hullH,
-         glass, night ? "#243038" : shade(m.glassTint, 0.82));
+         glass, night ? "#243038" : shade(m.glassTint, 0.82), cabRamp);
+    // glasshouse: glazing carried down the flanks rather than a dome perched on
+    // the deck, so there is a side window and a pillar to read
+    if (m.glassDrop > 0) {
+      const drop = m.glassDrop * hullH;
+      for (const s2 of [1, -1]) {
+        if (px(cMid, cw * s2, lift)[1] <= sy) continue;
+        quad([px(cF * 0.96, cw * s2 * 0.98, lift + hullH),
+              px(cB * 0.9, cw * s2 * 0.98, lift + hullH),
+              px(cB * 0.9, cw * s2 * 0.98, lift + hullH - drop),
+              px(cF * 0.96, cw * s2 * 0.98, lift + hullH - drop)], shade(glass, 0.78));
+      }
+    }
     // a soft specular sliding off the crown of the dome
     const gl = px(cMid + cHalf * 0.3, cw * 0.2, lift + cabTop * 0.94);
     const glr = Math.max(1.2, cHalf * TILE_W * 0.26 * z);
@@ -2214,11 +2247,46 @@ export class Renderer {
     g.ellipse(gl[0], gl[1], glr, glr * 0.5, 0, 0, Math.PI * 2);
     g.fill();
 
+    // light blade: one unbroken bar across the nose and another across the tail,
+    // which is the cue that says "designed this decade" more than any other
+    if (m.blade) {
+      const nz = lift + hullH * 0.62 + wedgeAt(L * 0.95, 0.62);
+      const tz = lift + hullH * 0.72 + wedgeAt(-L * 0.95, 0.72);
+      g.globalCompositeOperation = night ? "lighter" : "source-over";
+      quad([px(L * 0.99, W * 0.62, nz), px(L * 0.99, -W * 0.62, nz),
+            px(L * 0.93, -W * 0.66, nz + 1.5 * z), px(L * 0.93, W * 0.66, nz + 1.5 * z)],
+           night ? "rgba(220,240,255,0.85)" : "#dfe9f2");
+      quad([px(-L * 0.99, W * 0.66, tz), px(-L * 0.99, -W * 0.66, tz),
+            px(-L * 0.93, -W * 0.7, tz + 1.4 * z), px(-L * 0.93, W * 0.7, tz + 1.4 * z)],
+           night ? "rgba(255,90,90,0.85)" : "#c8383c");
+      g.globalCompositeOperation = "source-over";
+    }
+
     // full-width cargo box: vans, haulers and armoured wagons
     if (m.cargo > 0) {
       const bx = Math.min(cB, L * 0.5), bw = W * 0.94;
-      extrude([[bx, bw], [bx, -bw], [-L * 0.94, -bw], [-L * 0.94, bw]],
-              lift + hullH, lift + hullH + m.cargo * z, shade(m.body, 0.88), shade(m.body, 1.05));
+      if (m.fast > 0) {
+        // faired cargo volume: the same plan as the body, tucked in at the top
+        // and running out to the tail, rather than a black rectangular prism
+        // sat on the deck - which is what made every van look like a wheelie bin
+        const boxPlan = (segs: number, sc: number): [number, number][] => {
+          const out: [number, number][] = [];
+          for (let k = 0; k < segs; k++) {
+            const th = (k + 0.5) * Math.PI * 2 / segs;
+            const ca = Math.cos(th), sa = Math.sin(th);
+            const gx = Math.sign(ca) * Math.abs(ca) ** 0.55;
+            const gy = Math.sign(sa) * Math.abs(sa) ** 0.55;
+            const mid = (bx - L * 0.94) / 2, half = (bx + L * 0.94) / 2;
+            out.push([mid + half * gx * sc, bw * gy * sc]);
+          }
+          return out;
+        };
+        loft(Renderer.CAB_RINGS, Renderer.HULL_SEGS, boxPlan, lift + hullH, m.cargo * z,
+             shade(m.body, 0.9), shade(m.body, 1.06), wedgeAt);
+      } else {
+        extrude([[bx, bw], [bx, -bw], [-L * 0.94, -bw], [-L * 0.94, bw]],
+                lift + hullH, lift + hullH + m.cargo * z, shade(m.body, 0.88), shade(m.body, 1.05));
+      }
       for (const s2 of [1, -1]) {                    // shutter seams down the flanks
         if (px(0, bw * s2, lift)[1] <= sy) continue;
         g.strokeStyle = shade(m.body, 0.6);

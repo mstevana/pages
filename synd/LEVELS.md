@@ -768,6 +768,41 @@ grows, so the buttons never move as the grid changes. Both columns keep a
 `min-height` on their cells so the three test sizes -- 667x375, 850x390 and
 1024x460 -- all still fit without scrolling.
 
+## The car fleet
+
+The old line-up read as hovering boats, and the reason was structural rather
+than cosmetic: every model was a flat-decked slab with a glass blister dropped
+on it. The deck was the same height from nose to tail, the canopy was a
+separate pod that ended in a wall, and the plan was a symmetric lozenge widest
+amidships. No amount of new numbers fixes that, because the format could not
+express a car. Five things were added to it:
+
+- **`wedge`** - the deck climbs from nose to tail. A low nose is the single
+  most recognisable modern-car cue and the old format had no way to ask for it.
+  It is applied as a per-point ramp inside `loft`, so the hull, the canopy and
+  a faired cargo volume all sit on the same rising line.
+- **`hips`** - moves the widest point of the plan back over the rear axle and
+  flares it, giving the body shoulders instead of a lozenge.
+- **`fast`** - a fastback: the canopy runs out to the tail instead of stopping
+  in a wall, so the glazing and the rear deck are one line.
+- **`blade`** - one unbroken light bar across the nose and another across the
+  tail. At night this does more for the look than the whole rest of the list.
+- **`glassDrop`** - glazing carried down the flanks into a glasshouse, so there
+  is a side window and a pillar to read rather than a dome perched on a deck.
+
+A van's cargo box is now lofted on the body's own plan rather than extruded as
+a rectangular prism - but only where `fast` is set, which is what keeps the
+working half of the fleet looking welded.
+
+Seventeen of the twenty-four get the treatment. The other seven - the hauler,
+the transit block, the patrol wagon, the armoured SUV, the truck, the supron
+and the enforcer - are left blunt on purpose. A city where every last van is a
+teardrop has nothing for the sleek ones to be sleek against.
+
+The wedge has to be counted in the headroom check. It raises the tail, so
+anything sitting back there sits that much higher, and a spoiler through a
+garage ceiling is exactly the fault `vfit` exists to prevent.
+
 ## Signage
 
 Four pools, each four times the size it was: 32 video wall designs across
