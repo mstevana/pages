@@ -1,7 +1,7 @@
 // The live mission world: pedestrians, cops, enemy agents, cars, projectiles,
 // dropped items, objectives, and all the AI that drives them.
 
-import { City, DBIT, DX, DY, GARAGE_LEVEL, idx, inGrid, isRoad, isWalkable, Kerb, kerbAt, Station, surfaceNear, T_ROAD, trackCentre, TRAIN_LEVEL } from "../city/citygen";
+import { City, DBIT, DX, DY, GARAGE_LEVEL, hollowAt, idx, inGrid, isRoad, isWalkable, Kerb, kerbAt, Station, surfaceNear, T_ROAD, trackCentre, TRAIN_LEVEL } from "../city/citygen";
 import { AudioEngine } from "../engine/audio";
 import { Rng } from "../engine/rng";
 import { GRID, Weather, clamp, dist, dist2 } from "../engine/util";
@@ -1987,7 +1987,10 @@ export class World {
     // an agent chooses for itself, not the ones it is given.
     if (p.fireAt && weapon && wdef && wdef.weapon && weapon.charge > 0) {
       if (p.fireCd <= 0) {
-        this.fireWeapon(p, weapon, weapon.type, p.fireAt.x, p.fireAt.y);
+        // Pass the order's own height. Without it the shot aims at street
+        // level (tz 0), so an agent firing inside a garage at z -1 launches
+        // every round up into the ceiling slab and hits nothing.
+        this.fireWeapon(p, weapon, weapon.type, p.fireAt.x, p.fireAt.y, 1, 1, p.fireAt.z);
         if (!p.path) p.dir = this.dirOf(p.fireAt.x - p.x, p.fireAt.y - p.y);
       }
       if (this.time > p.fireAt.until) p.fireAt = null;
@@ -2456,13 +2459,26 @@ export class World {
         pr.life -= sdt;
         const txi = Math.floor(pr.x), tyi = Math.floor(pr.y);
         if (!inGrid(txi, tyi)) { pr.life = 0; break; }
-        if (pr.z < -0.2) { pr.life = 0; break; }        // spent itself in the road
-        const t = this.city.tiles[idx(txi, tyi)];
-        // a building only stops a round travelling at or below its roofline
-        if ((t === 3 || t === 4) && this.city.height[idx(txi, tyi)] > pr.z + 0.1) {
-          pr.life = 0;
-          this.fx(pr.x, pr.y, 0, 0, 0.15, "#ccc", 1, "spark");
-          break;
+        if (pr.z < -0.1) {
+          // Under the street the world is solid but for the volumes the sector
+          // has been hollowed out - garages and subways. A round lives on only
+          // there, and the building overhead is its roof, not a wall across its
+          // path: the old code ran the same building-height test on it as on a
+          // street shot, so every round fired in a garage died at once against
+          // the tower standing above it. This is the line-of-sight rule.
+          if (!hollowAt(this.city, txi, tyi, pr.z)) {
+            pr.life = 0;
+            this.fx(pr.x, pr.y, 0, 0, 0.15, "#ccc", 1, "spark");
+            break;
+          }
+        } else {
+          const t = this.city.tiles[idx(txi, tyi)];
+          // a building only stops a round travelling at or below its roofline
+          if ((t === 3 || t === 4) && this.city.height[idx(txi, tyi)] > pr.z + 0.1) {
+            pr.life = 0;
+            this.fx(pr.x, pr.y, 0, 0, 0.15, "#ccc", 1, "spark");
+            break;
+          }
         }
         // hit peds
         for (const p of this.peds) {

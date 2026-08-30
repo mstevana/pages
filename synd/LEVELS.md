@@ -904,3 +904,27 @@ canopy stays a smooth curve at every zoom while the tiles behind it keep
 their blocks. Measured on a single canopy at full zoom, horizontal
 identical-colour runs of 3px or more -- the fingerprint of block upscaling --
 fall by about 60%, and frame time is unchanged.
+
+## Shooting underground
+
+Firing inside a garage did nothing, and it took three faults stacked on top
+of each other, each of which alone was enough to eat the shot:
+
+1. A manual fire order dropped its own height. `cmdShoot` records the target
+   surface's z, but `updateAgent` called `fireWeapon` without it, so the shot
+   aimed at street level (tz 0). An agent standing in a garage at z -1 thus
+   launched every round up at the ceiling.
+2. The projectile's "spent itself in the road" test was a flat `z < -0.2`.
+   That is the street floor; a round travelling level at the garage floor of
+   -1 tripped it on its first step and vanished.
+3. The building-collision test ran on underground rounds too. A garage sits
+   under a building tile, so a round at -1 was killed against the tower
+   standing three storeys above it, exactly as if it had hit the wall.
+
+The floor and building tests now both defer to the same rule the line-of-
+sight check already uses: below the street the world is solid except where
+the sector is hollowed out, so a round lives on wherever a shot was allowed
+to travel, and the slab overhead is its roof rather than a wall in its path.
+The same fix covers subway platforms, not just garages. Measured: an agent
+firing four pistol rounds at an enemy four tiles away on the garage floor now
+lands 78 damage with the rounds holding z -1 the whole way; before, zero.
