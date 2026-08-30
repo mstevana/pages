@@ -132,6 +132,7 @@ export interface City {
   levels: Levels;            // every standing surface in the sector, and the ways between them
   lamps: { x: number; y: number }[];
   roundabouts: { x: number; y: number }[]; // centers
+  ringIslands: { x: number; y: number }[]; // world-space centre of every 4x4 ring's island
   vRoads: number[];          // x of left lane of each vertical avenue
   hRoads: number[];          // y of top lane of each horizontal avenue
   skytrains: Skytrain[];     // elevated rail lines running above avenues
@@ -404,6 +405,7 @@ export function generateCity(seed: number): City {
 
   // ---- 2. Roundabouts ----
   const roundabouts: { x: number; y: number }[] = [];
+  const ringIslands: { x: number; y: number }[] = [];
   const ringTiles = new Map<number, number>(); // tile -> roundabout id; ring tiles keep strict one-way circulation
   let nextRingId = 0;
   // Ring is the 1-tile border of the 6x6 rect at (rx0,ry0); interior is the island.
@@ -417,6 +419,7 @@ export function generateCity(seed: number): City {
   const carveRing = (rx0: number, ry0: number, register: boolean): void => {
     // 4x4 ring: a 1-tile circulating road around a 2x2 island
     const ringId = ++nextRingId;
+    ringIslands.push({ x: rx0 + 2, y: ry0 + 2 });
     const rx1 = rx0 + 3, ry1 = ry0 + 3;
     for (let y = ry0; y <= ry1; y++) for (let x = rx0; x <= rx1; x++) {
       const border = x === rx0 || x === rx1 || y === ry0 || y === ry1;
@@ -1131,7 +1134,7 @@ export function generateCity(seed: number): City {
   // has to be there, the tree only wants to be. ----
   const stairRuns = layOutStairs(levels, tiles, props, lamps, streetUsed);
 
-  return { seed, tiles, height, bstyle, laneDir, decos, props, crossing, streetUsed, levels, fittings, garages, lamps, roundabouts, vRoads, hRoads, skytrains, stations, stairRuns, ring, ramps, garageRamps };
+  return { seed, tiles, height, bstyle, laneDir, decos, props, crossing, streetUsed, levels, fittings, garages, lamps, roundabouts, ringIslands, vRoads, hRoads, skytrains, stations, stairRuns, ring, ramps, garageRamps };
 }
 
 // Every stair in the level model gets two tiles of footprint along the wall it

@@ -35,7 +35,7 @@ interface PlatTile {
 interface Entity {
   s: number;    // depth key = tx + ty
   pri: number;  // within-bucket order: 0 elevated structure, 1 ground, 2 trains
-  kind: "ped" | "car" | "drop" | "lamp" | "fence" | "pylon" | "deck" | "train" | "prop" | "stair" | "platform" | "fitting" | "metro" | "gramp";
+  kind: "ped" | "car" | "drop" | "lamp" | "fence" | "pylon" | "deck" | "train" | "prop" | "stair" | "platform" | "fitting" | "metro" | "gramp" | "holo";
   gramp?: RampPart;
   fitting?: Fitting;
   stair?: StairRun;
@@ -408,10 +408,39 @@ export class Renderer {
           }
           case T_SIDEWALK: img = art.sidewalk; break;
           case T_PARK: img = art.park; break;
-          case T_ISLAND: img = art.island; break;
+          // the island is painted as a round disc after the tile pass; its
+          // tiles carry the circulating lane's own surface underneath
+          case T_ISLAND: img = art.road; break;
           default: img = art.ground;
         }
         g.drawImage(img, sx, sy, tw, th);
+      }
+    }
+
+    // ---- round islands: a circle in world space is an axis-aligned ellipse
+    // on screen (rx:ry = TILE_W:TILE_H), so each 2x2 island is repainted as a
+    // kerbed disc, with a circular lane guide around it - which is what makes
+    // the whole junction read as round even though the tiles are square.
+    if (!(sectioned && section < 0)) {
+      const ex = (r: number) => r * Math.SQRT2 * (TILE_W / 2) * z;
+      const ey = (r: number) => r * Math.SQRT2 * (TILE_H / 2) * z;
+      for (const ri of this.city.ringIslands) {
+        if (ri.x < x0 - 2 || ri.x > x1 + 2 || ri.y < y0 - 2 || ri.y > y1 + 2) continue;
+        const sx = SX(ri.x, ri.y), sy = SY(ri.x, ri.y);
+        // circular lane guide through the middle of the circulating lane
+        g.strokeStyle = art.night ? "rgba(200,190,140,0.28)" : "rgba(230,220,160,0.4)";
+        g.lineWidth = Math.max(1, 0.9 * z);
+        g.setLineDash([5 * z, 4 * z]);
+        g.beginPath(); g.ellipse(sx, sy, ex(1.5), ey(1.5), 0, 0, Math.PI * 2); g.stroke();
+        g.setLineDash([]);
+        // the island: kerb ring, paved disc, and an inner ring of trim
+        g.fillStyle = art.night ? "#3a3f47" : "#565c66";
+        g.beginPath(); g.ellipse(sx, sy, ex(1.0), ey(1.0), 0, 0, Math.PI * 2); g.fill();
+        g.fillStyle = art.night ? "#23262d" : "#3b3f47";
+        g.beginPath(); g.ellipse(sx, sy, ex(0.88), ey(0.88), 0, 0, Math.PI * 2); g.fill();
+        g.strokeStyle = art.night ? "#4c525c" : "#6e747e";
+        g.lineWidth = Math.max(1, 0.6 * z);
+        g.beginPath(); g.ellipse(sx, sy, ex(0.55), ey(0.55), 0, 0, Math.PI * 2); g.stroke();
       }
     }
 
@@ -525,6 +554,11 @@ export class Renderer {
       if (l.x < x0 || l.x > x1 || l.y < y0 || l.y > y1) continue;
       if (!shown(0)) continue;
       push({ s: l.x + l.y, pri: 1, kind: "lamp", x: l.x + 0.5, y: l.y + 0.5 });
+    }
+    for (const ri of this.city.ringIslands) {
+      if (ri.x < x0 || ri.x > x1 || ri.y < y0 || ri.y > y1) continue;
+      if (!shown(0)) continue;
+      push({ s: Math.floor(ri.x) + Math.floor(ri.y), pri: 0, kind: "holo", x: ri.x, y: ri.y });
     }
     for (const p of this.city.props) {
       if (p.x < x0 || p.x > x1 || p.y < y0 || p.y > y1) continue;
@@ -1282,6 +1316,10 @@ export class Renderer {
       this.drawFence(g, e.fence, art, SX, SY, z);
       return;
     }
+    if (e.kind === "holo") {
+      this.drawHologram(g, e.x, e.y, art, SX, SY, z, time);
+      return;
+    }
     if (e.kind === "pylon") {
       this.drawPylon(g, e, art, SX, SY, z);
       return;
@@ -1398,6 +1436,90 @@ export class Renderer {
   // cut into the street, with a retaining wall down either side; where it goes
   // under the building it becomes a portal in the wall it passes through, lit
   // from inside. Without it the car simply sinks through the pavement.
+  // The centrepiece of a roundabout: a holographic globe projected off a
+  // plinth on the island. Latitude rings squash with the iso view; meridians
+  // read the spin, their on-screen width breathing with the rotation; the
+  // whole thing flickers slightly, as a projection should, and carries its
+  // light with it at night.
+  private drawHologram(
+    g: CanvasRenderingContext2D, wx: number, wy: number, art: TileArt,
+    SX: (x: number, y: number) => number, SY: (x: number, y: number) => number, z: number, time: number
+  ): void {
+    const sx = SX(wx, wy), sy = SY(wx, wy);
+    const seed = (Math.floor(wx) * 7 + Math.floor(wy) * 13) % 5;
+    const col = ["#25e0ff", "#ff2fa0", "#c8b4ff", "#7dff3f", "#ffe32f"][seed];
+    const n = parseInt(col.slice(1), 16);
+    const cr = (n >> 16) & 255, cg = (n >> 8) & 255, cb = n & 255;
+    const rgba = (a: number) => `rgba(${cr},${cg},${cb},${a.toFixed(3)})`;
+
+    // the emitter: a low drum with a lit lens
+    const ph = 6 * z;
+    g.fillStyle = art.night ? "#14171c" : "#2a2e35";
+    g.beginPath(); g.ellipse(sx, sy - ph, 5.5 * z, 2.6 * z, 0, 0, Math.PI * 2); g.fill();
+    g.fillRect(sx - 5.5 * z, sy - ph, 11 * z, ph);
+    g.beginPath(); g.ellipse(sx, sy, 5.5 * z, 2.6 * z, 0, 0, Math.PI * 2); g.fill();
+    g.fillStyle = rgba(0.9);
+    g.beginPath(); g.ellipse(sx, sy - ph, 2.4 * z, 1.1 * z, 0, 0, Math.PI * 2); g.fill();
+
+    // projection flicker: mostly steady, with the odd shiver
+    const flick = 0.8 + 0.14 * Math.sin(time * 11 + seed * 2.1) + 0.06 * Math.sin(time * 37 + seed);
+    const R = 11 * z;                                  // globe radius
+    const cy = sy - ph - 20 * z;                       // globe centre height
+    g.globalCompositeOperation = "lighter";
+
+    // the column of light from lens to globe
+    const beam = g.createLinearGradient(sx, sy - ph, sx, cy);
+    beam.addColorStop(0, rgba(0.20 * flick));
+    beam.addColorStop(1, rgba(0.04 * flick));
+    g.fillStyle = beam;
+    g.beginPath();
+    g.moveTo(sx - 2.2 * z, sy - ph);
+    g.lineTo(sx + 2.2 * z, sy - ph);
+    g.lineTo(sx + R * 0.8, cy);
+    g.lineTo(sx - R * 0.8, cy);
+    g.closePath(); g.fill();
+
+    // globe shell
+    const shell = g.createRadialGradient(sx, cy, 0, sx, cy, R);
+    shell.addColorStop(0, rgba(0.10 * flick));
+    shell.addColorStop(0.85, rgba(0.05 * flick));
+    shell.addColorStop(1, rgba(0));
+    g.fillStyle = shell;
+    g.beginPath(); g.arc(sx, cy, R, 0, Math.PI * 2); g.fill();
+    g.lineWidth = Math.max(1, 0.7 * z);
+    g.strokeStyle = rgba(0.5 * flick);
+    g.beginPath(); g.arc(sx, cy, R, 0, Math.PI * 2); g.stroke();
+
+    // latitude rings
+    g.strokeStyle = rgba(0.4 * flick);
+    for (const t of [-0.55, 0, 0.55]) {
+      const ry = R * Math.sqrt(1 - t * t);
+      g.beginPath(); g.ellipse(sx, cy + R * t * 0.9, ry, ry * 0.3, 0, 0, Math.PI * 2); g.stroke();
+    }
+    // meridians: their width breathes with the spin
+    const spin = time * 0.7 + seed;
+    for (let k = 0; k < 3; k++) {
+      const w = Math.cos(spin + (k * Math.PI) / 3);
+      g.strokeStyle = rgba((0.22 + 0.22 * Math.abs(w)) * flick);
+      g.beginPath(); g.ellipse(sx, cy, Math.max(0.5, Math.abs(w) * R), R, 0, 0, Math.PI * 2); g.stroke();
+    }
+    // a bright tracer riding the equator marks the direction of spin
+    const ta = spin * 1.6;
+    g.fillStyle = rgba(0.85 * flick);
+    g.fillRect(sx + Math.cos(ta) * R - z * 0.8, cy + Math.sin(ta) * R * 0.3 - z * 0.8, 1.6 * z, 1.6 * z);
+    // scanlines through the projection
+    g.strokeStyle = rgba(0.08 * flick);
+    g.lineWidth = Math.max(1, 0.5 * z);
+    const drift = (time * 6) % 3;
+    for (let yy = -R; yy < R; yy += 3 * z) {
+      const w = Math.sqrt(Math.max(0, R * R - (yy + drift * z) ** 2));
+      if (w < 1) continue;
+      g.beginPath(); g.moveTo(sx - w, cy + yy + drift * z); g.lineTo(sx + w, cy + yy + drift * z); g.stroke();
+    }
+    g.globalCompositeOperation = "source-over";
+    if (art.night) this.glow(sx, cy, R * 2.4, col, 0.25 * flick);
+  }
+
   private drawGarageRamp(
     g: CanvasRenderingContext2D, r: RampPart,
     SX: (x: number, y: number) => number, SY: (x: number, y: number) => number, z: number,

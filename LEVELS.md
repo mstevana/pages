@@ -1086,3 +1086,22 @@ Measured: two cars sent up one approach never share the ring (0 frames),
 the second enters 0.3s after the first leaves, minimum gap 4 tiles; across
 the whole city the worst crowding on any one ring falls from 3 cars to 1,
 with traffic still flowing.
+
+## Round roundabouts
+
+A circle in world space projects to an axis-aligned ellipse on screen with
+rx:ry in the tile ratio, so the square 2x2 island is repainted as a kerbed
+disc - kerb ring, paved centre, trim ring - and a dashed circular lane guide
+runs through the middle of the circulating lane. Together they make the
+junction read as round even though every tile under it stays square; the
+island tiles now carry the road surface beneath the disc.
+
+In the middle stands a hologram: an emitter drum on the island projecting a
+wireframe globe. Latitude rings squash with the iso view, meridians breathe
+in width as the globe spins, a tracer rides the equator to mark the
+direction, scanlines drift through the projection, and the whole thing
+flickers slightly, as a projection should. Colour comes from the island's
+own coordinates, so neighbouring roundabouts differ; at night the globe
+carries its own glow. Drawn in the depth buckets, so towers in front of it
+occlude it correctly. Frame time with the whole sector on screen is
+unchanged.
