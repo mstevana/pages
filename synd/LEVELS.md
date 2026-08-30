@@ -509,22 +509,28 @@ measured peaks sit at five to seven.
 
 ## The rescue, in two halves
 
-ESCORT and PERSUADE are the two rescues, and they are built to be quiet on the
-way in and loud on the way out. Nothing is sent while you are crossing the
-sector: the approach is an approach. Taking the target raises the alarm, and
-from that moment a pool of fourteen rivals comes for you in twos and threes
-until it is spent, and then no more. An endless stream is not difficulty, it is
-a treadmill - there is no way to play it well, no reason to fight rather than
-run, and no moment where you have won. A finite pool has all three, and the
-player is told when the last of it has been sent.
+ESCORT and PERSUADE are the two rescues. Rivals contest the sector from the
+first minute - they are not reacting to us, they were already here - but there
+are only twenty-four of them and then no more. An endless stream is not
+difficulty, it is a treadmill: no way to play it well, no reason to fight
+rather than run, and no moment where you have won.
 
-The escortee follows what he can see. Lose him round a corner and he stops
-where he stands and waits to be come back for, rather than groping through the
-city after a man he cannot see. Two things make that read as a rule instead of
-a fault: anyone within four and a half tiles has not lost you whatever the wall
-between says - otherwise he stops dead every time you round a near corner - and
-his marker turns amber and stops pulsing while he waits, so a stationary
-escortee looks like a waiting one.
+The pool is spent as they are *killed*, not as the clock runs: another pair is
+sent only when fewer than four are on the board. On a plain timer the whole
+roster arrived inside the first minute and the walk home - the half of the
+mission that is meant to be hard - was deserted. Draining by attrition spreads
+them over the whole job and makes avoiding a fight a decision: a squad that
+walks past trouble reaches the target with ten to sixteen still in the pool,
+and every one of those is waiting on the way back.
+
+The escortee keeps up while any agent is within a block of him, and stops to
+wait when the squad gets further away than that. A block is measured off the
+city's own avenue spacing - it works out at twenty-six or twenty-seven tiles.
+It is deliberately a cheat: a true line-of-sight test is honest and horrible to
+play against, because he stops behind every parked lorry. Whoever is nearest
+counts rather than the man he was told to follow, so splitting the squad does
+not strand him, and his marker turns amber and stops pulsing while he waits, so
+a stationary escortee looks like a waiting one rather than a stuck one.
 
 A follower who could not path to his leader used to stand still for good; that
 was the fault this replaced. In sight but unreachable by the search, he now
@@ -541,10 +547,19 @@ runs in six; kept a few tiles ahead of him, six in six.
 ## Two markers, not one
 
 The minimap carries the objective ping - wherever you are supposed to be going
-next - and, separately, an amber ring on the mission's target for as long as he
-is alive. On the way in those are the same place; on the way home they are not,
+next - and, separately, a marker on the mission's target for as long as he is
+alive. On the way in those are the same place; on the way home they are not,
 and you want to see both: the zone you are making for, and the man you are
 supposed to be bringing to it.
+
+The target's marker has to be drawn last and drawn loud. The first version was
+a small ring in the same amber as a dropped item, drawn before the objective
+ping - and the moment you had him he was standing a tile from four bright agent
+dots and simply vanished into them. It is now a magenta ring with a dark collar
+and a cross that reaches past the squad, painted after everything else, and
+nothing else on the map is shaped like it. Measured in marker pixels inside the
+minimap rectangle: twenty or so before contact, and *more* after, where before
+the answer was "somewhere under the yellow".
 
 ## Botching rather than losing
 

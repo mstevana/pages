@@ -134,21 +134,29 @@ const SQUAD_ROAM = 4;       // ...and how far they drift from the team's patch
 // A rescue is quiet on the way in and loud on the way out, and the way out is
 // a fight that ends: an endless stream is not difficulty, it is a treadmill
 // with no way to play it well. This many rivals are sent, and then no more.
-const RESCUE_POOL = 14;
+const RESCUE_POOL = 24;
 // The escortee used to take his chances against opposition spread over the
 // whole mission. Now that all of it lands on the way home he has to survive a
 // running fight, and at his old sixty he died in half of them - which is a
 // mission you lose rather than one you find hard. Rivals aim at agents and
 // hold fire when he is in the line; what kills him is volume of stray fire.
 const RESCUE_HP = 120;
-const RESCUE_WAVE = 9;         // seconds between them once the alarm is up
-// How long the escortee will keep walking after losing sight of the agent he
-// is following. He stops and waits rather than groping round corners.
+const RESCUE_WAVE = 8;         // the least time between two of them
+// The pool is spent as they are killed, not as the clock runs. On a plain
+// timer the whole roster arrived inside the first minute and the walk home -
+// the part of the mission that is meant to be hard - was deserted. Holding a
+// few on the board at a time spreads them over the whole job, and a squad that
+// avoids fights arrives with the pool still stocked, which is a decision
+// rather than an accident.
+const RESCUE_ONSCREEN = 4;
+// How long the escortee will keep walking after losing the agent he is
+// following. He stops and waits rather than groping across the city after a
+// man he cannot see.
 const FOLLOW_BLIND = 0.4;
-// ...but a man close enough to touch has not lost you, whatever the wall
-// between you says. Without this he stops dead every time you round a corner
-// two tiles ahead of him, which reads as the fault rather than the rule.
-const FOLLOW_NEAR = 4.5;
+// What counts as losing him. A true line-of-sight test is honest and horrible
+// to play against - he stops behind every parked lorry - so this is deliberately
+// a cheat: he keeps up while any agent is within a block of him, and a block is
+// measured off the city's own avenue spacing rather than picked out of the air.
 
 const COURIER_WALK = 2.8;      // quicker than a bystander, slower than an agent
 const COURIER_GUARDS = 3;      // a fire team on the case
@@ -462,7 +470,7 @@ export class World {
         m.targetId = vip.id;
         m.zone = { x: start.x, y: start.y, r: 5 };
         m.pool = RESCUE_POOL;
-        m.text = "PERSUADE the target with the Persuadertron, then escort them to the extraction zone. Turning them raises the alarm - expect rivals on the way back, not on the way in.";
+        m.text = `PERSUADE the target with the Persuadertron, then escort them to the extraction zone. Rivals contest this sector throughout - ${RESCUE_POOL} of them, and no more, so every one you leave behind is one fewer on the way back.`;
         break;
       }
       case "escort": {
@@ -473,7 +481,7 @@ export class World {
         m.zone = { x: start.x, y: start.y, r: 5 };
         m.phase = 0;
         m.pool = RESCUE_POOL;
-        m.text = "REACH the VIP across the city, then ESCORT them back to the insertion point. Nobody knows we are coming until we have him; after that they will come for us.";
+        m.text = `REACH the VIP across the city, then ESCORT them back to the insertion point. Rivals contest this sector throughout - ${RESCUE_POOL} of them, and no more, so every one you leave behind is one fewer on the way back. Keep him within a block of an agent or he will stop and wait.`;
         break;
       }
       case "killall": {
@@ -1616,20 +1624,13 @@ export class World {
     const vip = this.peds.find((p) => p.id === m.targetId) ?? null;
 
     if (m.kind === "persuade" || m.kind === "escort") {
-      // Nothing is sent while we are on our way in: the approach is meant to be
-      // a quiet one, and the mission is two halves rather than one long
-      // firefight. Taking the target raises the alarm, and from then a finite
-      // pool of rivals comes for us until it is spent.
-      const contact = m.kind === "escort" ? m.phase === 1 : (vip !== null && vip.persuaded);
-      if (contact && !m.alarm) {
-        m.alarm = true;
-        m.waveT = 4;
-        this.notify("ALARM RAISED - THEY ARE COMING FOR US");
-      }
-      if (m.alarm && m.pool > 0) {
-        m.waveT -= dt;
-      }
-      if (m.alarm && m.pool > 0 && m.waveT <= 0) {
+      // Rivals are on us from the off - they are contesting the sector, not
+      // reacting to us - but there are only so many of them. The pool is what
+      // matters: an endless stream is a treadmill with no way to play it well
+      // and no moment where you have won.
+      const live = this.peds.filter((q) => q.team === "enemy" && q.state !== "dead").length;
+      if (m.pool > 0) m.waveT -= dt;
+      if (m.pool > 0 && m.waveT <= 0 && live < RESCUE_ONSCREEN) {
         m.waveT = Math.max(5, RESCUE_WAVE - this.missionNo * 0.4) + this.rng.float(0, 4);
         const n = Math.min(m.pool, this.rng.int(2, 3));
         m.pool -= n;
@@ -2021,13 +2022,18 @@ export class World {
       const leader = this.peds.find((q) => q.id === p.followId && q.state !== "dead") ?? this.agents.find((a) => a.hp > 0);
       if (leader && leader.hp > 0) {
         p.followId = leader.id;
-        // He follows what he can see. Lose him round a corner and he stops
-        // where he is and waits to be come back for, rather than groping his
-        // way through the city after a man he cannot see - which is both what
-        // a frightened civilian would do and what stops him wandering into
-        // the next firefight on his own.
-        const seen = dist2(p.x, p.y, leader.x, leader.y) < FOLLOW_NEAR * FOLLOW_NEAR
-          || this.pf.losShot(p.x, p.y, leader.x, leader.y);
+        // He keeps up while somebody is within a block of him, and stops to
+        // wait when the squad gets further away than that - whoever is nearest
+        // counts, not just the man he was told to follow, so splitting the
+        // squad does not strand him. Walls play no part: a sight line that
+        // every parked lorry breaks is honest and horrible to play against.
+        const reach = this.blockSpan();
+        let near = dist2(p.x, p.y, leader.x, leader.y);
+        for (const a of this.agents) {
+          if (a.hp <= 0) continue;
+          near = Math.min(near, dist2(p.x, p.y, a.x, a.y));
+        }
+        const seen = near < reach * reach;
         p.blindT = seen ? 0 : p.blindT + dt;
         if (p.blindT > FOLLOW_BLIND) {
           const wasWalking = p.path !== null;
@@ -2534,6 +2540,20 @@ export class World {
       };
       this.audio.objective();
     }
+  }
+
+  // One city block, in tiles: the mean gap between the avenues this sector was
+  // laid out on. Computed once, because it is the same for the whole mission.
+  private blockSpanCache = -1;
+  blockSpan(): number {
+    if (this.blockSpanCache > 0) return this.blockSpanCache;
+    const gaps: number[] = [];
+    for (const list of [this.city.vRoads, this.city.hRoads]) {
+      for (let i = 1; i < list.length; i++) gaps.push(list[i] - list[i - 1]);
+    }
+    const mean = gaps.length > 0 ? gaps.reduce((a, b) => a + b, 0) / gaps.length : 24;
+    this.blockSpanCache = Math.max(12, Math.min(40, mean));
+    return this.blockSpanCache;
   }
 
   // Where the mission's target is standing, for as long as he is alive. This

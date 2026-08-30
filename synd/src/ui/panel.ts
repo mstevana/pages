@@ -320,19 +320,6 @@ export class Panel {
       else if (p.team === "enemy") dot(p.x, p.y, "#ff3048", 2.5);
     }
     for (const a of world.agents) if (a.hp > 0) dot(a.x, a.y, "#ffe32f", 3);
-    // the mission target, wherever he is: a ring in the vip's own colour, kept
-    // up for the whole mission rather than only while he is the thing you are
-    // walking towards
-    const tgt = world.targetPoint();
-    if (tgt) {
-      const tx2 = clamp(mx(tgt.x), r.x + 4, r.x + r.w - 4);
-      const ty2 = clamp(my(tgt.y), r.y + 4, r.y + r.h - 4);
-      g.strokeStyle = "#ff9b2f";
-      g.lineWidth = 1.5;
-      g.beginPath(); g.arc(tx2, ty2, 4.5, 0, Math.PI * 2); g.stroke();
-      g.fillStyle = "#ff9b2f";
-      g.beginPath(); g.arc(tx2, ty2, 2, 0, Math.PI * 2); g.fill();
-    }
     // objective: white dot with radar pings, clamped to the minimap edge
     const obj = world.objectivePoint();
     if (obj) {
@@ -348,6 +335,32 @@ export class Panel {
       g.beginPath();
       g.arc(ox, oy, 2.2, 0, Math.PI * 2);
       g.fill();
+    }
+    // The mission target, wherever he is and whatever phase we are in. Drawn
+    // last and drawn loud: once you have him he is standing a tile from four
+    // bright agent dots, and a small ring in the same amber as a dropped item
+    // simply disappears into them. A dark collar, a cross that reaches past
+    // the squad, and nothing else on the map shaped like it.
+    const tgt = world.targetPoint();
+    if (tgt) {
+      const tx2 = clamp(mx(tgt.x), r.x + 6, r.x + r.w - 6);
+      const ty2 = clamp(my(tgt.y), r.y + 6, r.y + r.h - 6);
+      g.lineWidth = 3.5;
+      g.strokeStyle = "rgba(0,0,0,0.85)";
+      g.beginPath(); g.arc(tx2, ty2, 5.5, 0, Math.PI * 2); g.stroke();
+      g.beginPath();
+      g.moveTo(tx2 - 8, ty2); g.lineTo(tx2 + 8, ty2);
+      g.moveTo(tx2, ty2 - 8); g.lineTo(tx2, ty2 + 8);
+      g.stroke();
+      g.lineWidth = 1.5;
+      g.strokeStyle = "#ff5cf0";
+      g.beginPath(); g.arc(tx2, ty2, 5.5, 0, Math.PI * 2); g.stroke();
+      g.beginPath();
+      g.moveTo(tx2 - 8, ty2); g.lineTo(tx2 - 3, ty2);
+      g.moveTo(tx2 + 3, ty2); g.lineTo(tx2 + 8, ty2);
+      g.moveTo(tx2, ty2 - 8); g.lineTo(tx2, ty2 - 3);
+      g.moveTo(tx2, ty2 + 3); g.lineTo(tx2, ty2 + 8);
+      g.stroke();
     }
     g.restore();
     g.strokeStyle = "#33364a";
