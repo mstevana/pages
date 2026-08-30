@@ -351,7 +351,7 @@ export class World {
     // bays. Every car in one garage faces the same way, which makes keeping
     // them apart a matter of two distances - a car's length along that facing,
     // its width across it - rather than a general box-overlap test.
-    const BAY_LONG = 3.2;      // a car is 2.7 tiles at its longest
+    const BAY_LONG = 3.2;      // a car is at most 3 tiles long (capped in cars.ts)
     const BAY_WIDE = 1.5;      // and a shade over one tile across
     for (const gar of city.garages) {
       const n = Math.max(2, Math.min(6, Math.floor((gar.w * gar.h) / 9)));
@@ -1244,9 +1244,16 @@ export class World {
     }
   }
 
+  private carHalfLen(c: Car): number { const m = CAR_MODELS[c.model % CAR_MODELS.length]; return m.L * (m.bull ? 1.1 : 1); }
+  private carHalfWid(c: Car): number { return CAR_MODELS[c.model % CAR_MODELS.length].W; }
+
   // is another car in this car's path? (cars never overlap: they stop and wait)
   private carBlocked(c: Car, range: number): Car | null {
     const fx = Math.cos(c.angle), fy = Math.sin(c.angle);
+    // the gap two cars must keep is set by their lengths: nose to tail is this
+    // car's front half plus the other's rear half. A flat range let a long car
+    // roll its nose into the tail of the one ahead.
+    const myHalf = this.carHalfLen(c);
     let near: Car | null = null;
     for (const o of this.cars) {
       if (o === c || o.state === "wreck" || o.z !== 0) continue;
@@ -1255,7 +1262,8 @@ export class World {
       const relx = o.x - c.x, rely = o.y - c.y;
       const along = relx * fx + rely * fy;
       const lat = Math.abs(relx * -fy + rely * fx);
-      if (along >= 0.2 && along <= range && lat < 0.95) return o;
+      const stop = myHalf + this.carHalfLen(o) + 0.3;      // bumper-to-bumper clearance
+      if (along >= 0.2 && along <= Math.max(range, stop) && lat < 0.95) return o;
       // merging traffic: at a junction two cars close on each other from
       // outside the forward cone. Whoever holds the higher id gives way -
       // and everyone gives way to the player - so a pair never deadlocks.
@@ -2224,12 +2232,26 @@ export class World {
     for (let i = 0; i < live.length; i++) {
       for (let j = i + 1; j < live.length; j++) {
         const a = live[i], b = live[j];
+        // A car is a box, not a disc: a circular push the size of a short car
+        // left long ones lapping over each other end to end. Measure the
+        // overlap in a's own frame - along its length and across its width -
+        // and prise the pair apart on whichever axis they are least buried in,
+        // so a queue opens up nose to tail without shouldering the next lane.
+        const fx = Math.cos(a.angle), fy = Math.sin(a.angle);
         let dx = b.x - a.x, dy = b.y - a.y;
-        const d = Math.hypot(dx, dy);
-        if (d >= 1.05) continue;
-        if (d < 1e-3) { dx = 0.01; dy = 0; }
-        const push = (1.05 - d) * Math.min(1, dt * 6) * 0.5;
-        const ux = dx / (d || 1), uy = dy / (d || 1);
+        if (Math.abs(dx) < 1e-3 && Math.abs(dy) < 1e-3) { dx = 0.01; dy = 0; }
+        const along = dx * fx + dy * fy;
+        const lat = dx * -fy + dy * fx;
+        const penAlong = this.carHalfLen(a) + this.carHalfLen(b) + 0.2 - Math.abs(along);
+        const penLat = this.carHalfWid(a) + this.carHalfWid(b) + 0.12 - Math.abs(lat);
+        if (penAlong <= 0 || penLat <= 0) continue;      // boxes clear of each other
+        let ux: number, uy: number, pen: number;
+        if (penAlong <= penLat) {                        // least buried end to end
+          const sg = along >= 0 ? 1 : -1; ux = fx * sg; uy = fy * sg; pen = penAlong;
+        } else {                                         // least buried side to side
+          const sg = lat >= 0 ? 1 : -1; ux = -fy * sg; uy = fx * sg; pen = penLat;
+        }
+        const push = pen * Math.min(1, dt * 6) * 0.5;
         for (const [car, sgn] of [[a, -1], [b, 1]] as [Car, number][]) {
           const nx = car.x + ux * push * sgn, ny = car.y + uy * push * sgn;
           if (!isRoad(this.city, nx | 0, ny | 0)) continue;
@@ -2241,6 +2263,7 @@ export class World {
       }
     }
   }
+
 
   // where a train is in the world right now
   // the middle of the train, on the track it runs on - one tile clear of the

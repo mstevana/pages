@@ -159,6 +159,17 @@ export const CAR_MODELS: CarModel[] = [
 const GROUND_CLEARANCE = 2;              // px at zoom 1, matching drawCar
 const HEADROOM = 0.95 * STORY_H;         // 95% of the storey it parks under
 
+// No car may be longer than three tiles, or two of them overlap where the road
+// spacing only leaves room for three. The body runs nose to tail over 2*L, and
+// a ram bar pushes the nose out another tenth, so the true half-extent is
+// L*(bull?1.1:1); scale L down where that would exceed 1.5 tiles. Doing it here
+// rather than by hand keeps the guarantee even as new chassis are added.
+export const MAX_CAR_HALF = 1.5;         // three tiles, tip to tip
+for (const m of CAR_MODELS) {
+  const halfExtent = m.L * (m.bull ? 1.1 : 1);
+  if (halfExtent > MAX_CAR_HALF) m.L *= MAX_CAR_HALF / halfExtent;
+}
+
 for (const m of CAR_MODELS) {
   // the wedge raises the tail, so whatever sits back there sits that much
   // higher and has to be counted or a garage ceiling gets a spoiler through it

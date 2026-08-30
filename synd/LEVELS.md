@@ -953,3 +953,24 @@ Measured: an agent on the street tapping a garage car walks down the ramp and
 boards (path found, aboard in ~1.2s), the car takes the wheel in place, and
 driving it back out climbs z -1 to 0 up the ramp. Kerbside boarding is
 unchanged - all four agents still board a street car on a tap.
+
+## Car length and spacing
+
+No car may be longer than three tiles. The body runs nose to tail over 2*L
+and a ram bar pushes the nose out a further tenth, so the true half-extent is
+L*(bull?1.1:1); a load-time pass scales L down wherever that would top 1.5
+tiles, the same way vfit caps height. Five chassis were over - the Zorg Limo
+was 3.9 tiles - and are now exactly 3; the guarantee holds for any chassis
+added later. cabF/cabB are fractions of L, so a shortened body keeps its
+canopy in proportion.
+
+Length alone was not the whole of it. A car kept its distance by a flat
+range and separated on a fixed one-tile circle, both blind to how long a car
+is, so two long ones lapped over each other end to end - a pair of limos
+overlapped by a tile and a half at rest. The following gap is now each car's
+front half plus the other's rear half; the separation treats a car as a box
+in its own frame and prises an overlapping pair apart on whichever axis they
+are least buried in, so a queue opens up nose to tail without shouldering the
+next lane. Measured: worst body overlap for two queued limos falls from 1.48
+tiles to 0, traffic still reaches every junction, and parked-bay clearance
+even improves.
