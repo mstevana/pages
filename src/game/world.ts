@@ -1299,6 +1299,49 @@ export class World {
     }
   }
 
+  // how far ahead, along the lane, the first roundabout tile begins; Infinity
+  // when none is within braking interest
+  private distToRingAhead(c: Car): number {
+    const tx = Math.floor(c.x), ty = Math.floor(c.y);
+    if (this.city.ring[idx(tx, ty)] !== 0) return Infinity;   // already circulating
+    for (let k = 1; k <= 4; k++) {
+      const nx = tx + DX[c.dir] * k, ny = ty + DY[c.dir] * k;
+      if (!inGrid(nx, ny)) return Infinity;
+      if (this.city.ring[idx(nx, ny)] !== 0) {
+        // distance from the nose to the near edge of that tile
+        const edge = DX[c.dir] !== 0
+          ? (DX[c.dir] > 0 ? nx - c.x : c.x - (nx + 1))
+          : (DY[c.dir] > 0 ? ny - c.y : c.y - (ny + 1));
+        return edge;
+      }
+    }
+    return Infinity;
+  }
+
+  // is this car approaching a roundabout that another car is already on, close
+  // enough that braking has to start now to stop at the line?
+  private ringAheadBusy(c: Car): boolean {
+    const d = this.distToRingAhead(c);
+    if (!isFinite(d)) return false;
+    const stopIn = (c.speed * c.speed) / 16 + 0.7;   // v^2/2a at the gentle brake
+    if (d > stopIn) return false;
+    const tx = Math.floor(c.x), ty = Math.floor(c.y);
+    let r = 0;
+    for (let k = 1; k <= 4 && r === 0; k++) {
+      const nx = tx + DX[c.dir] * k, ny = ty + DY[c.dir] * k;
+      if (!inGrid(nx, ny)) break;
+      r = this.city.ring[idx(nx, ny)];
+    }
+    if (r === 0) return false;
+    for (const o of this.cars) {
+      if (o === c || o.state === "wreck" || o.z !== 0) continue;
+      if (o.state !== "drive" && o.state !== "player" && o.state !== "stopping"
+          && o.state !== "launching") continue;
+      if (this.city.ring[idx(o.x | 0, o.y | 0)] === r) return true;
+    }
+    return false;
+  }
+
   private carHalfLen(c: Car): number { const m = CAR_MODELS[c.model % CAR_MODELS.length]; return m.L * (m.bull ? 1.1 : 1); }
   private carHalfWid(c: Car): number { return CAR_MODELS[c.model % CAR_MODELS.length].W; }
 
@@ -2511,14 +2554,21 @@ export class World {
     // waited a long time out of sight, it is quietly recycled.
     const blocker = this.carBlocked(c, 2.4 + c.speed * 0.7)
       || this.pedAhead(c, 1.8 + c.speed * 0.55);
-    if (blocker) {
-      c.speed = Math.max(0, c.speed - dt * 16);
+    // One car on a roundabout at a time. A car rolling up on an occupied ring
+    // eases to a stop at the give-way line and enters only once the ring is
+    // clear - the gentler brake is what makes it read as yielding, not as
+    // slamming into an invisible wall.
+    const yielding = !blocker && this.ringAheadBusy(c);
+    if (blocker || yielding) {
+      c.speed = Math.max(0, c.speed - dt * (yielding ? 8 : 16));
       c.waitT += dt;
       if (c.waitT > 9 && dist2(c.x, c.y, this.camX, this.camY) > 45 * 45) {
         c.waitT = 1e9; // culled after the update loop
         return;
       }
       if (c.speed <= 0.02) return;
+      // never coast over the give-way line while the ring is taken
+      if (yielding && this.distToRingAhead(c) < 0.55) { c.speed = 0; return; }
     } else {
       c.waitT = 0;
       c.speed = Math.min(6.5, c.speed + dt * 5);
@@ -2552,10 +2602,10 @@ export class World {
         // circulate for ever - one was measured going round for forty seconds.
         // After half a lap it takes the next exit offered, whatever else is on
         // the table.
-        const onRing = this.city.ring[idx(tx, ty)] === 1;
+        const onRing = this.city.ring[idx(tx, ty)] !== 0;
         c.ringT = onRing ? (c.ringT ?? 0) + 1 : 0;
         const leaving = onRing && c.ringT > 6
-          ? options.filter((d) => this.city.ring[idx(tx + DX[d], ty + DY[d])] !== 1)
+          ? options.filter((d) => this.city.ring[idx(tx + DX[d], ty + DY[d])] === 0)
           : [];
         if (leaving.length > 0) c.dir = this.rng.pick(leaving);
         // otherwise prefer going straight

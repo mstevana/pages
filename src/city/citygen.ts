@@ -71,6 +71,8 @@ export interface MetroRamp {
 // a ramp that works but is not drawn just looks like a car sinking into the
 // pavement.
 export interface GarageRamp {
+  lat: { x: number; y: number };   // unit offset from column A to column B: the ramp is two tiles wide
+
   steps: { x: number; y: number; z: number }[];   // the mouth first, at z 0
 }
 
@@ -137,7 +139,8 @@ export interface City {
   fittings: Fitting[];       // what furnishes the underground concourses
   garages: { x: number; y: number; w: number; h: number }[]; // parking floors under buildings
   stairRuns: StairRun[];     // the footprint each flight of steps was given
-  ring: Uint8Array;          // 1 on a roundabout's circulating lane
+  ring: Uint16Array;         // 0 off, else the id of the roundabout whose
+                             // circulating lane the tile belongs to
   ramps: MetroRamp[];        // the ways down into the metro
   garageRamps: GarageRamp[]; // ...and the ways down into the garages
 }
@@ -401,7 +404,8 @@ export function generateCity(seed: number): City {
 
   // ---- 2. Roundabouts ----
   const roundabouts: { x: number; y: number }[] = [];
-  const ringTiles = new Set<number>(); // ring road tiles keep strict one-way circulation
+  const ringTiles = new Map<number, number>(); // tile -> roundabout id; ring tiles keep strict one-way circulation
+  let nextRingId = 0;
   // Ring is the 1-tile border of the 6x6 rect at (rx0,ry0); interior is the island.
   const areaClear = (x0: number, y0: number, x1: number, y1: number): boolean => {
     if (x0 < 1 || y0 < 1 || x1 >= GRID - 1 || y1 >= GRID - 1) return false;
@@ -412,12 +416,13 @@ export function generateCity(seed: number): City {
   };
   const carveRing = (rx0: number, ry0: number, register: boolean): void => {
     // 4x4 ring: a 1-tile circulating road around a 2x2 island
+    const ringId = ++nextRingId;
     const rx1 = rx0 + 3, ry1 = ry0 + 3;
     for (let y = ry0; y <= ry1; y++) for (let x = rx0; x <= rx1; x++) {
       const border = x === rx0 || x === rx1 || y === ry0 || y === ry1;
       tiles[idx(x, y)] = border ? T_ROAD : T_ISLAND;
       laneDir[idx(x, y)] = 0; // wipe whatever the avenues wrote here
-      if (border) ringTiles.add(idx(x, y));
+      if (border) ringTiles.set(idx(x, y), ringId);
     }
     // one-way circulation: top row W, left col S, bottom row E, right col N
     for (let x = rx0; x <= rx1; x++) { laneDir[idx(x, ry0)] |= D_W; laneDir[idx(x, ry1)] |= D_E; }
@@ -468,7 +473,8 @@ export function generateCity(seed: number): City {
       [x0, y0, D_S], [x0 + 1, y0, D_W], [x0, y0 + 1, D_E], [x0 + 1, y0 + 1, D_N],
     ];
     for (const [cx, cy] of cells) if (!inGrid(cx, cy) || tiles[idx(cx, cy)] !== T_ROAD) return;
-    for (const [cx, cy, d] of cells) { laneDir[idx(cx, cy)] = d; ringTiles.add(idx(cx, cy)); }
+    const ringId = ++nextRingId;
+    for (const [cx, cy, d] of cells) { laneDir[idx(cx, cy)] = d; ringTiles.set(idx(cx, cy), ringId); }
     laneDir[idx(exitX, exitY)] |= exitDir;
   };
   for (const x of vRoads) {
@@ -855,7 +861,7 @@ export function generateCity(seed: number): City {
         const rampable = (t: number) =>
           tiles[t] === T_SIDEWALK || tiles[t] === T_GROUND
           || tiles[t] === T_PARK || tiles[t] === T_WALL || lotSet.has(t);
-        let mouth = -1, run: number[] | null = null, best = 1e9;
+        let mouth = -1, run: number[] | null = null, lat: [number, number] | null = null, best = 1e9;
         for (let ry = y0 - 5; ry <= y1 + 5 && best > 0; ry++) {
           for (let rx2 = x0 - 5; rx2 <= x1 + 5 && best > 0; rx2++) {
             if (!inGrid(rx2, ry) || tiles[idx(rx2, ry)] !== T_ROAD) continue;
@@ -883,26 +889,45 @@ export function generateCity(seed: number): City {
               // three tiles is the shortest run that keeps every step under
               // half a storey, which is the difference between a ramp and a drop
               if (!reached || steps.length < 3) continue;
+              // A garage ramp is two tiles wide, so a candidate only stands if
+              // a parallel column works beside it: its own road mouth, every
+              // step rampable, and the last one on the garage floor too.
+              const zebraAt = (mx2: number, my2: number): boolean => {
+                const bx2 = -dy, by2 = dx;          // along the carriageway
+                return crossing[idx(mx2, my2)] !== 0
+                  || (inGrid(mx2 + bx2, my2 + by2) && crossing[idx(mx2 + bx2, my2 + by2)] !== 0)
+                  || (inGrid(mx2 - bx2, my2 - by2) && crossing[idx(mx2 - bx2, my2 - by2)] !== 0);
+              };
+              let latPick: [number, number] | null = null;
+              for (const [lx, ly] of [[-dy, dx], [dy, -dx]] as [number, number][]) {
+                const mbx = rx2 + lx, mby = ry + ly;
+                if (!inGrid(mbx, mby) || tiles[idx(mbx, mby)] !== T_ROAD) continue;
+                if (groundSurf[idx(mbx, mby)] < 0 || zebraAt(mbx, mby)) continue;
+                let ok = true;
+                for (let k = 0; k < steps.length; k++) {
+                  const bx3 = steps[k] % GRID + lx, by3 = ((steps[k] / GRID) | 0) + ly;
+                  if (!inGrid(bx3, by3) || !rampable(idx(bx3, by3))) { ok = false; break; }
+                  if (streetUsed[idx(bx3, by3)]) clear = false;
+                  if (k === steps.length - 1 && !lotSet.has(idx(bx3, by3))) ok = false;
+                }
+                if (ok) { latPick = [lx, ly]; break; }
+              }
+              if (!latPick) continue;
               // Never open a garage onto a pedestrian crossing. The zebra runs
               // across the carriageway, so a mouth on one - or on the tile
               // either side of it along the road - would have cars turning off
               // the ramp straight through people on foot.
-              const m = idx(rx2, ry);
-              const bx2 = -dy, by2 = dx;            // along the carriageway
-              const onZebra = crossing[m] !== 0
-                || (inGrid(rx2 + bx2, ry + by2) && crossing[idx(rx2 + bx2, ry + by2)] !== 0)
-                || (inGrid(rx2 - bx2, ry - by2) && crossing[idx(rx2 - bx2, ry - by2)] !== 0);
-              if (onZebra) continue;
+              if (zebraAt(rx2, ry)) continue;
               // The portal ends up on the face the run enters the building
               // through, and only two of the four ever face the camera, so it
               // is worth walking along the block to find one that does.
               const facing = dx < 0 || dy < 0;
               const score = (facing ? 0 : 16) + (steps.length > 4 ? 2 : 0) + (clear ? 0 : 1);
-              if (score < best) { best = score; mouth = idx(rx2, ry); run = steps; }
+              if (score < best) { best = score; mouth = idx(rx2, ry); run = steps; lat = latPick; }
             }
           }
         }
-        if (mouth < 0 || run === null || groundSurf[mouth] < 0) continue;
+        if (mouth < 0 || run === null || lat === null || groundSurf[mouth] < 0) continue;
 
         for (const j of lot) underSurf.set(uk(j, GARAGE_LEVEL), lb.add(j, GARAGE_LEVEL, SURF_BASEMENT));
         garages.push({ x: x0, y: y0, w, h });
@@ -912,19 +937,28 @@ export function generateCity(seed: number): City {
         // straight from the road to the basement is something a person can take
         // and a car cannot - there is nothing under the car on the way down.
         const mx = mouth % GRID, my = (mouth / GRID) | 0;
-        let prev = groundSurf[mouth];
+        const [lx, ly] = lat;
+        // both columns of the two-tile-wide ramp, chained down in step; the
+        // columns also sit side by side at every depth, so the level-aware
+        // searches connect them by adjacency and a car may use either lane
+        let prevA = groundSurf[mouth];
+        let prevB = groundSurf[idx(mx + lx, my + ly)];
         const steps = [{ x: mx, y: my, z: 0 }];
         for (let k = 0; k < run.length; k++) {
           const last = k === run.length - 1;
           // eighths of a storey keep every height exact in a Float32Array
           const z = last ? GARAGE_LEVEL : -Math.round((8 * (k + 1)) / run.length) / 8;
-          const here = last ? underSurf.get(uk(run[k], GARAGE_LEVEL))! : lb.add(run[k], z, SURF_BASEMENT);
-          lb.link(prev, here, LINK_RAMP, 1.4);
-          prev = here;
+          const bTile = idx(run[k] % GRID + lx, ((run[k] / GRID) | 0) + ly);
+          const hereA = last ? underSurf.get(uk(run[k], GARAGE_LEVEL))! : lb.add(run[k], z, SURF_BASEMENT);
+          const hereB = last ? underSurf.get(uk(bTile, GARAGE_LEVEL))! : lb.add(bTile, z, SURF_BASEMENT);
+          lb.link(prevA, hereA, LINK_RAMP, 1.4);
+          lb.link(prevB, hereB, LINK_RAMP, 1.4);
+          prevA = hereA; prevB = hereB;
           steps.push({ x: run[k] % GRID, y: (run[k] / GRID) | 0, z });
           streetUsed[run[k]] = 1;                  // nothing else stands in the trench
+          streetUsed[bTile] = 1;
         }
-        garageRamps.push({ steps });
+        garageRamps.push({ steps, lat: { x: lx, y: ly } });
       }
     }
   }
@@ -1085,8 +1119,8 @@ export function generateCity(seed: number): City {
     }
   }
 
-  const ring = new Uint8Array(GRID * GRID);
-  for (const i of ringTiles) ring[i] = 1;
+  const ring = new Uint16Array(GRID * GRID);
+  for (const [i, id] of ringTiles) ring[i] = id;
 
   const levels = lb.freeze(GRID * GRID);
 

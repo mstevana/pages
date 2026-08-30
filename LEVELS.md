@@ -1058,3 +1058,31 @@ arc bolt hurts three men; the lance catches both of a pair the laser line
 clips one of; the bomb goes off at 4.0s; the gassed dummy is stunned, unhurt,
 and back up when the cloud fades; a gunman three tiles from a cloaked agent
 lands nothing for 3s and the cloak drops on the agent's first shot.
+
+## Wide ramps, clean rings, and giving way
+
+Garage ramps are two tiles wide. The mouth search now accepts a candidate
+only when a parallel column works beside it - its own road mouth off the
+same carriageway, every step rampable, the last one landing on the garage
+floor, and neither mouth on or beside a zebra. Both columns chain down in
+step and sit side by side at every depth, so the level-aware searches join
+them by adjacency and a car may take either lane. The renderer draws the
+pair as one cut: parts carry the pair's centre and the trench, portal, deck
+and chevrons all draw about it, twice as wide. Not one garage was lost to
+the stricter rule, and the entrance audit holds: per garage, exactly one
+ramp (two mouths), zero links to foreign surfaces, zero open edges - the
+ramp is the only way in or out, for cars and agents alike.
+
+A roundabout's circulating lane draws plain road. The dash tiles marked the
+one-way lanes of a straight carriageway, and a ring tile carries exactly the
+lane bits that triggered them, so every ring wore centre-line dashes as if
+the junction were an avenue.
+
+And one car on a roundabout at a time: the ring array now carries a region
+id per roundabout, and a car rolling up on a ring that another car is
+already circulating eases to a stop at the give-way line - a gentler brake
+than the traffic-queue stop - and enters only once that ring is empty.
+Measured: two cars sent up one approach never share the ring (0 frames),
+the second enters 0.3s after the first leaves, minimum gap 4 tiles; across
+the whole city the worst crowding on any one ring falls from 3 cars to 1,
+with traffic still flowing.

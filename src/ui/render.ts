@@ -60,6 +60,8 @@ interface RampPart {
   zNear: number; zFar: number; // storeys, at the near and far edge of the tile
   portal: boolean;             // the tile the run goes under the building at
   inside: boolean;             // past that, and only ever seen from below
+  vMid: number;                // ramps are two tiles wide: the pair's centre, in
+                               // v units off this column (+-0.5 to the second)
 }
 
 interface FenceEdge {
@@ -196,16 +198,20 @@ export class Renderer {
         const a = r.steps[k - 1], b = r.steps[k];
         const t = this.city.tiles[idx(b.x, b.y)];
         const solid = t === T_WALL || t === T_BUILDING;
+        const dx = Math.sign(b.x - a.x), dy = Math.sign(b.y - a.y);
+        // the second column sits at v = +-1 in this column's frame; drawing is
+        // centred between the pair so one part paints the whole wide trench
+        const vB = -r.lat.x * dy + r.lat.y * dx;
         // The run carries on under the building after the portal. Those tiles
         // are behind a wall from the street, but at the plane that shows the
         // garage they are the part that reaches the floor, and leaving them
         // out stopped the ramp a tile short of it.
         this.rampParts.push({
-          x: b.x, y: b.y,
-          dx: Math.sign(b.x - a.x), dy: Math.sign(b.y - a.y),
+          x: b.x, y: b.y, dx, dy,
           zNear: a.z, zFar: b.z, portal: solid && !under, inside: under,
+          vMid: vB / 2,
         });
-        if (!solid) this.trench.add(idx(b.x, b.y));
+        if (!solid) { this.trench.add(idx(b.x, b.y)); this.trench.add(idx(b.x + r.lat.x, b.y + r.lat.y)); }
         if (solid) under = true;
       }
     }
@@ -392,6 +398,9 @@ export class Renderer {
             if (cross === 1) img = art.crossV;
             else if (cross === 2) img = art.crossH;
             else if (isRain(art.weather) && ((tx * 7 + ty * 13) % 11 === 0)) img = art.roadPuddle;
+            // a roundabout's circulating lane is a junction, not a carriageway:
+            // no centre-line dashes, or the ring reads as a straight avenue
+            else if (this.city.ring[idx(tx, ty)] !== 0) img = art.road;
             else if (bits === D_S) img = art.roadDashV;
             else if (bits === D_W) img = art.roadDashH;
             else img = art.road;
@@ -1394,10 +1403,13 @@ export class Renderer {
     SX: (x: number, y: number) => number, SY: (x: number, y: number) => number, z: number,
     art: TileArt
   ): void {
-    const HALF = 0.42;                     // the trench, leaving a kerb either side
+    const HALF = 0.92;                     // half of the two-tile cut, kerb either side
     const OPEN = 0.72;                     // headroom at the portal, in storeys
-    // u runs down the ramp from the near edge of the tile, v across it
-    const P = (u: number, v: number, h: number): [number, number] => {
+    // u runs down the ramp from the near edge of the tile, v across it; v is
+    // centred between the pair of columns, so the whole wide trench draws from
+    // this one part exactly as the single-tile cut used to
+    const P = (u: number, v0: number, h: number): [number, number] => {
+      const v = v0 + r.vMid;
       const wx = r.x + 0.5 + r.dx * u - r.dy * v;
       const wy = r.y + 0.5 + r.dy * u + r.dx * v;
       return [SX(wx, wy), SY(wx, wy) - h * STORY_H * z];
