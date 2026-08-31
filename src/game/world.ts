@@ -86,6 +86,7 @@ export interface Car {
   occupants: number[];    // agent ped ids
   waitT: number;          // seconds spent stopped behind another car
   fuse?: number;          // seconds until a neighbouring blast sets this one off
+  burnT?: number;         // fire-emission accumulator once wrecked
   chainFrom?: Ped | null; // who gets the credit when that fuse runs out
   ringT?: number;         // consecutive roundabout tiles it has circulated
   flash?: number;         // seconds of boarding-feedback flash left
@@ -1701,6 +1702,33 @@ export class World {
       if (c.fuse === undefined || c.fuse <= 0 || c.state === "wreck") continue;
       c.fuse -= dt;
       if (c.fuse <= 0) { c.fuse = 0; this.destroyCar(c, c.chainFrom ?? null); }
+    }
+    // A wreck burns and never stops: a steady fire with smoke and the odd
+    // ember, seeded from hot spots scattered across the hulk so the whole
+    // thing is alight rather than one candle. Only what the camera can see is
+    // fed, which bounds the particle count.
+    for (const c of this.cars) {
+      if (c.state !== "wreck" || c.z !== 0) continue;
+      if (dist2(c.x, c.y, this.camX, this.camY) > 48 * 48) continue;
+      const cm = CAR_MODELS[c.model % CAR_MODELS.length];
+      c.burnT = (c.burnT ?? 0) + dt;
+      let guard = 0;
+      while (c.burnT >= 0.05 && guard++ < 6) {
+        c.burnT -= 0.05;
+        const fxp = c.x + this.rng.float(-cm.L * 0.8, cm.L * 0.8);
+        const fyp = c.y + this.rng.float(-cm.W * 1.3, cm.W * 1.3);
+        this.fx(fxp, fyp, this.rng.float(-0.6, 0.6), this.rng.float(-0.6, 0.6),
+          this.rng.float(0.35, 0.62), "#fff0b0", this.rng.float(2, 3.4), "fire",
+          this.rng.float(9, 18), this.rng.float(6, 12), 0.85);
+        if (this.rng.chance(0.35))
+          this.fx(fxp, fyp, this.rng.float(-0.4, 0.4), this.rng.float(-0.4, 0.4),
+            this.rng.float(1.1, 2.1), "#3a3a42", this.rng.float(3, 6), "smoke",
+            this.rng.float(10, 20), this.rng.float(6, 12), 0.94);
+        if (this.rng.chance(0.25))
+          this.fx(fxp, fyp, this.rng.float(-1.5, 1.5), this.rng.float(-1.5, 1.5),
+            this.rng.float(0.4, 0.9), "#ffb060", this.rng.float(1, 1.6), "spark",
+            this.rng.float(6, 16), 0, 0.9);
+      }
     }
     for (const t of this.trains) if (t.flash) t.flash = Math.max(0, t.flash - dt);
     // planted charges count down and go off; gas hangs, and everyone standing

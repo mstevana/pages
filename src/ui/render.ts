@@ -836,7 +836,7 @@ export class Renderer {
     for (const c of world.cars) {
       if (c.state !== "player" || c.occupants.length === 0) continue;
       if (shown(c.z) || this.inTrench(c.x, c.y, c.z, sectioned, section)) continue;   // already drawn solid
-      this.drawCar(g, c, art, SX, SY, z);
+      this.drawCar(g, c, art, SX, SY, z, time);
     }
     g.globalAlpha = 1;
 
@@ -1333,7 +1333,7 @@ export class Renderer {
       return;
     }
     if (e.kind === "car" && e.car) {
-      this.drawCar(g, e.car, art, SX, SY, z);
+      this.drawCar(g, e.car, art, SX, SY, z, time);
       return;
     }
     if (e.kind === "ped" && e.ped) {
@@ -2151,7 +2151,7 @@ export class Renderer {
 
   private drawCar(
     g: CanvasRenderingContext2D, c: Car, art: TileArt,
-    SX: (x: number, y: number) => number, SY: (x: number, y: number) => number, z: number
+    SX: (x: number, y: number) => number, SY: (x: number, y: number) => number, z: number, time: number
   ): void {
     const night = isNight(art.weather);
     const m = CAR_MODELS[c.model % CAR_MODELS.length];
@@ -2263,9 +2263,67 @@ export class Renderer {
     g.fill();
 
     if (c.state === "wreck") {
-      extrude([[L * 0.9, W * 0.5], [L * 0.6, W], [-L * 0.9, W], [-L, W * 0.5], [-L, -W * 0.5], [-L * 0.9, -W], [L * 0.6, -W], [L * 0.9, -W * 0.5]], 0, 3.5 * z, "#1a1a1c", "#2a2a2c");
-      g.fillStyle = "#0e0e10"; // burst canopy
-      g.fillRect(sx - 5 * z, sy - 6 * z, 9 * z, 4 * z);
+      // A wreck is not a flat slab: it is a buckled, blackened hulk with its
+      // panels flung clear and a fire that never goes out. Everything here is
+      // seeded off the car's id so the debris field holds still frame to frame.
+      let sd = (c.id * 2654435761) >>> 0;
+      const rnd = () => { sd = (sd * 1664525 + 1013904223) >>> 0; return sd / 4294967296; };
+
+      // scorch on the tarmac, wider than the body's own shadow above
+      g.fillStyle = "rgba(0,0,0,0.5)";
+      g.beginPath();
+      g.ellipse(sx, sy, bodyLen * 0.85, 10 * z, bodyAngle, 0, Math.PI * 2);
+      g.fill();
+
+      // debris flung clear: charred chunks and torn panels scattered around
+      const chunks: { df: number; dr: number; s: number; h: number; col: string; top: string }[] = [];
+      for (let i = 0; i < 8; i++) {
+        const a = rnd() * Math.PI * 2, rr = 0.7 + rnd() * 1.25;
+        chunks.push({
+          df: Math.cos(a) * rr * L, dr: Math.sin(a) * rr * W * 1.6,
+          s: 0.1 + rnd() * 0.16, h: (0.5 + rnd() * 1.6) * z,
+          col: rnd() > 0.5 ? "#141416" : "#2a2320", top: rnd() > 0.5 ? "#2e2a26" : "#3a2c22",
+        });
+      }
+      // farthest first so nearer chunks and the hulk paint over them
+      chunks.sort((p2, q2) => (p2.df + p2.dr) - (q2.df + q2.dr));
+      for (const ch of chunks) {
+        const o = ch.s;
+        extrude([[ch.df + o, ch.dr + o], [ch.df + o, ch.dr - o], [ch.df - o, ch.dr - o], [ch.df - o, ch.dr + o]],
+                0, ch.h, ch.col, ch.top);
+      }
+
+      // a jagged, asymmetric plan for a mass of crumpled metal
+      const jag = (sc: number, ox: number, oy: number): [number, number][] => {
+        const p2: [number, number][] = [];
+        const n = 9;
+        for (let k = 0; k < n; k++) {
+          const th = (k / n) * Math.PI * 2;
+          const rl = L * sc * (0.5 + rnd() * 0.55), rw = W * sc * (0.65 + rnd() * 0.7);
+          p2.push([Math.cos(th) * rl + ox, Math.sin(th) * rw + oy]);
+        }
+        return p2;
+      };
+      // the main hulk, then a second buckled mass rearing higher off-centre, so
+      // the silhouette is uneven and stands well clear of the ground
+      extrude(jag(1.0, 0, 0), 0, 4 * z, "#161618", "#262327");
+      extrude(jag(0.72, (rnd() - 0.5) * 0.5 * L, (rnd() - 0.5) * 0.4 * W), 0, 7 * z, "#101012", "#201d22");
+      // a torn panel canted up off one flank
+      const pf = (rnd() - 0.3) * L, ps = rnd() > 0.5 ? 1 : -1;
+      quad([px(pf, ps * W * 0.9, 1 * z), px(pf + 0.4 * L, ps * W * 1.5, 1.5 * z),
+            px(pf + 0.4 * L, ps * W * 1.5, 5 * z), px(pf, ps * W * 0.9, 4 * z)], "#0d0d0f");
+
+      // the wound at the core still glowing, breathing with the fire
+      const glow = 0.55 + 0.45 * Math.sin(time * 7.3 + c.id * 1.7);
+      g.globalCompositeOperation = "lighter";
+      const gp = px(0, 0, 2.5 * z);
+      const gr = g.createRadialGradient(gp[0], gp[1], 0, gp[0], gp[1], 11 * z);
+      gr.addColorStop(0, `rgba(255,110,30,${(0.35 + 0.3 * glow).toFixed(3)})`);
+      gr.addColorStop(0.5, `rgba(200,50,15,${(0.18 + 0.12 * glow).toFixed(3)})`);
+      gr.addColorStop(1, "rgba(200,50,15,0)");
+      g.fillStyle = gr;
+      g.fillRect(gp[0] - 11 * z, gp[1] - 11 * z, 22 * z, 22 * z);
+      g.globalCompositeOperation = "source-over";
       return;
     }
 

@@ -1105,3 +1105,26 @@ own coordinates, so neighbouring roundabouts differ; at night the globe
 carries its own glow. Drawn in the depth buckets, so towers in front of it
 occlude it correctly. Frame time with the whole sector on screen is
 unchanged.
+
+## Burning wrecks
+
+A wreck was a flat black octagon with a rectangle for a burst canopy, and it
+went cold the moment the explosion's own particles faded. Now it is a
+buckled hulk that keeps burning.
+
+The body is drawn from a per-id seed so its debris field holds still frame to
+frame: eight charred chunks and torn panels flung clear and scattered around
+the footprint (sorted far-to-near so they overlap correctly), two crumpled
+masses of different heights on a jagged asymmetric plan so the silhouette is
+uneven and stands well clear of the ground, a torn panel canted off one
+flank, a wide scorch on the tarmac, and a wound at the core still glowing and
+breathing with the fire.
+
+The fire never stops. Each update, every wreck the camera can see (culled at
+48 tiles, which bounds the particle count) emits a steady flame plus the odd
+gout of smoke and a spark, from a hot spot chosen randomly across the hulk so
+the whole thing is alight rather than one candle. Measured over 30 seconds on
+three wrecks: live flames never fall below 22 after the initial blast has
+faded, holding around 25-30 with smoke and sparks alongside, about 60
+particles in all - and frame time with the whole sector on screen is
+unchanged.
