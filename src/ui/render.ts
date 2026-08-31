@@ -4,7 +4,7 @@
 
 import { City, D_S, D_W, Deco, Fitting, GARAGE_LEVEL, idx, inGrid, isRoad, MetroRamp, PLATFORM_LONG, PLATFORM_WIDE, Prop, StairRun, surfaceUnder, T_BUILDING, T_GROUND, T_ISLAND, T_PARK, T_PIT, T_ROAD, T_SIDEWALK, T_WALL, TRACK_DROP, trackCentre, TRAIN_LEVEL } from "../city/citygen";
 import { GRID, STORY_H, TILE_H, TILE_W, ctx2d, isNight, isRain, isoX, isoY, makeCanvas } from "../engine/util";
-import { PeopleAtlas, FW, FH } from "../sprites/people";
+import { PeopleAtlas, FW, FH, PED_SS } from "../sprites/people";
 import { BENCH_H, BENCH_W, STALL_H, STALL_W, TREE_H, TREE_W } from "../sprites/props";
 import { FLAME_FRAMES, FLAME_H, FLAME_W, flameFrames } from "../sprites/flame";
 import { FireGL, FlameQuad, SmokeQuad } from "./firegl";
@@ -3046,10 +3046,15 @@ export class Renderer {
       g.fillStyle = "#d98cff";
       g.fillRect(sx - 1.5 * z, sy - FH * s - 5 * z, 3 * z, 3 * z);
     }
+    // The sheet is rasterised well above the size it is usually drawn at, so
+    // it is worth resampling rather than point-sampling: it is the difference
+    // between a shaded figure and a grid of coloured squares up close.
+    g.imageSmoothingEnabled = true;
     g.drawImage(
-      sheet, col * FW, p.dir * FH, FW, FH,
+      sheet, col * FW * PED_SS, p.dir * FH * PED_SS, FW * PED_SS, FH * PED_SS,
       sx - (FW / 2) * s, sy - (FH - 2) * s, FW * s, FH * s
     );
+    g.imageSmoothingEnabled = false;
     if (p.team === "player" && p.shieldOn && p.state !== "dead") {
       g.strokeStyle = `rgba(122,255,200,${0.4 + 0.3 * Math.sin(time * 8)})`;
       g.lineWidth = 1.5;

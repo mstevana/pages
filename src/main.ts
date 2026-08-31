@@ -10,7 +10,7 @@ import { Panel } from "./ui/panel";
 import { Renderer } from "./ui/render";
 import { SectionSlider } from "./ui/slider";
 import * as screens from "./ui/screens";
-import { PeopleAtlas, buildPeople } from "./sprites/people";
+import { PeopleAtlas, peopleAtlas, warmPeople } from "./sprites/people";
 import { TileArt, buildTileArt } from "./sprites/tiles";
 
 type State = "menu" | "briefing" | "armory" | "research" | "implants" | "loading" | "mission" | "paused" | "objectives" | "debrief" | "gameover";
@@ -189,7 +189,7 @@ function buildMission(): void {
   const p = pending!;
   city = generateCity(p.seed);
   art = buildTileArt(p.seed, p.weather);
-  people = buildPeople(p.seed);
+  people = peopleAtlas();
   world = new World(city, p.weather, save, audio, p.kind, save.mission);
   world.notify = (msg) => notices.push({ text: msg, t: 4 });
   renderer = new Renderer(city);
@@ -556,12 +556,17 @@ function handlePanelTap(hit: ReturnType<Panel["hit"]>): void {
 // ---------- main loop ----------
 
 let last = performance.now();
+let peopleWarm = false;
 function frame(now: number): void {
   requestAnimationFrame(frame);
   const dt = Math.min(0.05, (now - last) / 1000);
   last = now;
 
   g.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+  // Build the crowd while the player is still on the menu, a slice at a time,
+  // so LAUNCH never waits on it and the menu never stalls for it either.
+  if (state !== "mission" && !peopleWarm) peopleWarm = warmPeople();
 
   if (state === "mission" && world && city && art && people && renderer && panel && mapBase) {
     const vw = W - panelW, vh = H;
