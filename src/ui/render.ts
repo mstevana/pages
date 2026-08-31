@@ -3,7 +3,7 @@
 // street furniture (fences, doors, pit rails) and the elevated skytrain.
 
 import { City, D_S, D_W, Deco, Fitting, GARAGE_LEVEL, idx, inGrid, isRoad, MetroRamp, PLATFORM_LONG, PLATFORM_WIDE, Prop, StairRun, surfaceUnder, T_BUILDING, T_GROUND, T_ISLAND, T_PARK, T_PIT, T_ROAD, T_SIDEWALK, T_WALL, TRACK_DROP, trackCentre, TRAIN_LEVEL } from "../city/citygen";
-import { GRID, STORY_H, TILE_H, TILE_W, isNight, isRain, isoX, isoY } from "../engine/util";
+import { GRID, STORY_H, TILE_H, TILE_W, ctx2d, isNight, isRain, isoX, isoY, makeCanvas } from "../engine/util";
 import { PeopleAtlas, FW, FH } from "../sprites/people";
 import { BENCH_H, BENCH_W, STALL_H, STALL_W, TREE_H, TREE_W } from "../sprites/props";
 import { CAR_MODELS } from "../sprites/cars";
@@ -87,6 +87,28 @@ export class Renderer {
   readonly minLevel: number;      // floor of the deepest surface under the street
   private stairs: StairRun[] = [];
   private platforms: PlatTile[] = [];
+  // Smoke puffs are the most numerous particle on screen and a burning wreck
+  // makes a column of them. Building a radial gradient per puff per frame is
+  // what makes a row of wrecks crawl, so the ramp is baked once into a sprite
+  // and blitted; two tones cover fresh soot and dispersing grey.
+  private puffs: HTMLCanvasElement[] | null = null;
+  private puffSprite(i: number): HTMLCanvasElement {
+    if (!this.puffs) {
+      this.puffs = [[14, 14, 18], [44, 44, 50]].map(([r, gg, b]) => {
+        const c = makeCanvas(64, 64);
+        const q = ctx2d(c);
+        const gr = q.createRadialGradient(32, 32, 0, 32, 32, 32);
+        gr.addColorStop(0, `rgba(${r},${gg},${b},1)`);
+        gr.addColorStop(0.55, `rgba(${r},${gg},${b},0.55)`);
+        gr.addColorStop(1, `rgba(${r},${gg},${b},0)`);
+        q.fillStyle = gr;
+        q.fillRect(0, 0, 64, 64);
+        return c;
+      });
+    }
+    return this.puffs[i];
+  }
+
   rampParts: RampPart[] = [];      // exposed so tests can find the trenches
   private trench = new Set<number>();   // ramp tiles that are open to the sky
   private rampBelow = false;            // the plane is under the street this frame
@@ -966,17 +988,28 @@ export class Renderer {
     }
     g.globalCompositeOperation = "source-over";
 
-    // smoke sits behind the flames, so draw it first and unlit
+    // Smoke sits behind the flames, so draw it first and unlit. Each puff is
+    // three overlapping lobes rather than one disc, which is what makes a
+    // column billow instead of reading as a row of grey dots; it darkens and
+    // thins as it climbs, so the top of a plume is soot rather than fog.
     for (const pt of world.particles) {
       if (pt.kind !== "smoke") continue;
       const t = Math.max(0, pt.life / pt.maxLife);
+      const age = 1 - t;
       const sx = SX(pt.x, pt.y), sy = SY(pt.x, pt.y) - 4 * z - pt.lift * z;
       const r = pt.size * z;
-      const gr = g.createRadialGradient(sx, sy, 0, sx, sy, r);
-      gr.addColorStop(0, `rgba(58,58,66,${0.45 * t})`);
-      gr.addColorStop(1, "rgba(40,40,48,0)");
-      g.fillStyle = gr;
-      g.fillRect(sx - r, sy - r, r * 2, r * 2);
+      // fresh smoke off a fire is near black; it greys only as it disperses
+      const sprite = this.puffSprite(age > 0.55 ? 1 : 0);   // soot, then dispersing grey
+      const alpha = 0.5 * Math.min(1, t * 2.6);       // fade in fast, out slowly
+      g.globalAlpha = alpha;
+      for (let k = 0; k < 2; k++) {
+        const a = pt.seed * Math.PI * 2 + k * 2.4 + age * 1.4;
+        const off = k === 0 ? 0 : r * 0.45;
+        const lx = sx + Math.cos(a) * off, ly = sy + Math.sin(a) * off * 0.6;
+        const lr = r * (k === 0 ? 1 : 0.8);
+        g.drawImage(sprite, lx - lr, ly - lr, lr * 2, lr * 2);
+      }
+      g.globalAlpha = 1;
     }
     // solid bits: blood and debris
     for (const pt of world.particles) {
@@ -999,13 +1032,45 @@ export class Renderer {
         g.fillRect(sx - z * 0.5, sy - z * 0.5, pt.size * z, pt.size * z);
         continue;
       }
-      const r = Math.max(1, pt.size * z);
-      const gr = g.createRadialGradient(sx, sy, 0, sx, sy, r);
-      gr.addColorStop(0, `rgba(${c},${0.9 * t})`);
-      gr.addColorStop(0.5, `rgba(${c},${0.4 * t})`);
-      gr.addColorStop(1, `rgba(${c},0)`);
-      g.fillStyle = gr;
-      g.fillRect(sx - r, sy - r, r * 2, r * 2);
+      // A flame is a tongue, not a dot of light: it tapers as it rises, necks
+      // and bulges along its length, and leans as it licks upward. Drawn as a
+      // filled outline with a hotter core inside, so overlapping tongues pile
+      // up additively into one convoluted mass of fire.
+      const w = Math.max(1, pt.size * z * 0.85);
+      const h = w * (2.5 + 1.6 * t);
+      const ph = pt.seed * Math.PI * 2;
+      const tongue = (ww: number, hh: number, alpha: number, col: string, ramp: boolean) => {
+        const N = 7;
+        g.beginPath();
+        for (let side = 0; side < 2; side++) {
+          for (let i = 0; i <= N; i++) {
+            const k = side === 0 ? i : N - i;
+            const f = k / N;                                  // 0 root .. 1 tip
+            // lean and wobble, growing toward the tip
+            const cx = Math.sin(time * 7.5 + ph + f * 3.4) * ww * 0.85 * f * f;
+            // neck and bulge along the length, so the edge is never a clean arc
+            const hw = ww * Math.pow(1 - f, 0.62) * (0.78 + 0.42 * Math.sin(ph * 9 + f * 6.2 + time * 5));
+            const px2 = sx + cx + (side === 0 ? -hw : hw);
+            const py2 = sy - f * hh;
+            if (side === 0 && i === 0) g.moveTo(px2, py2); else g.lineTo(px2, py2);
+          }
+        }
+        g.closePath();
+        if (ramp) {
+          // hot and dense at the root, thinning to nothing at the tip: a flat
+          // fill is what makes a flame read as a paper cutout
+          const lg = g.createLinearGradient(sx, sy, sx, sy - hh);
+          lg.addColorStop(0, `rgba(${col},${alpha.toFixed(3)})`);
+          lg.addColorStop(0.45, `rgba(${col},${(alpha * 0.55).toFixed(3)})`);
+          lg.addColorStop(1, `rgba(${col},0)`);
+          g.fillStyle = lg;
+        } else {
+          g.fillStyle = `rgba(${col},${alpha.toFixed(3)})`;
+        }
+        g.fill();
+      };
+      tongue(w, h, 0.34 * t, c, true);                        // the body of the flame
+      tongue(w * 0.52, h * 0.62, 0.4 * t, t > 0.45 ? "255,240,190" : c, false);   // hotter core
     }
     g.globalCompositeOperation = "source-over";
     g.globalAlpha = 1;
@@ -2263,66 +2328,114 @@ export class Renderer {
     g.fill();
 
     if (c.state === "wreck") {
-      // A wreck is not a flat slab: it is a buckled, blackened hulk with its
-      // panels flung clear and a fire that never goes out. Everything here is
-      // seeded off the car's id so the debris field holds still frame to frame.
+      // A burnt-out car, not a lump: it keeps the chassis it had, at the size
+      // it had, with the panels buckled over it. Everything is seeded off the
+      // car's id so the wreckage holds still frame to frame.
       let sd = (c.id * 2654435761) >>> 0;
       const rnd = () => { sd = (sd * 1664525 + 1013904223) >>> 0; return sd / 4294967296; };
+      const SOOT = "#131315", CHAR = "#1d1a1a", RUST = "#332119", BARE = "#3a3a40";
 
       // scorch on the tarmac, wider than the body's own shadow above
       g.fillStyle = "rgba(0,0,0,0.5)";
       g.beginPath();
-      g.ellipse(sx, sy, bodyLen * 0.85, 10 * z, bodyAngle, 0, Math.PI * 2);
+      g.ellipse(sx, sy, bodyLen * 0.62, 7.5 * z, bodyAngle, 0, Math.PI * 2);
       g.fill();
 
-      // debris flung clear: charred chunks and torn panels scattered around
-      const chunks: { df: number; dr: number; s: number; h: number; col: string; top: string }[] = [];
-      for (let i = 0; i < 8; i++) {
-        const a = rnd() * Math.PI * 2, rr = 0.7 + rnd() * 1.25;
-        chunks.push({
-          df: Math.cos(a) * rr * L, dr: Math.sin(a) * rr * W * 1.6,
-          s: 0.1 + rnd() * 0.16, h: (0.5 + rnd() * 1.6) * z,
-          col: rnd() > 0.5 ? "#141416" : "#2a2320", top: rnd() > 0.5 ? "#2e2a26" : "#3a2c22",
-        });
+      // small stuff blown clear: glass, trim, a wheel that came off. Kept close
+      // so the wreck still reads as one car rather than a scatter of junk.
+      const bits: { df: number; dr: number; s: number; h: number; col: string }[] = [];
+      for (let i = 0; i < 7; i++) {
+        // kept within the car's own outline: a wreck fills the space the car
+        // did, so nothing is thrown far enough to widen the silhouette
+        const a = rnd() * Math.PI * 2, rr = 0.7 + rnd() * 0.32;
+        bits.push({ df: Math.cos(a) * rr * L, dr: Math.sin(a) * rr * W * 1.35,
+                    s: 0.05 + rnd() * 0.08, h: (0.4 + rnd() * 1.0) * z,
+                    col: rnd() > 0.55 ? SOOT : RUST });
       }
-      // farthest first so nearer chunks and the hulk paint over them
-      chunks.sort((p2, q2) => (p2.df + p2.dr) - (q2.df + q2.dr));
-      for (const ch of chunks) {
-        const o = ch.s;
-        extrude([[ch.df + o, ch.dr + o], [ch.df + o, ch.dr - o], [ch.df - o, ch.dr - o], [ch.df - o, ch.dr + o]],
-                0, ch.h, ch.col, ch.top);
+      bits.sort((p2, q2) => (p2.df + p2.dr) - (q2.df + q2.dr));
+      for (const b of bits) {
+        const o = b.s;
+        extrude([[b.df + o, b.dr + o], [b.df + o, b.dr - o], [b.df - o, b.dr - o], [b.df - o, b.dr + o]],
+                0, b.h, b.col, "#2a2622");
       }
 
-      // a jagged, asymmetric plan for a mass of crumpled metal
-      const jag = (sc: number, ox: number, oy: number): [number, number][] => {
+      // ---- the car itself, at its own footprint ----
+      // The wreck occupies the volume the car did: same plan, same standing
+      // height, taken from the model's own hull and roof rather than guessed.
+      const wlift = 2 * z, wHull = m.hull * z, wTop = m.cabH * z;
+      // burnt tyres at the four corners, sitting under the body
+      for (const [wf, ws] of [[0.62, 1], [0.62, -1], [-0.62, 1], [-0.62, -1]] as [number, number][]) {
+        const tf = L * wf, tr = W * ws * 0.94;
+        extrude([[tf + 0.16 * L, tr + 0.1 * W], [tf + 0.16 * L, tr - 0.1 * W],
+                 [tf - 0.16 * L, tr - 0.1 * W], [tf - 0.16 * L, tr + 0.1 * W]],
+                0, wlift * 1.3, "#0d0d0e", "#17171a");
+      }
+      // the floor pan: the full plan of the car, scorched, sitting on its rims
+      const pan: [number, number][] = [
+        [L * 0.98, W * 0.42], [L * 0.86, W * 0.86], [-L * 0.86, W * 0.9],
+        [-L * 0.98, W * 0.4], [-L * 0.98, -W * 0.4], [-L * 0.86, -W * 0.9],
+        [L * 0.86, -W * 0.86], [L * 0.98, -W * 0.42],
+      ];
+      extrude(pan, wlift * 0.5, wlift + wHull * 0.8, CHAR, "#221f1f");
+      // buckled body panels over it: two masses inside the footprint, of
+      // different heights, on a jagged plan - the car crushed, not replaced
+      const jag = (sc: number, ox: number, oy: number, lo: number, hi: number): [number, number][] => {
         const p2: [number, number][] = [];
-        const n = 9;
+        const n = 10;
         for (let k = 0; k < n; k++) {
           const th = (k / n) * Math.PI * 2;
-          const rl = L * sc * (0.5 + rnd() * 0.55), rw = W * sc * (0.65 + rnd() * 0.7);
+          const rl = L * sc * (lo + rnd() * (hi - lo)), rw = W * sc * (lo + rnd() * (hi - lo)) * 1.05;
           p2.push([Math.cos(th) * rl + ox, Math.sin(th) * rw + oy]);
         }
         return p2;
       };
-      // the main hulk, then a second buckled mass rearing higher off-centre, so
-      // the silhouette is uneven and stands well clear of the ground
-      extrude(jag(1.0, 0, 0), 0, 4 * z, "#161618", "#262327");
-      extrude(jag(0.72, (rnd() - 0.5) * 0.5 * L, (rnd() - 0.5) * 0.4 * W), 0, 7 * z, "#101012", "#201d22");
-      // a torn panel canted up off one flank
-      const pf = (rnd() - 0.3) * L, ps = rnd() > 0.5 ? 1 : -1;
-      quad([px(pf, ps * W * 0.9, 1 * z), px(pf + 0.4 * L, ps * W * 1.5, 1.5 * z),
-            px(pf + 0.4 * L, ps * W * 1.5, 5 * z), px(pf, ps * W * 0.9, 4 * z)], "#0d0d0f");
+      extrude(jag(1.0, 0, 0, 0.86, 1.0), wlift + wHull * 0.55,
+              wlift + wHull + (wTop - wHull) * 0.5, SOOT, "#242024");
+      // the cabin, collapsed and canted over, still standing to the roofline
+      const cant = (rnd() - 0.5) * 0.24 * L, cants = (rnd() - 0.5) * 0.36 * W;
+      extrude(jag(0.56, cant, cants, 0.8, 1.05), wlift + wHull + (wTop - wHull) * 0.35,
+              wlift + wTop * (0.9 + rnd() * 0.14), "#0e0e10", "#1f1c20");
+
+      // exposed ribs where the roof tore off: bare spars across the shell
+      g.strokeStyle = BARE;
+      g.lineWidth = Math.max(1, 0.7 * z);
+      for (let k = 0; k < 4; k++) {
+        const f = -0.55 + k * 0.36;
+        const rh = wlift + wHull + (wTop - wHull) * (0.45 + rnd() * 0.4);
+        const a2 = px(L * f, -W * 0.75, rh);
+        const b2 = px(L * f + 0.1 * L, W * 0.75, rh);
+        g.beginPath(); g.moveTo(a2[0], a2[1]); g.lineTo(b2[0], b2[1]); g.stroke();
+      }
+      // a door hanging open off one flank, and the bumper torn half away
+      const ds = rnd() > 0.5 ? 1 : -1;
+      const dTop = wlift + wHull + (wTop - wHull) * 0.75;
+      quad([px(-0.1 * L, ds * W * 0.95, wlift + wHull * 0.7), px(0.42 * L, ds * W * 1.25, wlift + wHull * 0.6),
+            px(0.42 * L, ds * W * 1.25, dTop), px(-0.1 * L, ds * W * 0.95, dTop)], "#111113");
+      quad([px(-0.1 * L, ds * W * 0.95, wlift + wHull * 0.7), px(0.42 * L, ds * W * 1.25, wlift + wHull * 0.6),
+            px(0.42 * L, ds * W * 1.2, wlift + wHull * 0.95), px(-0.1 * L, ds * W * 0.9, wlift + wHull * 1.05)], "#2c2622");
+      quad([px(L * 0.99, -W * 0.5, wlift * 0.7), px(L * 1.02, W * 0.2, wlift * 0.5),
+            px(L * 1.02, W * 0.2, wHull * 0.8), px(L * 0.99, -W * 0.5, wHull * 0.9)], "#26221e");
+
+      // rust and bare-metal patches burned through the soot
+      for (let k = 0; k < 5; k++) {
+        const pf = (rnd() - 0.5) * 1.5 * L, ps2 = (rnd() - 0.5) * 1.5 * W;
+        const w2 = (0.08 + rnd() * 0.14) * L, h2 = (0.1 + rnd() * 0.2) * W;
+        const hh = wlift + wHull * (0.85 + rnd() * 0.5);
+        quad([px(pf - w2, ps2 - h2, hh), px(pf + w2, ps2 - h2, hh),
+              px(pf + w2, ps2 + h2, hh), px(pf - w2, ps2 + h2, hh)],
+             rnd() > 0.5 ? RUST : "#2a2a2f");
+      }
 
       // the wound at the core still glowing, breathing with the fire
       const glow = 0.55 + 0.45 * Math.sin(time * 7.3 + c.id * 1.7);
       g.globalCompositeOperation = "lighter";
-      const gp = px(0, 0, 2.5 * z);
-      const gr = g.createRadialGradient(gp[0], gp[1], 0, gp[0], gp[1], 11 * z);
-      gr.addColorStop(0, `rgba(255,110,30,${(0.35 + 0.3 * glow).toFixed(3)})`);
-      gr.addColorStop(0.5, `rgba(200,50,15,${(0.18 + 0.12 * glow).toFixed(3)})`);
+      const gp = px(0, 0, wlift + wHull);
+      const gr = g.createRadialGradient(gp[0], gp[1], 0, gp[0], gp[1], 12 * z);
+      gr.addColorStop(0, `rgba(255,110,30,${(0.3 + 0.28 * glow).toFixed(3)})`);
+      gr.addColorStop(0.5, `rgba(200,50,15,${(0.15 + 0.1 * glow).toFixed(3)})`);
       gr.addColorStop(1, "rgba(200,50,15,0)");
       g.fillStyle = gr;
-      g.fillRect(gp[0] - 11 * z, gp[1] - 11 * z, 22 * z, 22 * z);
+      g.fillRect(gp[0] - 12 * z, gp[1] - 12 * z, 24 * z, 24 * z);
       g.globalCompositeOperation = "source-over";
       return;
     }

@@ -1128,3 +1128,31 @@ three wrecks: live flames never fall below 22 after the initial blast has
 faded, holding around 25-30 with smoke and sparks alongside, about 60
 particles in all - and frame time with the whole sector on screen is
 unchanged.
+
+## Flames, soot, and a wreck the size of the car
+
+The wreck is now built to the model's own dimensions rather than to guessed
+numbers: the floor pan takes the car's plan, the buckled masses sit inside
++-L and +-W, and every height is measured from the same ground clearance the
+car uses and reaches the model's own hull and roof. Measured against the live
+car it replaces, at the same spot and model, the wreck's footprint is 103% of
+the car's width; it stands lower, which is what being crushed means. The
+scorch is sized to the car's own shadow so the stain does not read as a
+bigger vehicle. Detail on top of that: burnt tyres on the rims, a scorched
+floor pan, a collapsed cabin canted to one side, bare spars where the roof
+tore off, a door hanging open, a half-torn bumper, rust and bare-metal
+patches burned through the soot, and small bits fallen within the outline.
+
+Fire was a radial gradient - a coloured light, not a flame. A flame is now a
+tongue: a tapering polygon that leans and wobbles as it rises, necking and
+bulging along its length so the edge is never a clean arc, filled hot at the
+root and fading out at the tip, with a brighter core inside. Overlapping
+tongues pile up additively into one convoluted mass. Smoke is black soot off
+the hot part of the wreck, climbing hard and swelling, two lobes per puff so
+a column billows, greying only as it disperses.
+
+Both are drawn hundreds of times a frame, so the cost matters: building a
+radial gradient per smoke puff took six burning wrecks to 66.6ms a frame. The
+ramp is now baked once into a sprite and blitted, and a flame's core is a flat
+fill rather than a second gradient, which puts the same scene back at 33.4ms
+- the same as a city with no fire in it at all.

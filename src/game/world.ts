@@ -109,6 +109,7 @@ export interface Particle {
   x: number; y: number; vx: number; vy: number;
   life: number; maxLife: number; color: string; size: number;
   kind: FxKind; lift: number; liftV: number; grow: number; drag: number;
+  seed: number;           // fixed at birth: each flame gets its own wobble
 }
 export interface Flash { x: number; y: number; life: number; maxLife: number; r: number; ring: boolean; }
 // A tapped destination. The ring holds while anyone ordered there is still on
@@ -1632,7 +1633,8 @@ export class World {
     x: number, y: number, vx: number, vy: number, life: number,
     color: string, size: number, kind: FxKind, liftV = 0, grow = 0, drag = 0.92
   ): void {
-    this.particles.push({ x, y, vx, vy, life, maxLife: life, color, size, kind, lift: 0, liftV, grow, drag });
+    this.particles.push({ x, y, vx, vy, life, maxLife: life, color, size, kind, lift: 0, liftV, grow, drag,
+                          seed: this.rng.next() });
   }
 
   private bloodBurst(x: number, y: number, n: number): void {
@@ -1717,17 +1719,22 @@ export class World {
         c.burnT -= 0.05;
         const fxp = c.x + this.rng.float(-cm.L * 0.8, cm.L * 0.8);
         const fyp = c.y + this.rng.float(-cm.W * 1.3, cm.W * 1.3);
-        this.fx(fxp, fyp, this.rng.float(-0.6, 0.6), this.rng.float(-0.6, 0.6),
-          this.rng.float(0.35, 0.62), "#fff0b0", this.rng.float(2, 3.4), "fire",
-          this.rng.float(9, 18), this.rng.float(6, 12), 0.85);
-        if (this.rng.chance(0.35))
-          this.fx(fxp, fyp, this.rng.float(-0.4, 0.4), this.rng.float(-0.4, 0.4),
-            this.rng.float(1.1, 2.1), "#3a3a42", this.rng.float(3, 6), "smoke",
-            this.rng.float(10, 20), this.rng.float(6, 12), 0.94);
+        // flames: slow-drifting tongues that live long enough to climb the hulk
+        this.fx(fxp, fyp, this.rng.float(-0.35, 0.35), this.rng.float(-0.35, 0.35),
+          this.rng.float(0.45, 0.85), "#fff0b0", this.rng.float(2.4, 4.2), "fire",
+          this.rng.float(11, 20), this.rng.float(2, 6), 0.88);
+        // black smoke, launched from the hottest part and rising well above the
+        // wreck: long-lived, climbing hard and swelling as it goes
+        if (this.rng.chance(0.4))
+          this.fx(c.x + this.rng.float(-cm.L * 0.4, cm.L * 0.4),
+            c.y + this.rng.float(-cm.W * 0.7, cm.W * 0.7),
+            this.rng.float(-0.3, 0.3), this.rng.float(-0.3, 0.3),
+            this.rng.float(2.4, 4.2), "#101012", this.rng.float(3.5, 6.5), "smoke",
+            this.rng.float(26, 42), this.rng.float(9, 16), 0.96);
         if (this.rng.chance(0.25))
           this.fx(fxp, fyp, this.rng.float(-1.5, 1.5), this.rng.float(-1.5, 1.5),
             this.rng.float(0.4, 0.9), "#ffb060", this.rng.float(1, 1.6), "spark",
-            this.rng.float(6, 16), 0, 0.9);
+            this.rng.float(10, 22), 0, 0.9);
       }
     }
     for (const t of this.trains) if (t.flash) t.flash = Math.max(0, t.flash - dt);
