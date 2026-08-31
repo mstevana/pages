@@ -4,7 +4,7 @@
 import { GRID, clamp } from "../engine/util";
 import { ITEMS } from "../game/items";
 import { Ped, World } from "../game/world";
-import { FW, FH, PED_SS, PeopleAtlas } from "../sprites/people";
+import { FW, FH, PeopleAtlas } from "../sprites/people";
 import { itemIcons } from "../sprites/icons";
 
 export type PanelHit =
@@ -184,10 +184,7 @@ export class Panel {
       }
       // doll sprite (idle, facing S)
       const s = Math.min((r.h - 14) / FH, (r.w * 0.5) / FW);
-      g.imageSmoothingEnabled = true;
-      g.drawImage(people.player.sheet, 0, 0, FW * PED_SS, FH * PED_SS,
-                  r.x + 3, r.y + r.h / 2 - (FH * s) / 2 - 2, FW * s, FH * s);
-      g.imageSmoothingEnabled = false;
+      g.drawImage(people.player.sheet, 0, 0, FW, FH, r.x + 3, r.y + r.h / 2 - (FH * s) / 2 - 2, FW * s, FH * s);
       // name + bars
       const bx = r.x + FW * s + 7;
       const bw = r.x + r.w - 4 - bx;
