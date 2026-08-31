@@ -7,6 +7,7 @@ import { GRID, STORY_H, TILE_H, TILE_W, ctx2d, isNight, isRain, isoX, isoY, make
 import { PeopleAtlas, FW, FH } from "../sprites/people";
 import { BENCH_H, BENCH_W, STALL_H, STALL_W, TREE_H, TREE_W } from "../sprites/props";
 import { FLAME_FRAMES, FLAME_H, FLAME_W, flameFrames } from "../sprites/flame";
+import { FireGL, FlameQuad, SmokeQuad } from "./firegl";
 import { CAR_MODELS } from "../sprites/cars";
 import { TileArt } from "../sprites/tiles";
 import { BOARD_FLASH, Car, Ped, TRAIN_CARS, TRAIN_HALF, TRAIN_SEG, World } from "../game/world";
@@ -121,6 +122,24 @@ export class Renderer {
   private emissives: { x: number; y: number; r: number; col: [number, number, number]; i: number }[] = [];
   private frameTime = 0;
   rainDrops: { x: number; y: number; v: number }[] = [];
+  // The fire is the one thing in the game that is shaded per pixel at runtime:
+  // a WebGL post-process over the box the flames occupy. Absent WebGL this
+  // stays unused and the baked flipbook above does the work.
+  private fireGL = new FireGL();
+  private flameQ: FlameQuad[] = [];
+  private smokeQ: SmokeQuad[] = [];
+  private dpr = 1;
+  get glReady(): boolean { return this.fireGL.ok; }
+  noFireGL = false;                // forces the flipbook path, for comparison
+  glFireFrames = 0;                // frames the shader drew, so tests can tell
+  fireGLBox = [0, 0, 0, 0];        // last shaded box, device px
+  // Some phones answer getContext("webgl") with a software rasteriser, and on
+  // one of those a per-pixel fire is far dearer than the flipbook it replaced.
+  // So the layer is on trial: the pass is timed, and if it keeps costing more
+  // than a frame can spare it is dropped for the rest of the session.
+  fireGLCost = 0;                  // rolling mean cost of the pass, ms
+  fireGLBudget = 9;                // ms a frame can spare for it
+  private glSamples = 0;
 
   constructor(private city: City) {
     // bake the flame flipbook alongside the sector, so the first explosion
@@ -297,6 +316,93 @@ export class Renderer {
     this.emissives.push({ x, y, r, col: [(n >> 16) & 255, (n >> 8) & 255, n & 255], i: intensity });
   }
 
+  // The shaded fire pass. Gathers every flame and puff into one box, hands it
+  // and a copy of the scene inside it to the GPU, and blits the result back.
+  // Returns false when it declined - no WebGL, no fire, or a box big enough
+  // that uploading it would cost more than it is worth - and the caller then
+  // draws the flipbook instead.
+  private fireShaded(
+    g: CanvasRenderingContext2D, world: World, z: number,
+    SX: (x: number, y: number) => number, SY: (x: number, y: number) => number,
+    time: number, vx: number, vy: number, vw: number, vh: number
+  ): boolean {
+    if (!this.fireGL.ok || this.noFireGL) return false;
+    const F = this.flameQ; F.length = 0;
+    const S = this.smokeQ; S.length = 0;
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const pt of world.particles) {
+      const t = Math.max(0, pt.life / pt.maxLife);
+      const sx = SX(pt.x, pt.y), sy = SY(pt.x, pt.y) - 4 * z - pt.lift * z;
+      if (pt.kind === "fire") {
+        const fw = pt.size * z * 2.6;
+        const h = fw * (FLAME_H / FLAME_W) * (0.55 + 0.45 * Math.min(1, t * 2.2));
+        F.push({ x: sx, y: sy, w: fw, h, seed: pt.seed, t });
+        // The box has to hold everything the flame reaches, not just the flame:
+        // the heat plume climbs well above the last glowing pixel, and the pool
+        // of light it throws spreads wider still. Clip either and the box shows
+        // itself as a rectangle.
+        const hw = Math.max(fw * 0.5 * 1.25, fw * 2.2);
+        const ry = h * 0.22 + h * 0.95 + fw * 0.9;
+        if (sx - hw < x0) x0 = sx - hw;
+        if (sx + hw > x1) x1 = sx + hw;
+        if (sy - Math.max(h * 2.3, ry) < y0) y0 = sy - Math.max(h * 2.3, ry);
+        if (sy + ry - h * 0.22 > y1) y1 = sy + ry - h * 0.22;
+      } else if (pt.kind === "smoke") {
+        const r = pt.size * z * 1.45;
+        S.push({ x: sx, y: sy, r, seed: pt.seed, t, tone: 1 - t > 0.55 ? 1 : 0 });
+        if (sx - r < x0) x0 = sx - r;
+        if (sx + r > x1) x1 = sx + r;
+        if (sy - r < y0) y0 = sy - r;
+        if (sy + r > y1) y1 = sy + r;
+      }
+    }
+    // Plain combat smoke with nothing burning under it has no light to catch
+    // and no air to bend, so it is not worth a texture upload.
+    if (F.length === 0) return false;
+
+    const dpr = this.dpr;
+    const vx0 = Math.round(vx * dpr), vy0 = Math.round(vy * dpr);
+    const vpW = Math.round((vx + vw) * dpr) - vx0, vpH = Math.round((vy + vh) * dpr) - vy0;
+    let bx = Math.floor(x0 * dpr) - 2, by = Math.floor(y0 * dpr) - 2;
+    let bw = Math.ceil(x1 * dpr) + 2 - bx, bh = Math.ceil(y1 * dpr) + 2 - by;
+    // Round the box up to a step so its size settles instead of changing every
+    // frame - reallocating the textures each frame costs more than the pixels.
+    const STEP = 64;
+    bw = Math.min(Math.ceil(bw / STEP) * STEP, vpW);
+    bh = Math.min(Math.ceil(bh / STEP) * STEP, vpH);
+    if (bw < STEP || bh < STEP) return false;
+    if (bw * bh > 1400 * 1400) return false;      // more upload than it is worth
+    bx = Math.max(vx0, Math.min(bx, vx0 + vpW - bw));
+    by = Math.max(vy0, Math.min(by, vy0 + vpH - bh));
+
+    for (const f of F) { f.x = f.x * dpr - bx; f.y = f.y * dpr - by; f.w *= dpr; f.h *= dpr; }
+    for (const q of S) { q.x = q.x * dpr - bx; q.y = q.y * dpr - by; q.r *= dpr; }
+
+    this.fireGLBox[0] = bx; this.fireGLBox[1] = by; this.fireGLBox[2] = bw; this.fireGLBox[3] = bh;
+    const t0 = performance.now();
+    const out = this.fireGL.render(g.canvas, bx, by, bw, bh, F, S, time);
+    if (!out) return false;
+    g.save();
+    g.globalCompositeOperation = "source-over";
+    g.globalAlpha = 1;
+    g.imageSmoothingEnabled = false;
+    // reading the GL canvas back into the 2D one flushes the pipe, so the
+    // clock either side of it is close to the true cost of the pass
+    g.drawImage(out, 0, 0, bw, bh, bx / dpr, by / dpr, bw / dpr, bh / dpr);
+    g.restore();
+    const cost = performance.now() - t0;
+    this.fireGLCost += (cost - this.fireGLCost) * (this.glSamples < 8 ? 0.35 : 0.08);
+    // A layer that costs a whole frame has to go at once - waiting out a long
+    // trial at four frames a second is worse than never having tried.
+    this.glSamples++;
+    const over = this.fireGLCost > this.fireGLBudget;
+    if ((this.glSamples > 24 && over) || (this.glSamples > 2 && this.fireGLCost > this.fireGLBudget * 4)) {
+      this.noFireGL = true;
+    }
+    this.glFireFrames++;
+    return true;
+  }
+
   draw(
     g: CanvasRenderingContext2D,
     world: World,
@@ -316,6 +422,10 @@ export class Renderer {
     this.lampGlows.length = 0;
     this.emissives.length = 0;
     this.frameTime = time;
+    // the renderer works in CSS px under a device-pixel scale; the GL box has
+    // to be laid out in the device pixels the canvas actually has
+    const tf = g.getTransform ? g.getTransform() : null;
+    this.dpr = tf && tf.a > 0 ? tf.a : 1;
     g.save();
     g.beginPath();
     g.rect(vx, vy, vw, vh);
@@ -992,30 +1102,7 @@ export class Renderer {
     }
     g.globalCompositeOperation = "source-over";
 
-    // Smoke sits behind the flames, so draw it first and unlit. Each puff is
-    // three overlapping lobes rather than one disc, which is what makes a
-    // column billow instead of reading as a row of grey dots; it darkens and
-    // thins as it climbs, so the top of a plume is soot rather than fog.
-    for (const pt of world.particles) {
-      if (pt.kind !== "smoke") continue;
-      const t = Math.max(0, pt.life / pt.maxLife);
-      const age = 1 - t;
-      const sx = SX(pt.x, pt.y), sy = SY(pt.x, pt.y) - 4 * z - pt.lift * z;
-      const r = pt.size * z;
-      // fresh smoke off a fire is near black; it greys only as it disperses
-      const sprite = this.puffSprite(age > 0.55 ? 1 : 0);   // soot, then dispersing grey
-      const alpha = 0.5 * Math.min(1, t * 2.6);       // fade in fast, out slowly
-      g.globalAlpha = alpha;
-      for (let k = 0; k < 2; k++) {
-        const a = pt.seed * Math.PI * 2 + k * 2.4 + age * 1.4;
-        const off = k === 0 ? 0 : r * 0.45;
-        const lx = sx + Math.cos(a) * off, ly = sy + Math.sin(a) * off * 0.6;
-        const lr = r * (k === 0 ? 1 : 0.8);
-        g.drawImage(sprite, lx - lr, ly - lr, lr * 2, lr * 2);
-      }
-      g.globalAlpha = 1;
-    }
-    // solid bits: blood and debris
+    // solid bits: blood and debris, on the ground under any smoke
     for (const pt of world.particles) {
       if (pt.kind !== "blood" && pt.kind !== "debris") continue;
       g.globalAlpha = Math.max(0, pt.life / pt.maxLife);
@@ -1024,31 +1111,65 @@ export class Renderer {
       g.fillRect(sx, sy, pt.size * z, pt.size * z);
     }
     g.globalAlpha = 1;
-    // fire and sparks burn additively, cooling white -> yellow -> orange -> red
-    g.globalCompositeOperation = "lighter";
-    for (const pt of world.particles) {
-      if (pt.kind !== "fire" && pt.kind !== "spark") continue;
-      const t = Math.max(0, pt.life / pt.maxLife);
-      const sx = SX(pt.x, pt.y), sy = SY(pt.x, pt.y) - 4 * z - pt.lift * z;
-      const c = t > 0.8 ? "255,250,225" : t > 0.55 ? "255,222,120" : t > 0.3 ? "255,140,45" : "205,55,20";
-      if (pt.kind === "spark") {
-        g.fillStyle = `rgba(${c},${t})`;
-        g.fillRect(sx - z * 0.5, sy - z * 0.5, pt.size * z, pt.size * z);
-        continue;
+
+    // ---- fire and smoke ----
+    // Where there is fire and the GPU will have it, the whole plume goes
+    // through the shader layer, which refracts and lights the scene it stands
+    // in. Otherwise - no WebGL, or a box too large to be worth uploading -
+    // this falls back to the flipbook and the baked puff sprites below.
+    if (!this.fireShaded(g, world, z, SX, SY, time, vx, vy, vw, vh)) {
+      // Smoke sits behind the flames, so draw it first and unlit. Each puff is
+      // two overlapping lobes rather than one disc, which is what makes a
+      // column billow instead of reading as a row of grey dots; it darkens and
+      // thins as it climbs, so the top of a plume is soot rather than fog.
+      for (const pt of world.particles) {
+        if (pt.kind !== "smoke") continue;
+        const t = Math.max(0, pt.life / pt.maxLife);
+        const age = 1 - t;
+        const sx = SX(pt.x, pt.y), sy = SY(pt.x, pt.y) - 4 * z - pt.lift * z;
+        const r = pt.size * z;
+        // fresh smoke off a fire is near black; it greys only as it disperses
+        const sprite = this.puffSprite(age > 0.55 ? 1 : 0);
+        g.globalAlpha = 0.5 * Math.min(1, t * 2.6);   // fade in fast, out slowly
+        for (let k = 0; k < 2; k++) {
+          const a = pt.seed * Math.PI * 2 + k * 2.4 + age * 1.4;
+          const off = k === 0 ? 0 : r * 0.45;
+          const lx = sx + Math.cos(a) * off, ly = sy + Math.sin(a) * off * 0.6;
+          const lr = r * (k === 0 ? 1 : 0.8);
+          g.drawImage(sprite, lx - lr, ly - lr, lr * 2, lr * 2);
+        }
+        g.globalAlpha = 1;
       }
       // A flame is a body of burning gas, not a dot of light. Every pixel of
       // these frames came from a noise-warped blackbody field baked at load
       // (see sprites/flame.ts); here it costs one blit. Each particle runs the
       // loop from its own phase and at its own scale, so no two flames in a
       // fire are ever in step.
+      g.globalCompositeOperation = "lighter";
       const frames = flameFrames();
-      const fi = ((time * 21 + pt.seed * FLAME_FRAMES * 3) | 0) % FLAME_FRAMES;
-      const fw = pt.size * z * 2.6, fh = fw * (FLAME_H / FLAME_W);
-      // it stands up as it is born and settles back as it burns out
-      const rise = 0.55 + 0.45 * Math.min(1, t * 2.2);
-      g.globalAlpha = Math.min(1, t * 1.9);
-      g.drawImage(frames[fi], sx - fw / 2, sy - fh * rise, fw, fh * rise);
-      g.globalAlpha = 1;
+      for (const pt of world.particles) {
+        if (pt.kind !== "fire") continue;
+        const t = Math.max(0, pt.life / pt.maxLife);
+        const sx = SX(pt.x, pt.y), sy = SY(pt.x, pt.y) - 4 * z - pt.lift * z;
+        const fi = ((time * 21 + pt.seed * FLAME_FRAMES * 3) | 0) % FLAME_FRAMES;
+        const fw = pt.size * z * 2.6, fh = fw * (FLAME_H / FLAME_W);
+        // it stands up as it is born and settles back as it burns out
+        const rise = 0.55 + 0.45 * Math.min(1, t * 2.2);
+        g.globalAlpha = Math.min(1, t * 1.9);
+        g.drawImage(frames[fi], sx - fw / 2, sy - fh * rise, fw, fh * rise);
+        g.globalAlpha = 1;
+      }
+      g.globalCompositeOperation = "source-over";
+    }
+    // sparks are single hot pixels either way, cooling white -> yellow -> red
+    g.globalCompositeOperation = "lighter";
+    for (const pt of world.particles) {
+      if (pt.kind !== "spark") continue;
+      const t = Math.max(0, pt.life / pt.maxLife);
+      const sx = SX(pt.x, pt.y), sy = SY(pt.x, pt.y) - 4 * z - pt.lift * z;
+      const c = t > 0.8 ? "255,250,225" : t > 0.55 ? "255,222,120" : t > 0.3 ? "255,140,45" : "205,55,20";
+      g.fillStyle = `rgba(${c},${t})`;
+      g.fillRect(sx - z * 0.5, sy - z * 0.5, pt.size * z, pt.size * z);
     }
     g.globalCompositeOperation = "source-over";
     g.globalAlpha = 1;
