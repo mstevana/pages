@@ -6,6 +6,7 @@ import { GRID, PANEL_FRAC, STORY_H, TILE_H, TILE_W, WEATHERS, Weather, clamp, ct
 import { ITEMS } from "./game/items";
 import { SaveData, clearSave, loadSave, newCampaign, writeSave } from "./game/save";
 import { HOLD_NEEDED, HOLD_WINDOW, MissionResult, ObjectiveKind, Ped, Train, World } from "./game/world";
+import { advanceResearch } from "./game/research";
 import { Panel } from "./ui/panel";
 import { FH, FW } from "./sprites/people";
 import { Renderer } from "./ui/render";
@@ -321,6 +322,9 @@ function endMission(result: MissionResult): void {
   save.kills += result.kills;
   save.credits += result.creditsEarned;
   if (result.success) save.mission++;
+  // The lab works while the squad does, won or lost: a bad run should cost
+  // credits and people, not stall the projects already paid for.
+  const delivered = advanceResearch(save.research, save.pending);
   const wiped = !save.agents.some((a) => a.alive) && save.credits < 1200;
   writeSave(save);
   world = null; city = null; renderer = null; slider = null; mapBase = null;
@@ -336,7 +340,7 @@ function endMission(result: MissionResult): void {
     return;
   }
   state = "debrief";
-  screens.showDebrief(save, result, () => {
+  screens.showDebrief(save, result, delivered, () => {
     rollMission();
     gotoBriefing();
   });

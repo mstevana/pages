@@ -1,7 +1,7 @@
 // Campaign persistence in localStorage.
 
 import { ItemStack, newItem } from "./items";
-import { Implants, noImplants } from "./research";
+import { Implants, Project, noImplants } from "./research";
 
 export interface SaveAgent {
   name: string;
@@ -17,7 +17,8 @@ export interface SaveData {
   credits: number;
   kills: number;
   agents: SaveAgent[];
-  research: string[]; // ids of researched nodes
+  research: string[]; // ids of delivered nodes
+  pending: Project[]; // projects the lab is still working on
 }
 
 const KEY = "synd.save.v1";
@@ -54,7 +55,7 @@ export function newCampaign(): SaveData {
       implants: noImplants(),
     });
   }
-  return { version: 1, mission: 1, credits: 0, kills: 0, agents, research: [] };
+  return { version: 1, mission: 1, credits: 0, kills: 0, agents, research: [], pending: [] };
 }
 
 export function loadSave(): SaveData | null {
@@ -65,6 +66,8 @@ export function loadSave(): SaveData | null {
     if (!d || d.version !== 1 || !Array.isArray(d.agents)) return null;
     // saves from before the lab existed: no tree, no chrome
     if (!Array.isArray(d.research)) d.research = [];
+    // saves from before the lab took time: nothing was ever in progress
+    if (!Array.isArray(d.pending)) d.pending = [];
     for (const a of d.agents) if (!a.implants) a.implants = noImplants();
     return d;
   } catch {

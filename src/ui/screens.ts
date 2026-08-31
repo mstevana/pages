@@ -5,7 +5,8 @@ import { ITEMS, ItemType, newItem, reloadCost, sellValue } from "../game/items";
 import { itemIconUrls } from "../sprites/icons";
 import { SaveData, newAgentName, writeSave } from "../game/save";
 import { IMPLANTS, IMPLANT_PARTS, ImplantPart, RESEARCH, RESEARCH_ALL, ResearchNode,
-         canResearch, implantNodeId, isResearched, itemResearched, noImplants } from "../game/research";
+         canResearch, implantNodeId, isResearched, itemResearched, noImplants,
+         projectOn, researchMissions } from "../game/research";
 import { MissionResult, ObjectiveKind } from "../game/world";
 
 const ui = () => document.getElementById("ui") as HTMLDivElement;
@@ -92,7 +93,7 @@ export function showBriefing(
       ${roster}
     </table>
     <div>
-      <button id="research" class="ghost">Research</button>
+      <button id="research" class="ghost">Research${save.pending.length > 0 ? ` (${save.pending.length})` : ""}</button>
       <button id="implants" class="ghost">Implants</button>
       <button id="armory" class="ghost">Armory</button>
       <button id="launch">Begin Mission</button>
@@ -281,16 +282,27 @@ export function showResearch(save: SaveData, onDone: () => void): void {
 
   const render = () => {
     clearScreens();
-    const state = (id: string): "done" | "open" | "locked" =>
-      isResearched(save.research, id) ? "done" : canResearch(save.research, id) ? "open" : "locked";
+    const state = (id: string): "done" | "busy" | "open" | "locked" =>
+      isResearched(save.research, id) ? "done"
+      : projectOn(save.pending, id) ? "busy"
+      : canResearch(save.research, save.pending, id) ? "open" : "locked";
+    // a running project shows what it still owes, and how far it has come
+    const bar = (id: string): string => {
+      const p = projectOn(save.pending, id);
+      if (!p) return "";
+      const pct = Math.round(100 * (p.total - p.left) / p.total);
+      return `<span class="res-bar"><i style="width:${pct}%"></i></span>`;
+    };
 
     const node = (n: ResearchNode): string => {
       const st = state(n.id);
       const on = pick === n.id ? "on" : "";
-      const cost = st === "done" ? "&#10003;" : `${n.cost}`;
+      const p = projectOn(save.pending, n.id);
+      const cost = st === "done" ? "&#10003;" : p ? `${p.left}&#9634;` : `${n.cost}`;
       return `<div class="res-node ${st} ${on}" data-id="${n.id}" title="${n.name}">
                 <span class="res-name">${n.name}</span>
                 <span class="res-cost">${st === "locked" ? "&#128274;" : cost}</span>
+                ${bar(n.id)}
               </div>`;
     };
     const chain = (ids: string[]): string =>
@@ -306,24 +318,36 @@ export function showResearch(save: SaveData, onDone: () => void): void {
         const id = implantNodeId(part, mk);
         const st = state(id);
         const on = pick === id ? "on" : "";
+        const pr = projectOn(save.pending, id);
+        const label = st === "done" ? "&#10003;" : st === "locked" ? "&#128274;"
+          : pr ? `${pr.left}&#9634;` : `${line.marks[mk - 1].researchCost}`;
         return `<div class="res-node mini ${st} ${on}" data-id="${id}" title="${line.name} MK.${"I".repeat(mk)}">
                   <span class="res-name">MK.${"I".repeat(mk)}</span>
-                  <span class="res-cost">${st === "done" ? "&#10003;" : st === "locked" ? "&#128274;" : line.marks[mk - 1].researchCost}</span>
+                  <span class="res-cost">${label}</span>
+                  ${bar(id)}
                 </div>`;
       }).join("");
       return `<div class="res-imp-row"><span class="res-imp-name">${line.name}</span>${marks}</div>`;
     }).join("");
 
     // ---- action bar ----
-    let bar = `<span class="arm-info dim">SELECT A PROJECT TO FUND</span>`;
+    const running = save.pending.length;
+    let actbar = running > 0
+      ? `<span class="arm-info dim">${running} PROJECT${running > 1 ? "S" : ""} IN THE LAB &middot; SELECT ANOTHER TO FUND</span>`
+      : `<span class="arm-info dim">SELECT A PROJECT TO FUND</span>`;
     if (pick) {
       const n = RESEARCH_ALL.get(pick)!;
       const st = state(n.id);
-      const why = st === "done" ? "RESEARCHED"
+      const p = projectOn(save.pending, n.id);
+      const runs = researchMissions(n.cost);
+      const why = st === "done" ? "DELIVERED"
+        : st === "busy" ? `IN THE LAB &middot; ${p!.left} OF ${p!.total} MISSION${p!.total > 1 ? "S" : ""} TO RUN`
         : st === "locked" ? `REQUIRES ${RESEARCH_ALL.get(n.req!)!.name}`
-        : save.credits < n.cost ? "NOT ENOUGH CREDITS" : "";
-      bar = `<span class="arm-info">${n.name} &middot; ${n.desc}${why ? ` &middot; <b style="color:${st === "done" ? "#4fdc6a" : "#e04040"}">${why}</b>` : ""}</span>
-             ${st === "open" ? `<button id="act-res" class="${save.credits >= n.cost ? "buy" : "ghost"}">RESEARCH &minus;${n.cost}</button>` : ""}`;
+        : save.credits < n.cost ? "NOT ENOUGH CREDITS"
+        : `${runs} MISSION${runs > 1 ? "S" : ""} TO BUILD`;
+      const good = st === "done" || st === "busy" || (st === "open" && save.credits >= n.cost);
+      actbar = `<span class="arm-info">${n.name} &middot; ${n.desc}${why ? ` &middot; <b style="color:${good ? "#4fdc6a" : "#e04040"}">${why}</b>` : ""}</span>
+             ${st === "open" ? `<button id="act-res" class="${save.credits >= n.cost ? "buy" : "ghost"}">FUND &minus;${n.cost}</button>` : ""}`;
     }
 
     const s = screen(`
@@ -339,7 +363,7 @@ export function showResearch(save: SaveData, onDone: () => void): void {
         ${branch("DEFENSE", chain(["medkit", "shield", "psdr"]) + `<span class="res-gap"></span>` + chain(["bomb", "gas", "cloakf"]))}
         ${branch("BODY IMPLANTS", impRows)}
       </div>
-      <div class="arm-actbar">${bar}</div>
+      <div class="arm-actbar">${actbar}</div>
     `);
     s.classList.add("armory");
 
@@ -347,11 +371,12 @@ export function showResearch(save: SaveData, onDone: () => void): void {
       el.addEventListener("click", () => { pick = (el as HTMLElement).dataset.id ?? null; render(); })
     );
     on(s, "#act-res", () => {
-      if (!pick || !canResearch(save.research, pick)) return;
+      if (!pick || !canResearch(save.research, save.pending, pick)) return;
       const n = RESEARCH_ALL.get(pick)!;
       if (save.credits < n.cost) return;
       save.credits -= n.cost;
-      save.research.push(n.id);
+      const total = researchMissions(n.cost);
+      save.pending.push({ id: n.id, left: total, total });
       writeSave(save);
       render();
     });
@@ -483,14 +508,23 @@ export function showImplants(save: SaveData, onDone: () => void): void {
 }
 
 export function showDebrief(
-  save: SaveData, result: MissionResult, onContinue: () => void
+  save: SaveData, result: MissionResult, delivered: string[], onContinue: () => void
 ): void {
   clearScreens();
+  // what the lab handed over while the squad was out, and what is still on the
+  // bench - the debrief is where a player looks for both
+  const landed = delivered.map((id) => RESEARCH_ALL.get(id)?.name ?? id);
+  const lab = landed.length > 0
+    ? `<p style="color:#4fdc6a">LAB DELIVERED: ${landed.join(" &middot; ")}</p>` : "";
+  const still = save.pending.length > 0
+    ? `<p class="dim">STILL IN THE LAB: ${save.pending
+        .map((p) => `${RESEARCH_ALL.get(p.id)?.name ?? p.id} (${p.left})`).join(" &middot; ")}</p>` : "";
   const s = screen(`
     <h2 style="color:${result.success ? "#4fdc6a" : "#e04040"}">
       MISSION ${result.success ? "ACCOMPLISHED" : "FAILED"}
     </h2>
     <p>${result.reason}</p>
+    ${lab}${still}
     <table>
       <tr><td>KILLS</td><td>${result.kills}</td></tr>
       <tr><td>CREDITS EARNED</td><td>${result.creditsEarned}cr</td></tr>

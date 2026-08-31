@@ -153,6 +153,14 @@
   .res-node.locked { opacity:0.38; }
   .res-node.open:hover { border-color:#ff9b2f; }
   .res-node.on { border-color:#ff9b2f; background:#3a2410; }
+  /* a project the lab is still working on: dashed edge, cyan count, and a bar
+     across the foot showing how far through its run it is */
+  .res-node.busy { border-color:#2f9bd6; border-style:dashed; }
+  .res-node.busy .res-cost { color:#5fd0ff; }
+  .res-bar { position:absolute; left:0; right:0; bottom:0; height:0.5vmin;
+             min-height:2px; background:#12222c; }
+  .res-bar i { display:block; height:100%; background:#2f9bd6; }
+  .res-node { position:relative; }
   .res-link { color:#2f4b5c; font-size: clamp(7px, 1.6vmin, 12px); line-height:1.4; }
   .res-gap { height:1.6vmin; }
   .res-imp-row { display:flex; align-items:center; gap:0.8vmin; width:100%; margin-bottom:0.8vmin; }
