@@ -1607,8 +1607,8 @@ export class World {
       const a = this.rng.float(0, Math.PI * 2);
       const s = this.rng.float(0.3, 2.2);
       this.fx(x, y, Math.cos(a) * s, Math.sin(a) * s,
-        this.rng.float(1.1, 2.2), "#4a4a52", this.rng.float(3, 6), "smoke",
-        this.rng.float(10, 22), this.rng.float(6, 14), 0.94);
+        this.rng.float(1.4, 2.6), "#4a4a52", this.rng.float(3, 6), "smoke",
+        this.rng.float(14, 26), this.rng.float(4, 9), 0.99);
     }
     // sparks and debris thrown clear
     for (let i = 0; i < 16; i++) {
@@ -1729,9 +1729,9 @@ export class World {
         if (this.rng.chance(0.75))
           this.fx(c.x + this.rng.float(-cm.L * 0.4, cm.L * 0.4),
             c.y + this.rng.float(-cm.W * 0.7, cm.W * 0.7),
-            this.rng.float(-0.3, 0.3), this.rng.float(-0.3, 0.3),
-            this.rng.float(2.4, 4.2), "#101012", this.rng.float(3.5, 6.5), "smoke",
-            this.rng.float(26, 42), this.rng.float(9, 16), 0.96);
+            this.rng.float(-0.5, 0.5), this.rng.float(-0.5, 0.5),
+            this.rng.float(2.6, 4.4), "#101012", this.rng.float(3.2, 5.6), "smoke",
+            this.rng.float(19, 27), this.rng.float(4, 7), 0.995);
         if (this.rng.chance(0.45))
           this.fx(fxp, fyp, this.rng.float(-1.5, 1.5), this.rng.float(-1.5, 1.5),
             this.rng.float(0.4, 0.9), "#ffb060", this.rng.float(1, 1.6), "spark",
@@ -1775,7 +1775,11 @@ export class World {
       pt.x += pt.vx * dt; pt.y += pt.vy * dt;
       pt.vx *= pt.drag; pt.vy *= pt.drag;
       pt.lift += pt.liftV * dt;
-      pt.liftV *= 0.96;
+      // Smoke is buoyant: it keeps going up. Everything else is thrown, and
+      // what throws it stops mattering almost at once. Bleeding smoke's climb
+      // off at the same rate is what made a plume sit on the wreck as a
+      // swelling ball rather than leaving it as a column.
+      pt.liftV *= pt.kind === "smoke" ? 0.9988 : 0.96;
       pt.size += pt.grow * dt;
       pt.life -= dt;
     }
@@ -1821,6 +1825,9 @@ export class World {
               vip.persuaded = true;
               vip.followId = a.id;
               vip.state = "follow";
+              vip.thinkT = 0;
+              vip.path = null;
+              vip.blindT = 0;
               this.audio.objective();
               this.notify("VIP SECURED - RETURN TO INSERTION POINT");
               break;
@@ -2144,6 +2151,9 @@ export class World {
           t.followId = p.id;
           t.state = "follow";
           t.speed = 3.0;
+          t.thinkT = 0;          // he falls in now, not when his idle timer runs out
+          t.path = null;
+          t.blindT = 0;
           this.audio.persuade();
           if (t.id === this.mission.targetId) {
             this.audio.objective();
@@ -2217,17 +2227,25 @@ export class World {
       const leader = this.peds.find((q) => q.id === p.followId && q.state !== "dead") ?? this.agents.find((a) => a.hp > 0);
       if (leader && leader.hp > 0) {
         p.followId = leader.id;
-        // He keeps up while somebody is within a block of him, and stops to
-        // wait when the squad gets further away than that - whoever is nearest
-        // counts, not just the man he was told to follow, so splitting the
-        // squad does not strand him. Walls play no part: a sight line that
-        // every parked lorry breaks is honest and horrible to play against.
-        const reach = this.blockSpan();
+        // He keeps up while somebody is within a couple of blocks of him, and
+        // stops to wait only when the squad has gone properly - driven off,
+        // not merely walked on. Whoever is nearest counts, not just the man he
+        // was told to follow, so splitting the squad does not strand him.
+        // Walls play no part: a sight line that every parked lorry breaks is
+        // honest and horrible to play against.
+        const reach = this.blockSpan() * 2.2;
         let near = dist2(p.x, p.y, leader.x, leader.y);
+        let pace = leader.speed;
         for (const a of this.agents) {
           if (a.hp <= 0) continue;
-          near = Math.min(near, dist2(p.x, p.y, a.x, a.y));
+          if (dist2(p.x, p.y, a.x, a.y) < near) { near = dist2(p.x, p.y, a.x, a.y); pace = a.speed; }
+          pace = Math.max(pace, a.speed);
         }
+        // A follower slower than the squad can never close a gap, only widen
+        // one - and once it passed a block he stopped for good and was left
+        // behind. He keeps the squad's pace, and jogs when he has fallen back.
+        const gap = Math.sqrt(near);
+        p.speed = pace * (gap > 5 ? 1.4 : 1.05);
         const seen = near < reach * reach;
         p.blindT = seen ? 0 : p.blindT + dt;
         if (p.blindT > FOLLOW_BLIND) {
@@ -2237,8 +2255,17 @@ export class World {
           if (wasWalking) this.notify("VIP HAS LOST SIGHT OF YOU - HE IS WAITING");
           return;
         }
-        if (p.thinkT <= 0) {
-          p.thinkT = 0.5;
+        // He has to commit to a route. Asking for a fresh one every quarter
+        // second looks sensible and is the thing that loses him: where two ways
+        // round a block cost about the same, consecutive searches pick
+        // different ones, and he spends the whole time walking at full speed
+        // into the corner between them while the squad disappears. So he keeps
+        // the path he has until it runs out or the man he is chasing has moved
+        // well off the end of it.
+        const end = p.path && p.path.length > 0 ? p.path[p.path.length - 1] : null;
+        const stale = !end || dist2(end.x, end.y, leader.x, leader.y) > 4.5 * 4.5;
+        if (stale && (p.thinkT <= 0 || !p.path)) {
+          p.thinkT = 0.8;
           if (dist2(p.x, p.y, leader.x, leader.y) > 2.2 * 2.2) {
             const path = this.pf.walkPath(p.x, p.y, leader.x, leader.y);
             if (path) { p.path = path; p.pathIdx = 0; p.state = "follow"; }

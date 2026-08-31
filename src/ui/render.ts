@@ -348,12 +348,14 @@ export class Renderer {
         if (sy - Math.max(h * 2.3, ry) < y0) y0 = sy - Math.max(h * 2.3, ry);
         if (sy + ry - h * 0.22 > y1) y1 = sy + ry - h * 0.22;
       } else if (pt.kind === "smoke") {
+        const age = 1 - t;
         const r = pt.size * z * 1.45;
-        S.push({ x: sx, y: sy, r, seed: pt.seed, t, tone: 1 - t > 0.55 ? 1 : 0 });
-        if (sx - r < x0) x0 = sx - r;
-        if (sx + r > x1) x1 = sx + r;
-        if (sy - r < y0) y0 = sy - r;
-        if (sy + r > y1) y1 = sy + r;
+        const rx = r * (1 - 0.22 * age), ry = r * (1 + 0.85 * age);
+        S.push({ x: sx, y: sy, rx, ry, seed: pt.seed, t, tone: age > 0.55 ? 1 : 0 });
+        if (sx - rx < x0) x0 = sx - rx;
+        if (sx + rx > x1) x1 = sx + rx;
+        if (sy - ry < y0) y0 = sy - ry;
+        if (sy + ry > y1) y1 = sy + ry;
       }
     }
     // Plain combat smoke with nothing burning under it has no light to catch
@@ -376,7 +378,7 @@ export class Renderer {
     by = Math.max(vy0, Math.min(by, vy0 + vpH - bh));
 
     for (const f of F) { f.x = f.x * dpr - bx; f.y = f.y * dpr - by; f.w *= dpr; f.h *= dpr; }
-    for (const q of S) { q.x = q.x * dpr - bx; q.y = q.y * dpr - by; q.r *= dpr; }
+    for (const q of S) { q.x = q.x * dpr - bx; q.y = q.y * dpr - by; q.rx *= dpr; q.ry *= dpr; }
 
     this.fireGLBox[0] = bx; this.fireGLBox[1] = by; this.fireGLBox[2] = bw; this.fireGLBox[3] = bh;
     const t0 = performance.now();
@@ -1213,12 +1215,17 @@ export class Renderer {
         // fresh smoke off a fire is near black; it greys only as it disperses
         const sprite = this.puffSprite(age > 0.55 ? 1 : 0);
         g.globalAlpha = 0.5 * Math.min(1, t * 2.6);   // fade in fast, out slowly
+        // Smoke that rises draws itself out as it goes and leans off the
+        // vertical; two lobes stacked up the way it is travelling read as a
+        // column flowing upward, where two lobes side by side only ever read
+        // as a ball.
+        const tall = 1 + 0.85 * age, wide = 1 - 0.22 * age;
+        const lean = Math.sin(pt.seed * 6.3 + age * 2.0) * 0.55;
         for (let k = 0; k < 2; k++) {
-          const a = pt.seed * Math.PI * 2 + k * 2.4 + age * 1.4;
-          const off = k === 0 ? 0 : r * 0.45;
-          const lx = sx + Math.cos(a) * off, ly = sy + Math.sin(a) * off * 0.6;
-          const lr = r * (k === 0 ? 1 : 0.8);
-          g.drawImage(sprite, lx - lr, ly - lr, lr * 2, lr * 2);
+          const off = k === 0 ? 0 : r * 0.62;
+          const lx = sx + lean * off, ly = sy - off * 0.95;
+          const lr = r * (k === 0 ? 1 : 0.78);
+          g.drawImage(sprite, lx - lr * wide, ly - lr * tall, lr * 2 * wide, lr * 2 * tall);
         }
         g.globalAlpha = 1;
       }

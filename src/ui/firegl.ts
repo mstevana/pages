@@ -245,7 +245,8 @@ export interface FlameQuad {
   seed: number; t: number;
 }
 export interface SmokeQuad {
-  x: number; y: number; r: number;   // centre and radius, device px
+  x: number; y: number;              // centre, device px within the box
+  rx: number; ry: number;            // half-extents - a rising puff draws out
   seed: number; t: number; tone: number;
 }
 
@@ -473,7 +474,7 @@ export class FireGL {
       const a = this.need(list.length);
       let o = 0;
       for (const s of list) {
-        o = this.push(a, o, bw, bh, s.x - s.r, s.y - s.r, s.x + s.r, s.y + s.r, -1, -1, 1, 1, s.seed, s.t);
+        o = this.push(a, o, bw, bh, s.x - s.rx, s.y - s.ry, s.x + s.rx, s.y + s.ry, -1, -1, 1, 1, s.seed, s.t);
       }
       this.bind(this.pSmoke, a, list.length);
       gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);   // premultiplied
