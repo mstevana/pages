@@ -1715,23 +1715,24 @@ export class World {
       const cm = CAR_MODELS[c.model % CAR_MODELS.length];
       c.burnT = (c.burnT ?? 0) + dt;
       let guard = 0;
-      while (c.burnT >= 0.05 && guard++ < 6) {
-        c.burnT -= 0.05;
-        const fxp = c.x + this.rng.float(-cm.L * 0.8, cm.L * 0.8);
-        const fyp = c.y + this.rng.float(-cm.W * 1.3, cm.W * 1.3);
-        // flames: slow-drifting tongues that live long enough to climb the hulk
-        this.fx(fxp, fyp, this.rng.float(-0.35, 0.35), this.rng.float(-0.35, 0.35),
-          this.rng.float(0.45, 0.85), "#fff0b0", this.rng.float(2.4, 4.2), "fire",
-          this.rng.float(11, 20), this.rng.float(2, 6), 0.88);
+      while (c.burnT >= 0.11 && guard++ < 4) {
+        c.burnT -= 0.11;
+        const fxp = c.x + this.rng.float(-cm.L * 0.75, cm.L * 0.75);
+        const fyp = c.y + this.rng.float(-cm.W * 1.2, cm.W * 1.2);
+        // Each flame is a whole body of fire in its own right, so a wreck wants
+        // a handful of big ones rather than a swarm of small ones.
+        this.fx(fxp, fyp, this.rng.float(-0.25, 0.25), this.rng.float(-0.25, 0.25),
+          this.rng.float(0.7, 1.25), "#fff0b0", this.rng.float(3.4, 6.2), "fire",
+          this.rng.float(7, 14), this.rng.float(1, 4), 0.9);
         // black smoke, launched from the hottest part and rising well above the
         // wreck: long-lived, climbing hard and swelling as it goes
-        if (this.rng.chance(0.4))
+        if (this.rng.chance(0.75))
           this.fx(c.x + this.rng.float(-cm.L * 0.4, cm.L * 0.4),
             c.y + this.rng.float(-cm.W * 0.7, cm.W * 0.7),
             this.rng.float(-0.3, 0.3), this.rng.float(-0.3, 0.3),
             this.rng.float(2.4, 4.2), "#101012", this.rng.float(3.5, 6.5), "smoke",
             this.rng.float(26, 42), this.rng.float(9, 16), 0.96);
-        if (this.rng.chance(0.25))
+        if (this.rng.chance(0.45))
           this.fx(fxp, fyp, this.rng.float(-1.5, 1.5), this.rng.float(-1.5, 1.5),
             this.rng.float(0.4, 0.9), "#ffb060", this.rng.float(1, 1.6), "spark",
             this.rng.float(10, 22), 0, 0.9);

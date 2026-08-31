@@ -6,6 +6,7 @@ import { City, D_S, D_W, Deco, Fitting, GARAGE_LEVEL, idx, inGrid, isRoad, Metro
 import { GRID, STORY_H, TILE_H, TILE_W, ctx2d, isNight, isRain, isoX, isoY, makeCanvas } from "../engine/util";
 import { PeopleAtlas, FW, FH } from "../sprites/people";
 import { BENCH_H, BENCH_W, STALL_H, STALL_W, TREE_H, TREE_W } from "../sprites/props";
+import { FLAME_FRAMES, FLAME_H, FLAME_W, flameFrames } from "../sprites/flame";
 import { CAR_MODELS } from "../sprites/cars";
 import { TileArt } from "../sprites/tiles";
 import { BOARD_FLASH, Car, Ped, TRAIN_CARS, TRAIN_HALF, TRAIN_SEG, World } from "../game/world";
@@ -122,6 +123,9 @@ export class Renderer {
   rainDrops: { x: number; y: number; v: number }[] = [];
 
   constructor(private city: City) {
+    // bake the flame flipbook alongside the sector, so the first explosion
+    // does not pay for it mid-frame
+    flameFrames();
     // label each building so the cutaway can hide a whole structure at once
     const bid = new Int32Array(GRID * GRID).fill(-1);
     const t = city.tiles;
@@ -1032,45 +1036,19 @@ export class Renderer {
         g.fillRect(sx - z * 0.5, sy - z * 0.5, pt.size * z, pt.size * z);
         continue;
       }
-      // A flame is a tongue, not a dot of light: it tapers as it rises, necks
-      // and bulges along its length, and leans as it licks upward. Drawn as a
-      // filled outline with a hotter core inside, so overlapping tongues pile
-      // up additively into one convoluted mass of fire.
-      const w = Math.max(1, pt.size * z * 0.85);
-      const h = w * (2.5 + 1.6 * t);
-      const ph = pt.seed * Math.PI * 2;
-      const tongue = (ww: number, hh: number, alpha: number, col: string, ramp: boolean) => {
-        const N = 7;
-        g.beginPath();
-        for (let side = 0; side < 2; side++) {
-          for (let i = 0; i <= N; i++) {
-            const k = side === 0 ? i : N - i;
-            const f = k / N;                                  // 0 root .. 1 tip
-            // lean and wobble, growing toward the tip
-            const cx = Math.sin(time * 7.5 + ph + f * 3.4) * ww * 0.85 * f * f;
-            // neck and bulge along the length, so the edge is never a clean arc
-            const hw = ww * Math.pow(1 - f, 0.62) * (0.78 + 0.42 * Math.sin(ph * 9 + f * 6.2 + time * 5));
-            const px2 = sx + cx + (side === 0 ? -hw : hw);
-            const py2 = sy - f * hh;
-            if (side === 0 && i === 0) g.moveTo(px2, py2); else g.lineTo(px2, py2);
-          }
-        }
-        g.closePath();
-        if (ramp) {
-          // hot and dense at the root, thinning to nothing at the tip: a flat
-          // fill is what makes a flame read as a paper cutout
-          const lg = g.createLinearGradient(sx, sy, sx, sy - hh);
-          lg.addColorStop(0, `rgba(${col},${alpha.toFixed(3)})`);
-          lg.addColorStop(0.45, `rgba(${col},${(alpha * 0.55).toFixed(3)})`);
-          lg.addColorStop(1, `rgba(${col},0)`);
-          g.fillStyle = lg;
-        } else {
-          g.fillStyle = `rgba(${col},${alpha.toFixed(3)})`;
-        }
-        g.fill();
-      };
-      tongue(w, h, 0.34 * t, c, true);                        // the body of the flame
-      tongue(w * 0.52, h * 0.62, 0.4 * t, t > 0.45 ? "255,240,190" : c, false);   // hotter core
+      // A flame is a body of burning gas, not a dot of light. Every pixel of
+      // these frames came from a noise-warped blackbody field baked at load
+      // (see sprites/flame.ts); here it costs one blit. Each particle runs the
+      // loop from its own phase and at its own scale, so no two flames in a
+      // fire are ever in step.
+      const frames = flameFrames();
+      const fi = ((time * 21 + pt.seed * FLAME_FRAMES * 3) | 0) % FLAME_FRAMES;
+      const fw = pt.size * z * 2.6, fh = fw * (FLAME_H / FLAME_W);
+      // it stands up as it is born and settles back as it burns out
+      const rise = 0.55 + 0.45 * Math.min(1, t * 2.2);
+      g.globalAlpha = Math.min(1, t * 1.9);
+      g.drawImage(frames[fi], sx - fw / 2, sy - fh * rise, fw, fh * rise);
+      g.globalAlpha = 1;
     }
     g.globalCompositeOperation = "source-over";
     g.globalAlpha = 1;

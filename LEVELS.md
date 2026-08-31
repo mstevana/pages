@@ -1156,3 +1156,37 @@ radial gradient per smoke puff took six burning wrecks to 66.6ms a frame. The
 ramp is now baked once into a sprite and blitted, and a flame's core is a flat
 fill rather than a second gradient, which puts the same scene back at 33.4ms
 - the same as a city with no fire in it at all.
+
+## The flame shader
+
+There is no GPU shader to write here - the whole game draws through a 2D
+canvas - so the flame *is* the shader: the same per-pixel maths a fragment
+shader would run, evaluated on the CPU and baked once into a seamless
+flipbook at load. The runtime then blits frames, so the most convincing fire
+in the game is also the cheapest thing on screen.
+
+The technique is what real-time fire shaders actually do:
+
+  fBm value noise   octaves summed at halving amplitude, giving structure at
+                    every scale instead of one blobby frequency.
+  domain warping    the noise is sampled at coordinates displaced by a second
+                    noise field. This is the step that turns smooth blobs into
+                    licking, curling tongues, and it does more for realism
+                    than everything else combined.
+  a body mask       fire exists only inside a plume that narrows with height;
+                    the turbulence then eats into that silhouette, so the edge
+                    is ragged and wisps detach at the top on their own.
+  blackbody colour  heat maps through the colours a radiating body actually
+                    passes through - soot red, orange, amber, straw, white -
+                    rather than a hand-picked gradient, with a touch of blue at
+                    the root where combustion is complete.
+
+The loop is seamless because the noise lattice wraps on a fixed period in the
+vertical axis and one cycle scrolls it by exactly that period. Each particle
+enters the loop at its own phase and scale, so no two flames in a fire are
+ever in step, and a wreck now wants a handful of big flames rather than a
+swarm of small ones.
+
+Cost: 24 frames of 48x80 bake in 57ms once, behind the sector-generation
+screen, for 360KB of frames. Six burning wrecks in one shot still run at
+33.3ms a frame - the same as a city with no fire in it.
