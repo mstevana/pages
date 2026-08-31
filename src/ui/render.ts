@@ -553,13 +553,95 @@ export class Renderer {
       }
     }
 
-    // ---- round islands: a circle in world space is an axis-aligned ellipse
-    // on screen (rx:ry = TILE_W:TILE_H), so each 2x2 island is repainted as a
-    // kerbed disc, with a circular lane guide around it - which is what makes
-    // the whole junction read as round even though the tiles are square.
+    // ---- round islands and the verge outside them. A circle in world space
+    // is an axis-aligned ellipse on screen (rx:ry = TILE_W:TILE_H), so both the
+    // island and the outer edge of the circulating lane can be drawn as true
+    // circles over the square tiles underneath.
     if (!(sectioned && section < 0)) {
       const ex = (r: number) => r * Math.SQRT2 * (TILE_W / 2) * z;
       const ey = (r: number) => r * Math.SQRT2 * (TILE_H / 2) * z;
+      // Between the four arms the circulating lane's outer edge is a square
+      // corner of tarmac, and a junction with square corners does not read as
+      // round however round its island is. So the outer edge is painted as a
+      // circle, with the corners beyond it hatched.
+      //
+      // Paint, not kerb. Traffic still drives the tile grid, and a circulating
+      // car's centre was measured out at 2.18 tiles from the island - a raised
+      // verge tight enough to look round would have cars mounting it. Hatching
+      // is flush tarmac that a vehicle may cross, so it can be drawn at the
+      // radius the junction actually wants. That radius is bounded below by the
+      // arms: at 2.24 the circle would start clipping the approach lanes, so it
+      // sits at 2.3 and leaves them alone.
+      const VERGE = 2.3;
+      for (const ri of this.city.ringIslands) {
+        if (ri.x < x0 - 3 || ri.x > x1 + 3 || ri.y < y0 - 3 || ri.y > y1 + 3) continue;
+        const cxS = SX(ri.x, ri.y), cyS = SY(ri.x, ri.y);
+        // the four corner tiles of the block: the only places hatching belongs
+        const quads = new Path2D();
+        for (const [ox, oy] of [[-2, -2], [1, -2], [-2, 1], [1, 1]] as [number, number][]) {
+          const px = SX(ri.x + ox, ri.y + oy), py = SY(ri.x + ox, ri.y + oy);
+          quads.moveTo(px, py);
+          quads.lineTo(px + tw / 2, py + th / 2);
+          quads.lineTo(px, py + th);
+          quads.lineTo(px - tw / 2, py + th / 2);
+          quads.closePath();
+        }
+        // Beyond the hatching the corner goes back to pavement, which rounds
+        // the tarmac's own outline as far as the traffic will let it: a car
+        // corner reaches about 2.6 tiles out, so that is where the kerb goes.
+        const KERB = 2.62;
+        const block = new Path2D();
+        block.rect(cxS - 3 * TILE_W * z, cyS - 3 * TILE_H * z - th,
+                   6 * TILE_W * z, 6 * TILE_H * z + 2 * th);
+        g.save();
+        g.clip(quads);
+        const past = new Path2D();
+        past.addPath(block);
+        past.ellipse(cxS, cyS, ex(KERB), ey(KERB), 0, 0, Math.PI * 2);
+        g.save();
+        g.clip(past, "evenodd");
+        for (const [ox, oy] of [[-2, -2], [1, -2], [-2, 1], [1, 1]] as [number, number][]) {
+          g.drawImage(art.sidewalk, SX(ri.x + ox, ri.y + oy) - tw / 2, SY(ri.x + ox, ri.y + oy), tw, th);
+        }
+        g.restore();
+        g.strokeStyle = art.night ? "#4a505a" : "#70767f";
+        g.lineWidth = Math.max(1, 0.7 * z);
+        g.beginPath();
+        g.ellipse(cxS, cyS, ex(KERB), ey(KERB), 0, 0, Math.PI * 2);
+        g.stroke();
+        // the hatched apron sits between the running lane and that kerb
+        const outside = new Path2D();
+        outside.addPath(block);
+        outside.ellipse(cxS, cyS, ex(VERGE), ey(VERGE), 0, 0, Math.PI * 2);
+        g.clip(outside, "evenodd");
+        const inside = new Path2D();
+        inside.ellipse(cxS, cyS, ex(KERB), ey(KERB), 0, 0, Math.PI * 2);
+        g.clip(inside);
+        g.fillStyle = "rgba(0,0,0,0.22)";                // cooler than the lane
+        g.fill(quads);
+        // radial hatching, the way the apron of a real roundabout is marked
+        g.strokeStyle = art.night ? "rgba(198,188,140,0.34)" : "rgba(232,224,168,0.5)";
+        g.lineWidth = Math.max(1, 0.7 * z);
+        g.beginPath();
+        for (let k = 0; k < 48; k++) {
+          const a2 = (k / 48) * Math.PI * 2;
+          const ca = Math.cos(a2), sa = Math.sin(a2);
+          g.moveTo(cxS + ex(VERGE) * ca, cyS + ey(VERGE) * sa);
+          g.lineTo(cxS + ex(KERB) * ca, cyS + ey(KERB) * sa);
+        }
+        g.stroke();
+        g.restore();
+        // the edge line itself, drawn only across the corners - the arms have
+        // no edge to draw, which is what makes them read as roads joining a ring
+        g.save();
+        g.clip(quads);
+        g.strokeStyle = art.night ? "rgba(214,206,158,0.6)" : "rgba(244,238,196,0.8)";
+        g.lineWidth = Math.max(1, 0.9 * z);
+        g.beginPath();
+        g.ellipse(cxS, cyS, ex(VERGE), ey(VERGE), 0, 0, Math.PI * 2);
+        g.stroke();
+        g.restore();
+      }
       for (const ri of this.city.ringIslands) {
         if (ri.x < x0 - 2 || ri.x > x1 + 2 || ri.y < y0 - 2 || ri.y > y1 + 2) continue;
         const sx = SX(ri.x, ri.y), sy = SY(ri.x, ri.y);
