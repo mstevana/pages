@@ -177,8 +177,8 @@ const HOLD_RADIUS = 5;
 // off the pad costs the seconds it costs and no more. A window equal to the
 // requirement would mean any interruption at all put full pay out of reach,
 // which is a mission you can only lose slowly.
-const HOLD_WINDOW = 210;       // seconds the transmission runs for
-const HOLD_NEEDED = 150;       // ...of which this many must be ours for full pay
+export const HOLD_WINDOW = 210;   // seconds the transmission runs for
+export const HOLD_NEEDED = 150;   // ...of which this many must be ours for full pay
 const HOLD_WAVE = 10;          // seconds between pairs of rivals sent at the pad
 const HOLD_CROWD = 6;          // ...and the most that will be standing at once
 
@@ -448,12 +448,49 @@ export class World {
     return { x: 6.5, y: from.y };
   }
 
-  private farPoint(from: { x: number; y: number }, minDist: number): { x: number; y: number } {
+  // Every tile the squad can walk to from where it lands. A path search can
+  // give up on a long route; a flood fill cannot, so this is the honest answer
+  // to "can they get there at all".
+  private reachMask(from: { x: number; y: number }): Uint8Array {
+    const mask = new Uint8Array(GRID * GRID);
+    const s = this.pf.nearestWalkable(from.x | 0, from.y | 0, 10);
+    if (!s) return mask;
+    const q: number[] = [idx(s.x, s.y)];
+    mask[q[0]] = 1;
+    for (let h = 0; h < q.length; h++) {
+      const cur = q[h], cx = cur % GRID, cy = (cur / GRID) | 0;
+      for (let k = 0; k < 4; k++) {
+        const nx = cx + (k === 0 ? 1 : k === 1 ? -1 : 0), ny = cy + (k === 2 ? 1 : k === 3 ? -1 : 0);
+        if (!inGrid(nx, ny)) continue;
+        const ni = idx(nx, ny);
+        if (mask[ni] || !isWalkable(this.city, nx, ny)) continue;
+        mask[ni] = 1; q.push(ni);
+      }
+    }
+    return mask;
+  }
+
+  private farPoint(
+    from: { x: number; y: number }, minDist: number,
+    want?: (x: number, y: number) => boolean
+  ): { x: number; y: number } {
     for (let tries = 0; tries < 300; tries++) {
       const x = this.rng.int(12, GRID - 12), y = this.rng.int(12, GRID - 12);
       if (dist(x, y, from.x, from.y) < minDist) continue;
       const n = this.pf.nearestWalkable(x, y, 8);
-      if (n) return { x: n.x + 0.5, y: n.y + 0.5 };
+      if (n && (!want || want(n.x, n.y))) return { x: n.x + 0.5, y: n.y + 0.5 };
+    }
+    // nothing at that range answers, so take the nearest thing that does
+    if (want) {
+      for (let r = 14; r < GRID; r += 6) {
+        for (let k = 0; k < 60; k++) {
+          const a = (k / 60) * Math.PI * 2;
+          const x = (from.x + Math.cos(a) * r) | 0, y = (from.y + Math.sin(a) * r) | 0;
+          if (x < 6 || y < 6 || x >= GRID - 6 || y >= GRID - 6) continue;
+          const n = this.pf.nearestWalkable(x, y, 6);
+          if (n && want(n.x, n.y)) return { x: n.x + 0.5, y: n.y + 0.5 };
+        }
+      }
     }
     // opposite corner fallback
     const n = this.pf.nearestWalkable(GRID - 1 - (from.x | 0), GRID - 1 - (from.y | 0), 20);
@@ -582,7 +619,19 @@ export class World {
       // stretch whether we hold the ground or not, so being pushed off costs
       // the seconds it costs and nothing more: what is banked is banked.
       case "hold": {
-        const p = this.farPoint(start, GRID * 0.5);
+        // A pad the squad cannot get to, or one sitting in a live traffic lane
+        // or down a one-tile slot, is not a job. It has to be somewhere they
+        // can walk to and can hold once they are there.
+        const reach = this.reachMask(start);
+        const p = this.farPoint(start, GRID * 0.5, (x, y) => {
+          if (!reach[idx(x, y)]) return false;
+          if (this.city.tiles[idx(x, y)] === T_ROAD) return false;
+          let open = 0;
+          for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+            if (isWalkable(this.city, x + dx, y + dy) && reach[idx(x + dx, y + dy)]) open++;
+          }
+          return open >= 7;
+        });
         m.zone = { x: p.x, y: p.y, r: HOLD_RADIUS };
         m.window = HOLD_WINDOW;
         m.text = `SEIZE the uplink and HOLD it. The transmission runs for ${HOLD_WINDOW | 0} seconds once you first set foot on the pad; we need ${HOLD_NEEDED | 0} of those seconds and are paid for the share we get. Rivals will come for it.`;

@@ -5,7 +5,7 @@ import { AudioEngine } from "./engine/audio";
 import { GRID, PANEL_FRAC, STORY_H, TILE_H, TILE_W, WEATHERS, Weather, clamp, ctx2d, isRain, isoX, isoY, lerp, makeCanvas } from "./engine/util";
 import { ITEMS } from "./game/items";
 import { SaveData, clearSave, loadSave, newCampaign, writeSave } from "./game/save";
-import { MissionResult, ObjectiveKind, Train, World } from "./game/world";
+import { HOLD_NEEDED, HOLD_WINDOW, MissionResult, ObjectiveKind, Train, World } from "./game/world";
 import { Panel } from "./ui/panel";
 import { Renderer } from "./ui/render";
 import { SectionSlider } from "./ui/slider";
@@ -526,7 +526,7 @@ function handlePanelTap(hit: ReturnType<Panel["hit"]>): void {
         status = `${m.wrecked}/${m.marks.length} DESTROYED` + (m.escaped > 0 ? ` - ${m.escaped} DRIVEN OUT` : "");
       } else if (m.kind === "hold") {
         status = m.phase === 0 ? "REACH THE UPLINK PAD"
-          : `UPLINK ${Math.min(100, (m.held / 150) * 100) | 0}% - ${Math.max(0, m.window) | 0}s OF WINDOW LEFT`;
+          : `UPLINK ${Math.min(100, (m.held / HOLD_NEEDED) * 100) | 0}% - ${Math.max(0, m.window) | 0}s OF WINDOW LEFT`;
       } else if (m.kind === "intercept") {
         status = m.alerted ? "DEFECTOR RUNNING FOR THE BOUNDARY" : "DEFECTOR HAS NOT SEEN YOU";
       }
@@ -601,8 +601,53 @@ function frame(now: number): void {
     panel.draw(g, world, people, mapBase, mode, audio.muted, world.time, save.mission, dragGhost ? dragGhost.overDoll : -1);
     if (slider) slider.draw(g, slider.geom(panelW, 0, vw, vh), sectionLevel);
 
-    // notices
+    // The uplink runs on a clock whether anyone is standing on the pad or not,
+    // and what is banked is what gets paid. That is worth knowing at a glance
+    // rather than through a menu, so it sits at the top of the view for as
+    // long as the transmission lasts.
     let ny = 8;
+    if (state === "mission" && world && world.mission.kind === "hold" && !world.mission.done) {
+      const m = world.mission;
+      const bw = Math.min(260, vw - 24), bh = 22;
+      const bx = panelW + (vw - bw) / 2, by = ny;
+      g.fillStyle = "rgba(10,12,16,0.78)";
+      g.fillRect(bx, by, bw, bh);
+      if (m.phase === 0) {
+        g.strokeStyle = "rgba(255,155,47,0.7)";
+        g.strokeRect(bx + 0.5, by + 0.5, bw - 1, bh - 1);
+        g.fillStyle = "#ff9b2f";
+        g.font = "bold 11px monospace";
+        g.textAlign = "center";
+        g.fillText("REACH THE UPLINK PAD", bx + bw / 2, by + 15);
+      } else {
+        const frac = Math.max(0, Math.min(1, m.held / HOLD_NEEDED));
+        const left = Math.max(0, m.window);
+        // what is still winnable: the rest of the window, if all of it is held
+        const cap = Math.min(1, frac + left / HOLD_NEEDED);
+        g.fillStyle = "rgba(120,255,190,0.14)";
+        g.fillRect(bx + 2, by + 2, (bw - 4) * cap, bh - 4);
+        g.fillStyle = frac >= 1 ? "#4fdc6a" : "#7affc8";
+        g.fillRect(bx + 2, by + 2, (bw - 4) * frac, bh - 4);
+        g.strokeStyle = "rgba(122,255,200,0.65)";
+        g.strokeRect(bx + 0.5, by + 0.5, bw - 1, bh - 1);
+        g.font = "bold 11px monospace";
+        g.textAlign = "center";
+        g.fillStyle = "#04120c";
+        const label = `UPLINK ${(frac * 100) | 0}%   ${left | 0}s LEFT`;
+        g.fillText(label, bx + bw / 2, by + 15);
+        // legible where the bar has not reached yet
+        g.save();
+        g.beginPath();
+        g.rect(bx + 2 + (bw - 4) * frac, by, bw, bh);
+        g.clip();
+        g.fillStyle = "#cfeee0";
+        g.fillText(label, bx + bw / 2, by + 15);
+        g.restore();
+      }
+      ny += bh + 6;
+    }
+
+    // notices
     g.textAlign = "center";
     for (const nn of notices) {
       nn.t -= dt;
