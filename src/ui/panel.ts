@@ -258,7 +258,7 @@ export class Panel {
     this.drawMinimap(g, world, mapBase, time);
 
     // toggles
-    this.toggleBtn(g, L.walkBtn, "WALK", mode === "walk", "#4fdc6a");
+    this.toggleBtn(g, L.walkBtn, "AUTO", mode === "walk", "#4fdc6a");
     this.toggleBtn(g, L.shootBtn, "SHOOT", mode === "shoot", "#e04040");
   }
 

@@ -5,8 +5,9 @@ import { AudioEngine } from "./engine/audio";
 import { GRID, PANEL_FRAC, STORY_H, TILE_H, TILE_W, WEATHERS, Weather, clamp, ctx2d, isRain, isoX, isoY, lerp, makeCanvas } from "./engine/util";
 import { ITEMS } from "./game/items";
 import { SaveData, clearSave, loadSave, newCampaign, writeSave } from "./game/save";
-import { HOLD_NEEDED, HOLD_WINDOW, MissionResult, ObjectiveKind, Train, World } from "./game/world";
+import { HOLD_NEEDED, HOLD_WINDOW, MissionResult, ObjectiveKind, Ped, Train, World } from "./game/world";
 import { Panel } from "./ui/panel";
+import { FH, FW } from "./sprites/people";
 import { Renderer } from "./ui/render";
 import { SectionSlider } from "./ui/slider";
 import * as screens from "./ui/screens";
@@ -42,6 +43,7 @@ const audio = new AudioEngine();
 const cam = { x: 256, y: 256, zoom: 2 };
 let followCam = true;
 let mode: "walk" | "shoot" = "walk";
+const PED_HIT_SCALE = 1.2;   // must match the renderer's PED_SCALE
 let notices: { text: string; t: number }[] = [];
 
 function resize(): void {
@@ -97,6 +99,60 @@ function worldToScreen(x: number, y: number, h = 0): { x: number; y: number } {
     x: cx + (isoX(x, y) - isoX(cam.x, cam.y)) * cam.zoom,
     y: cy + (isoY(x, y) - isoY(cam.x, cam.y)) * cam.zoom - h * STORY_H * cam.zoom,
   };
+}
+
+// Who is under the cursor. A tap on a person is an order to shoot them, so the
+// test is against the sprite the player can actually see: its own box, at its
+// own level, and only if the section plane is drawing it. Our own squad is not
+// a target - tapping an agent is how you walk to where he is standing.
+function pedUnder(sx: number, sy: number): Ped | null {
+  if (!world) return null;
+  const sectioned = renderer ? sectionLevel < renderer.maxStories : false;
+  const shown = (ez: number): boolean => ez < -0.01
+    ? sectioned && ez <= sectionLevel + 0.01 && sectionLevel < ez + 1
+    : !sectioned || ez <= sectionLevel + 0.01;
+  const s = PED_HIT_SCALE * cam.zoom;
+  let best: Ped | null = null, bestD = Infinity;
+  for (const p of world.peds) {
+    if (p.state === "dead" || p.carId !== null || p.trainId !== null) continue;
+    if (p.team === "player") continue;
+    if (!shown(p.z)) continue;
+    // The sprite is drawn from (foot - (FH-2)) to (foot + 2), and the figure
+    // inside it is a good deal narrower than the frame. The box is that figure
+    // with a little room either side, because a finger is not a pixel.
+    const q = worldToScreen(p.x, p.y, p.z);
+    const cx = q.x, cy = q.y - (FH - 4) * s * 0.5;
+    if (Math.abs(sx - cx) > FW * s * 0.34 || Math.abs(sy - cy) > FH * s * 0.52) continue;
+    const d = Math.hypot(sx - cx, (sy - cy) * 0.6);
+    if (d < bestD) { bestD = d; best = p; }
+  }
+  return best;
+}
+
+// Is the selection actually holding something that fires? A squad carrying a
+// persuadertron walks up to people rather than shooting them, and a tap on a
+// person has to mean what the kit in their hands means.
+function selectionArmed(): boolean {
+  if (!world) return false;
+  for (const a of world.selectedAgents(world.uiSelected)) {
+    if (a.carId !== null) continue;
+    const it = a.sel >= 0 && a.sel < a.inv.length ? a.inv[a.sel] : null;
+    if (it && ITEMS[it.type]?.weapon) return true;
+  }
+  return false;
+}
+
+// Loot under the cursor, with the same generous radius the tap has always
+// used - a beacon may stand proud of a building its item is behind.
+function dropUnder(sx: number, sy: number): { id: number; x: number; y: number } | null {
+  if (!world) return null;
+  const t = screenToWorld(sx, sy);
+  let best: { id: number; x: number; y: number } | null = null, bd = 1.9 * 1.9;
+  for (const d of world.drops) {
+    const dd = (d.x - t.x) ** 2 + (d.y - t.y) ** 2;
+    if (dd < bd) { bd = dd; best = d; }
+  }
+  return best;
 }
 
 // The world point a screen tap lands on at a given height: a point h storeys
@@ -408,13 +464,17 @@ function pointerEnd(ev: PointerEvent): void {
     w.cmdShoot(w.uiSelected, aim.x, aim.y, aim.surf >= 0 && city ? city.levels.z[aim.surf] : 0);
     return;
   }
-  // walk mode: pickups and cars take priority
-  let bestDrop = -1, bdd = 1.9 * 1.9; // generous tap radius - loot may sit behind a building
-  for (const d of w.drops) {
-    const dd = (d.x - t.x) ** 2 + (d.y - t.y) ** 2;
-    if (dd < bdd) { bdd = dd; bestDrop = d.id; }
+  // Auto: the thing under the finger says what the order is. A person is a
+  // target, loot is a pickup, a car is a ride, and bare ground is a walk - so
+  // the common case never needs the mode switched by hand. SHOOT stays as the
+  // override, for firing at a spot with nobody standing on it.
+  const target = pedUnder(p.x, p.y);
+  if (target && selectionArmed()) {
+    w.cmdShoot(w.uiSelected, target.x, target.y, target.z);
+    return;
   }
-  if (bestDrop >= 0) { w.cmdPickup(w.uiSelected, bestDrop); followCam = true; return; }
+  const hitDrop = dropUnder(p.x, p.y);
+  if (hitDrop) { w.cmdPickup(w.uiSelected, hitDrop.id); followCam = true; return; }
 
   const lead = w.selectedAgents(w.uiSelected)[0];
   // A train is a solid thing on the screen, so hit-test it as one: tap its
@@ -473,6 +533,56 @@ function pointerEnd(ev: PointerEvent): void {
 }
 canvas.addEventListener("pointerup", pointerEnd);
 canvas.addEventListener("pointercancel", pointerEnd);
+
+// A pickup cursor, drawn rather than shipped: two brackets closing on an arrow
+// into a tray, outlined dark so it reads on pavement and on tarmac alike.
+let pickCursor = "";
+function pickupCursor(): string {
+  if (pickCursor) return pickCursor;
+  const c = makeCanvas(32, 32);
+  const q = ctx2d(c);
+  q.imageSmoothingEnabled = true;
+  q.lineCap = "round";
+  q.lineJoin = "round";
+  const stroke = (col: string, w: number): void => {
+    q.strokeStyle = col; q.lineWidth = w;
+    q.beginPath();                                   // corner brackets
+    for (const [ox, oy, dx, dy] of [[6, 10, 1, -1], [26, 10, -1, -1], [6, 24, 1, 1], [26, 24, -1, 1]]) {
+      q.moveTo(ox, oy + dy * -5 * dy); q.lineTo(ox, oy); q.lineTo(ox + dx * 5, oy);
+    }
+    q.stroke();
+    q.beginPath();                                   // arrow down into the tray
+    q.moveTo(16, 5); q.lineTo(16, 17);
+    q.moveTo(11, 12); q.lineTo(16, 17); q.lineTo(21, 12);
+    q.stroke();
+    q.beginPath();                                   // the tray
+    q.moveTo(10, 21); q.lineTo(10, 25); q.lineTo(22, 25); q.lineTo(22, 21);
+    q.stroke();
+  };
+  stroke("rgba(8,10,14,0.9)", 5);
+  stroke("#ffffff", 2.2);
+  pickCursor = `url(${c.toDataURL("image/png")}) 16 16, pointer`;
+  return pickCursor;
+}
+
+// Playing with a mouse, the pointer answers "what would a click do here?"
+// before the click is spent. Touch has no hover, so it never runs.
+let cursorNow = "";
+function setCursor(css: string): void {
+  if (css === cursorNow) return;
+  cursorNow = css;
+  canvas.style.cursor = css;
+}
+canvas.addEventListener("pointermove", (ev) => {
+  if (ev.pointerType !== "mouse") return;
+  if (pointers.size > 0 || state !== "mission" || !world) { setCursor("default"); return; }
+  if (ev.clientX < panelW) { setCursor("default"); return; }
+  if (mode === "shoot") { setCursor("crosshair"); return; }
+  if (pedUnder(ev.clientX, ev.clientY) && selectionArmed()) { setCursor("crosshair"); return; }
+  if (dropUnder(ev.clientX, ev.clientY)) { setCursor(pickupCursor()); return; }
+  setCursor("default");
+});
+canvas.addEventListener("pointerleave", () => setCursor("default"));
 
 // Cut the section to the storey something actually stands on. The plane has
 // to be at or above a height to show it, and a level below the street also

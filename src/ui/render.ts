@@ -1063,10 +1063,15 @@ export class Renderer {
     // ---- loot beacons: drawn over everything so drops behind buildings
     // stay visible (and taps hit-test by world distance, so they stay usable)
     const icons = itemIcons();
+    // Loot somebody has been sent to fetch burns white until he has it or the
+    // order is called off, so an order that is already given is visible as one.
+    const claimed = new Set<number>();
+    for (const a of world.agents) if (a.pickOrder !== null) claimed.add(a.pickOrder);
     for (const d of world.drops) {
       if (d.x < x0 || d.x > x1 || d.y < y0 || d.y > y1) continue;
       const sx = SX(d.x, d.y), sy = SY(d.x, d.y);
-      const def = ITEMS[d.item.type];
+      const taken = claimed.has(d.id);
+      const def = taken ? { ...ITEMS[d.item.type], color: "#ffffff" } : ITEMS[d.item.type];
       const bob = Math.sin(time * 3 + d.x) * 1.5 * z;
       const pulse = 0.55 + 0.45 * Math.sin(time * 4 + d.y);
       const icon = icons[d.item.type];
@@ -1094,7 +1099,20 @@ export class Renderer {
       // ground shadow, then the item's own icon hovering just above it
       g.fillStyle = "rgba(0,0,0,0.4)";
       g.beginPath(); g.ellipse(sx, sy, 5 * z, 2 * z, 0, 0, Math.PI * 2); g.fill();
+      if (taken) {
+        // a claimed ring on the ground, and the icon washed white over itself
+        g.strokeStyle = `rgba(255,255,255,${0.55 + 0.45 * pulse})`;
+        g.lineWidth = Math.max(1, 1.1 * z);
+        g.beginPath(); g.ellipse(sx, sy, 6.5 * z, 2.8 * z, 0, 0, Math.PI * 2); g.stroke();
+      }
       g.drawImage(icon, sx - isz / 2, iconTop, isz, isz);
+      if (taken) {
+        g.save();
+        g.globalCompositeOperation = "lighter";
+        g.globalAlpha = 0.5 + 0.25 * pulse;
+        g.drawImage(icon, sx - isz / 2, iconTop, isz, isz);
+        g.restore();
+      }
       // bouncing chevron above the beam
       const chy = beamBase - beamH - 1 * z;
       g.fillStyle = "#fff";
