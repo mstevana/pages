@@ -76,6 +76,39 @@ interface TrainSeg { wx: number; wy: number; angle: number; head: boolean; lift:
 
 interface DeckTile { x: number; y: number; axis: "v" | "h"; pylon: boolean; }
 
+// The shape of one round of a flamethrower's stream, shared by the flipbook
+// path and the shader path so they cannot disagree.
+//
+// A jet of burning fuel leaves the muzzle travelling, so the plume lies along
+// the way it was thrown; as the round slows and the gas gets its buoyancy back
+// it stands up. It swells the whole way, which is what turns a line of rounds
+// into one widening tongue rather than a row of candles.
+function flamerQuad(
+  pr: { x: number; y: number; z: number; vx: number; vy: number; life: number; maxLife: number },
+  SX: (x: number, y: number) => number, SY: (x: number, y: number) => number, z: number
+): { x: number; y: number; w: number; h: number; rot: number; t: number } {
+  const out = 1 - pr.life / pr.maxLife;                  // 0 at the muzzle, 1 downrange
+  const w = (3.4 + out * 4.2) * z * 2.6;
+  const h = w * (FLAME_H / FLAME_W) * (0.55 + 0.45 * Math.min(1, out * 1.5));
+  // the heading, in screen space: a world vector projects the same way a
+  // world point does, less the camera
+  const dx = isoX(pr.vx, pr.vy), dy = isoY(pr.vx, pr.vy);
+  const len = Math.max(0.001, Math.hypot(dx, dy));
+  const lean = Math.atan2(dx / len, -dy / len);          // 0 = straight up the screen
+  const upright = Math.min(1, out * 1.35);               // it rights itself as it slows
+  // A flamethrower is at its brightest where it leaves the muzzle and burns
+  // out at the end of its reach - not the other way about, which left a gap of
+  // dim little flames between the man and his own fire.
+  const t = Math.min(1, (1 - out) * 3.4);
+  // the root sits back along the heading, so the body covers the round itself
+  const back = h * 0.42;
+  return {
+    x: SX(pr.x, pr.y) - (dx / len) * back,
+    y: SY(pr.x, pr.y) - (6 + pr.z * STORY_H) * z - (dy / len) * back,
+    w, h, rot: lean * (1 - upright), t,
+  };
+}
+
 export class Renderer {
   private decoIndex = new Map<number, Deco[]>();
   private fences: FenceEdge[] = [];
@@ -357,6 +390,20 @@ export class Renderer {
         if (sy - ry < y0) y0 = sy - ry;
         if (sy + ry > y1) y1 = sy + ry;
       }
+    }
+    // A flamethrower's rounds are burning gas like any other flame here, so
+    // they go through the shader with the rest - heat haze, light on the
+    // ground, and all - rather than being blitted flat over the top of it.
+    for (const pr of world.projectiles) {
+      if (pr.type !== "flamer") continue;
+      const q = flamerQuad(pr, SX, SY, z);
+      F.push({ x: q.x, y: q.y, w: q.w, h: q.h, seed: pr.seed, t: q.t, rot: q.rot });
+      // a leaning plume can reach as far sideways as it does up
+      const r = q.h * 1.4 + q.w;
+      if (q.x - r < x0) x0 = q.x - r;
+      if (q.x + r > x1) x1 = q.x + r;
+      if (q.y - r < y0) y0 = q.y - r;
+      if (q.y + r > y1) y1 = q.y + r;
     }
     // Plain combat smoke with nothing burning under it has no light to catch
     // and no air to bend, so it is not worth a texture upload.
@@ -1162,7 +1209,27 @@ export class Renderer {
     }
 
     // ---- effects ----
+    // Every round is a pip of its weapon's colour - except the flamer's, which
+    // is not a projectile you should be able to see the edges of. It is drawn
+    // as a body of burning gas that swells as it goes, additively, so the rounds
+    // of one burst run together into a single tongue instead of beading up.
+    const flamerFrames = flameFrames();
+    g.globalCompositeOperation = "lighter";
     for (const pr of world.projectiles) {
+      if (pr.type !== "flamer") continue;
+      const q = flamerQuad(pr, SX, SY, z);
+      const fi = ((time * 24 + pr.seed * FLAME_FRAMES * 5) | 0) % FLAME_FRAMES;
+      g.save();
+      g.translate(q.x, q.y);
+      g.rotate(q.rot);
+      g.globalAlpha = q.t;
+      g.drawImage(flamerFrames[fi], -q.w / 2, -q.h, q.w, q.h);
+      g.restore();
+    }
+    g.globalAlpha = 1;
+    g.globalCompositeOperation = "source-over";
+    for (const pr of world.projectiles) {
+      if (pr.type === "flamer") continue;
       const sx = SX(pr.x, pr.y), sy = SY(pr.x, pr.y) - (6 + pr.z * STORY_H) * z;
       g.fillStyle = ITEMS[pr.type]?.color ?? "#ffe";
       g.fillRect(sx - z, sy - z, 2 * z, 2 * z);

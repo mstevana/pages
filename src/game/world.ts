@@ -99,7 +99,10 @@ export interface Projectile {
   dmg: number;
   team: Team;
   life: number;
+  maxLife: number;        // so the renderer knows how far downrange it is
+  seed: number;           // its own phase in the flame loop
   type: ItemType;
+  emitT?: number;         // flamer: seconds until it sheds the next flame
 }
 
 export interface Beam { x0: number; y0: number; z0: number; x1: number; y1: number; z1: number; life: number; maxLife: number; color: string; w: number; }
@@ -1259,10 +1262,12 @@ export class World {
     for (let i = 0; i < def.pellets; i++) {
       const a = baseA + (this.rng.next() - 0.5) * def.spread * spreadMult * 2;
       const flatSpeed = def.speed * (flat / len);
+      const life = (def.range * rangeMult) / def.speed;
       this.projectiles.push({
         x: shooter.x, y: shooter.y, z: shooter.z,
         vx: Math.cos(a) * flatSpeed, vy: Math.sin(a) * flatSpeed, vz: pitch * def.speed,
-        dmg: def.damage, team: shooter.team, life: (def.range * rangeMult) / def.speed, type: wType,
+        dmg: def.damage, team: shooter.team, life, maxLife: life,
+        seed: this.rng.next(), type: wType, emitT: 0,
       });
     }
   }
@@ -2782,6 +2787,32 @@ export class World {
           }
         }
         if (pr.life <= 0) break;
+        // A flamethrower throws burning fuel, and the burning outlives the
+        // throw: each round sheds flame as it goes, so what the eye follows is
+        // a body of fire hanging in the air rather than a line of moving dots.
+        // These are ordinary fire particles, which means they go through the
+        // same shader the wrecks burn with - and pick up its heat haze and its
+        // light on the ground for free.
+        if (pr.type === "flamer") {
+          pr.emitT = (pr.emitT ?? 0) - sdt;
+          if (pr.emitT <= 0) {
+            // Sparse and large, not dense and small: the jet is the rounds
+            // themselves, and these are the burning it leaves hanging behind.
+            // A cloud of little ones reads as a field on fire, not a stream.
+            pr.emitT = 0.1;
+            const out = 1 - pr.life / pr.maxLife;         // 0 at the muzzle, 1 downrange
+            this.fx(pr.x, pr.y, pr.vx * 0.18 + this.rng.float(-0.3, 0.3),
+              pr.vy * 0.18 + this.rng.float(-0.3, 0.3),
+              this.rng.float(0.18, 0.3) + out * 0.28, "#ffd08a",
+              1.6 + out * 3.4, "fire", this.rng.float(2, 7), this.rng.float(1, 3), 0.86);
+            // and the soot it leaves at the end of its reach
+            if (out > 0.55 && this.rng.chance(0.22)) {
+              this.fx(pr.x, pr.y, pr.vx * 0.08, pr.vy * 0.08,
+                this.rng.float(0.8, 1.5), "#1a1418", this.rng.float(1.6, 2.8), "smoke",
+                this.rng.float(7, 12), this.rng.float(2, 4), 0.99);
+            }
+          }
+        }
         // hit cars
         for (const car of this.cars) {
           if (car.state === "wreck") continue;

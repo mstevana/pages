@@ -240,9 +240,10 @@ void main() {
 }`;
 
 export interface FlameQuad {
-  x: number; y: number;      // base centre, device px within the box
+  x: number; y: number;      // root centre, device px within the box
   w: number; h: number;      // device px
   seed: number; t: number;
+  rot?: number;              // radians, leaning the plume off the vertical
 }
 export interface SmokeQuad {
   x: number; y: number;              // centre, device px within the box
@@ -361,19 +362,26 @@ export class FireGL {
     return this.verts;
   }
 
-  // one quad, in device px within the box, with a local UV frame
+  // One quad, in device px within the box, with a local UV frame. `rot` turns
+  // it about (px,py) - a flame thrown sideways leans the way it was thrown.
   private push(a: Float32Array, o: number, w: number, h: number,
                x0: number, y0: number, x1: number, y1: number,
                u0: number, v0: number, u1: number, v1: number,
-               seed: number, t: number): number {
-    const cx0 = (x0 / w) * 2 - 1, cx1 = (x1 / w) * 2 - 1;
-    // device y runs down, clip y runs up
-    const cy0 = 1 - (y0 / h) * 2, cy1 = 1 - (y1 / h) * 2;
-    const put = (px: number, py: number, uu: number, vv: number): void => {
-      a[o++] = px; a[o++] = py; a[o++] = uu; a[o++] = vv; a[o++] = seed; a[o++] = t;
+               seed: number, t: number, rot = 0, px = 0, py = 0): number {
+    const ca = rot === 0 ? 1 : Math.cos(rot), sa = rot === 0 ? 0 : Math.sin(rot);
+    const put = (dx: number, dy: number, uu: number, vv: number): void => {
+      let sx = dx, sy = dy;
+      if (rot !== 0) {
+        const ox = dx - px, oy = dy - py;
+        sx = px + ox * ca - oy * sa;
+        sy = py + ox * sa + oy * ca;
+      }
+      // device y runs down, clip y runs up
+      a[o++] = (sx / w) * 2 - 1; a[o++] = 1 - (sy / h) * 2;
+      a[o++] = uu; a[o++] = vv; a[o++] = seed; a[o++] = t;
     };
-    put(cx0, cy0, u0, v0); put(cx1, cy0, u1, v0); put(cx0, cy1, u0, v1);
-    put(cx1, cy0, u1, v0); put(cx1, cy1, u1, v1); put(cx0, cy1, u0, v1);
+    put(x0, y0, u0, v0); put(x1, y0, u1, v0); put(x0, y1, u0, v1);
+    put(x1, y0, u1, v0); put(x1, y1, u1, v1); put(x0, y1, u0, v1);
     return o;
   }
 
@@ -424,7 +432,8 @@ export class FireGL {
       let o = 0;
       for (const f of flames) {
         const th = f.h * AUX_TALL, hw = f.w * 0.5 * AUX_WIDE;
-        o = this.push(a, o, bw, bh, f.x - hw, f.y - th, f.x + hw, f.y, -1, 1, 1, 0, f.seed, f.t);
+        o = this.push(a, o, bw, bh, f.x - hw, f.y - th, f.x + hw, f.y, -1, 1, 1, 0,
+                      f.seed, f.t, f.rot ?? 0, f.x, f.y);
       }
       this.bind(this.pAux, a, flames.length);
       gl.blendFunc(gl.ONE, gl.ONE);
@@ -493,7 +502,8 @@ export class FireGL {
       let o = 0;
       for (const f of flames) {
         const hw = f.w * 0.5;
-        o = this.push(a, o, bw, bh, f.x - hw, f.y - f.h, f.x + hw, f.y, -1, 1, 1, 0, f.seed, f.t);
+        o = this.push(a, o, bw, bh, f.x - hw, f.y - f.h, f.x + hw, f.y, -1, 1, 1, 0,
+                      f.seed, f.t, f.rot ?? 0, f.x, f.y);
       }
       this.bind(this.pFlame, a, flames.length);
       gl.blendFunc(gl.ONE, gl.ONE);
